@@ -72,9 +72,11 @@ function publicAutoSwitchResult(eng, result) {
 }
 
 // ═══════════════ 注册所有 IPC ═══════════════
-function registerIpcHandlers() {
-    const { ipcMain, BrowserWindow } = require("electron");
-    const eng = getEngine();
+function registerIpcHandlers(engineInstance = null, services = {}) {
+    const { ipcMain, BrowserWindow, app } = require("electron");
+    if (engineInstance) engine = engineInstance;
+    const eng = engineInstance || getEngine();
+    const updateService = services.updateService || null;
 
     // 窗口
     ipcMain.handle("window:close", () => BrowserWindow.getFocusedWindow()?.close());
@@ -82,6 +84,41 @@ function registerIpcHandlers() {
     ipcMain.handle("window:maximize", () => {
         const w = BrowserWindow.getFocusedWindow();
         if (w) w.isMaximized() ? w.unmaximize() : w.maximize();
+    });
+
+    // 应用与发布状态
+    ipcMain.handle("app:info", () => ok(updateService?.getAppInfo?.() || {
+        name: "Codex Account Manager",
+        version: app.getVersion(),
+        releaseChannel: String(app.getVersion()).includes("-") ? "beta" : "stable",
+        isPackaged: app.isPackaged,
+        updateEnabled: false,
+        repository: "https://github.com/3xiaoshayu/codex-account-manager",
+    }));
+
+    ipcMain.handle("update:status", () => ok(updateService?.getStatus?.() || {
+        status: "disabled",
+        enabled: false,
+        channel: String(app.getVersion()).includes("-") ? "beta" : "stable",
+        message: "更新服务未初始化",
+    }));
+
+    ipcMain.handle("update:check", async () => {
+        try {
+            return ok(updateService ? await updateService.checkForUpdates() : null);
+        } catch (e) { return fail(e.message); }
+    });
+
+    ipcMain.handle("update:install", () => {
+        try {
+            return ok(updateService ? updateService.installUpdate() : null);
+        } catch (e) { return fail(e.message); }
+    });
+
+    ipcMain.handle("codex:status", () => {
+        try {
+            return ok(eng.getCodexInstallationStatus());
+        } catch (e) { return fail(e.message); }
     });
 
     // 账号列表 — 直接返回 account 对象数组

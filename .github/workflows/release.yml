@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: Mark the GitHub release as a prerelease
+        required: true
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Build Windows release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Read package version
+        id: package
+        shell: pwsh
+        run: |
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          "version=$($pkg.version)" >> $env:GITHUB_OUTPUT
+          "tag=v$($pkg.version)" >> $env:GITHUB_OUTPUT
+
+      - name: Audit UI contract
+        run: npm run audit:ui
+
+      - name: Build installer and ZIP
+        run: npm run build:windows
+
+      - name: Generate SHA256 checksums
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem dist -File |
+            Where-Object { $_.Extension -in ".exe", ".zip", ".yml", ".blockmap" -and $_.Name -ne "builder-debug.yml" } |
+            Sort-Object Name
+          $lines = foreach ($file in $files) {
+            $hash = (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLowerInvariant()
+            "$hash  $($file.Name)"
+          }
+          $lines | Set-Content -Encoding ASCII dist/SHA256SUMS.txt
+
+      - name: Upload release artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || steps.package.outputs.tag }}
+          name: Codex Account Manager ${{ steps.package.outputs.version }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease == 'true' || contains(github.ref_name, '-beta') || contains(steps.package.outputs.version, '-beta') }}
+          files: |
+            dist/*.exe
+            dist/*.zip
+            dist/latest.yml
+            dist/*.blockmap
+            dist/SHA256SUMS.txt

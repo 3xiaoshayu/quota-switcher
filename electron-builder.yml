@@ -1,5 +1,5 @@
-appId: com.wonde.codex-deskep
-productName: Codex Deskep
+appId: com.3xiaoshayu.codex-account-manager
+productName: Codex Account Manager
 copyright: Copyright © 2026
 
 directories:
@@ -8,11 +8,12 @@ directories:
 
 win:
   target:
-    - target: portable
-      arch: [x64]
     - target: nsis
       arch: [x64]
-  icon: src/renderer/assets/icon.ico
+    - target: zip
+      arch: [x64]
+  icon: resources/icon.ico
+  artifactName: "${productName}-${version}-${arch}.${ext}"
 
 nsis:
   oneClick: false
@@ -20,10 +21,12 @@ nsis:
   perMachine: false
   createDesktopShortcut: true
   createStartMenuShortcut: true
+  artifactName: "${productName}-Setup-${version}-${arch}.${ext}"
 
-portable:
-  artifactName: "${productName}-${version}-portable.${ext}"
-  requestExecutionLevel: user
+publish:
+  provider: github
+  owner: 3xiaoshayu
+  repo: codex-account-manager
 
 files:
   - src/**/*

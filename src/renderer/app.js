@@ -1,11 +1,14 @@
 (() => {
   "use strict";
 
-  const API = window.codexDeskep || null;
+  const API = window.codexAccountManager || window.codexDeskep || null;
   const state = {
     accounts: [],
     current: null,
     cfg: null,
+    appInfo: null,
+    codexStatus: null,
+    updateStatus: null,
     daemonRunning: false,
     view: "accounts",
     detailId: null,
@@ -67,7 +70,15 @@
   }
 
   function requireBridge() {
-    const required = ["listAccounts", "getCurrentAccount", "getDaemonStatus", "getAutoSwitchConfig"];
+    const required = [
+      "listAccounts",
+      "getCurrentAccount",
+      "getDaemonStatus",
+      "getAutoSwitchConfig",
+      "getAppInfo",
+      "getCodexStatus",
+      "getUpdateStatus",
+    ];
     if (!API || required.some((name) => typeof API[name] !== "function")) {
       throw new Error("桌面桥接未加载。请通过 Electron 启动应用。");
     }
@@ -93,6 +104,18 @@
     state.cfg = expectData(configResponse, "读取自动切号配置") || defaultConfig();
     state.loading = false;
     state.error = null;
+  }
+
+  async function loadStaticState() {
+    requireBridge();
+    const [appResponse, codexResponse, updateResponse] = await Promise.all([
+      API.getAppInfo(),
+      API.getCodexStatus(),
+      API.getUpdateStatus(),
+    ]);
+    state.appInfo = expectData(appResponse, "读取应用信息") || null;
+    state.codexStatus = expectData(codexResponse, "读取 Codex 安装状态") || null;
+    state.updateStatus = expectData(updateResponse, "读取更新状态") || null;
   }
 
   function defaultConfig() {
@@ -260,10 +283,11 @@
   }
 
   function renderWindowBar() {
+    const appName = state.appInfo?.name || "Codex Account Manager";
     return el("header", { className: "window-bar" },
       el("div", { className: "window-brand" },
         el("span", { className: "window-brand-mark" }, icon("terminal", 13)),
-        el("span", { text: "Codex Deskep" }),
+        el("span", { text: appName }),
       ),
       el("div", { className: "window-controls" },
         el("button", {
@@ -788,9 +812,17 @@
   function renderSettingsView() {
     const tokenBusy = state.busy.has("token:all");
     const daemonBusy = state.busy.has("daemon");
+    const codexBusy = state.busy.has("codex:status");
+    const updateBusy = state.busy.has("update:check") || state.updateStatus?.status === "checking" || state.updateStatus?.status === "downloading";
+    const installBusy = state.busy.has("update:install");
+    const appInfo = state.appInfo || {};
+    const updateStatus = state.updateStatus || {};
+    const codexStatus = state.codexStatus || {};
+    const appName = appInfo.name || "Codex Account Manager";
+    const version = appInfo.version || "0.1.0-beta.1";
     return el("main", { className: "workspace" },
       el("section", { className: "view" },
-        viewHeading("设置", `版本 1.0.0 · ${state.accounts.length} 个账号`),
+        viewHeading("设置", `${releaseChannelLabel(appInfo.releaseChannel)} · ${state.accounts.length} 个账号`),
         el("div", { className: "settings-grid" },
           el("section", { className: "setting-panel" },
             el("h2", { className: "panel-title" }, icon("power", 17), "守护进程"),
@@ -817,15 +849,84 @@
               }, icon(tokenBusy ? "loader-circle" : "refresh-cw", 16, tokenBusy ? "spin" : ""), "刷新"),
             ),
           ),
+          el("section", { className: "setting-panel" },
+            el("h2", { className: "panel-title" }, icon("badge-check", 17), "Codex 客户端"),
+            settingRow("来源要求", "Microsoft Store 官方版"),
+            el("div", { className: "setting-row" },
+              el("span", { className: "setting-label", text: "检测状态" }),
+              el("span", { className: `setting-value ${codexStatus.installed ? "success" : "danger"}`, text: codexStatusLabel(codexStatus) }),
+            ),
+            el("div", { className: "setting-row" },
+              el("span", { className: "setting-label", text: codexStatus.appId || "AppID" }),
+              el("button", {
+                type: "button", className: "button secondary", disabled: codexBusy,
+                "aria-busy": codexBusy ? "true" : null, onClick: refreshCodexStatus,
+              }, icon(codexBusy ? "loader-circle" : "scan-search", 16, codexBusy ? "spin" : ""), "重新检测"),
+            ),
+          ),
+          el("section", { className: "setting-panel" },
+            el("h2", { className: "panel-title" }, icon("download-cloud", 17), "更新"),
+            settingRow("发布通道", releaseChannelLabel(appInfo.releaseChannel)),
+            el("div", { className: "setting-row" },
+              el("span", { className: "setting-label", text: "状态" }),
+              el("span", { className: `setting-value ${updateStatusTone(updateStatus)}`, text: updateStatusLabel(updateStatus) }),
+            ),
+            el("div", { className: "setting-row" },
+              el("span", { className: "setting-label", text: updateStatus.percent === null || updateStatus.percent === undefined ? "安装包" : `下载 ${updateStatus.percent}%` }),
+              updateStatus.status === "downloaded"
+                ? el("button", {
+                  type: "button", className: "button primary", disabled: installBusy,
+                  "aria-busy": installBusy ? "true" : null, onClick: installUpdate,
+                }, icon(installBusy ? "loader-circle" : "refresh-cw", 16, installBusy ? "spin" : ""), "重启安装")
+                : el("button", {
+                  type: "button", className: "button secondary", disabled: updateBusy || !updateStatus.enabled,
+                  "aria-busy": updateBusy ? "true" : null, onClick: checkForUpdates,
+                }, icon(updateBusy ? "loader-circle" : "refresh-cw", 16, updateBusy ? "spin" : ""), updateStatus.enabled ? "检查更新" : "手动更新"),
+            ),
+          ),
           el("section", { className: "setting-panel full" },
             el("h2", { className: "panel-title" }, icon("info", 17), "关于"),
-            settingRow("应用", "Codex Deskep"),
-            settingRow("版本", "1.0.0"),
+            settingRow("应用", appName),
+            settingRow("版本", version),
             settingRow("引擎", "codex-switch v4.0"),
+            settingRow("仓库", appInfo.repository || "https://github.com/3xiaoshayu/codex-account-manager"),
           ),
         ),
       ),
     );
+  }
+
+  function releaseChannelLabel(channel) {
+    return channel === "stable" ? "Stable 正式版" : "Beta 预览版";
+  }
+
+  function codexStatusLabel(status) {
+    if (status?.installed) return status.name ? `已检测到 ${status.name}` : "已检测到";
+    if (status?.reason === "windows-only") return "仅支持 Windows";
+    if (status?.reason === "detection-failed") return "检测失败";
+    return "未检测到";
+  }
+
+  function updateStatusLabel(status) {
+    if (!status) return "未知";
+    if (status.message) return status.message;
+    const labels = {
+      idle: "可检查更新",
+      disabled: "Beta 阶段手动更新",
+      checking: "正在检查更新",
+      available: "发现新版本",
+      downloading: "正在下载更新",
+      downloaded: "更新已下载",
+      "not-available": "当前已是最新版本",
+      error: "检查更新失败",
+    };
+    return labels[status.status] || "未知";
+  }
+
+  function updateStatusTone(status) {
+    if (status?.status === "error") return "danger";
+    if (status?.status === "downloaded" || status?.status === "not-available") return "success";
+    return "";
   }
 
   function settingRow(label, value) {
@@ -849,6 +950,27 @@
       const result = expectData(await API.refreshAllTokens(true), "刷新全部 Token");
       await loadState(false);
       showToast(`${result.okCount || 0} 正常，${result.revivedCount || 0} 恢复，${result.deadCount || 0} 失效`, result.deadCount ? "warning" : "success");
+    });
+  }
+
+  async function refreshCodexStatus() {
+    await runBusy("codex:status", async () => {
+      state.codexStatus = expectData(await API.getCodexStatus(), "检测 Codex 客户端");
+    }, state.codexStatus?.installed ? "Codex 客户端检测完成" : "检测完成");
+  }
+
+  async function checkForUpdates() {
+    await runBusy("update:check", async () => {
+      const status = expectData(await API.checkForUpdates(), "检查更新");
+      if (status) state.updateStatus = status;
+      if (!status?.enabled) showToast(status?.message || "Beta 阶段使用 Releases 手动更新", "info");
+    });
+  }
+
+  async function installUpdate() {
+    await runBusy("update:install", async () => {
+      const status = expectData(await API.installUpdate(), "安装更新");
+      if (status) state.updateStatus = status;
     });
   }
 
@@ -1031,7 +1153,7 @@
     state.loading = true;
     renderApp();
     try {
-      await loadState(false);
+      await Promise.all([loadState(false), loadStaticState()]);
     } catch (error) {
       state.error = error.message || String(error);
       state.loading = false;
@@ -1049,6 +1171,12 @@
       if (payload?.switched) showToast(`自动切换到 ${payload.to?.email || "新账号"}`, "warning");
       loadState(false).then(renderApp).catch(() => {});
     });
+    API.onUpdateStatus?.((payload) => {
+      state.updateStatus = payload || state.updateStatus;
+      if (payload?.status === "downloaded") showToast("更新已下载，重启后安装", "success");
+      if (payload?.status === "error") showToast(payload.error || "检查更新失败", "error");
+      renderApp();
+    });
   }
 
   document.addEventListener("keydown", (event) => {
@@ -1060,7 +1188,7 @@
   document.addEventListener("DOMContentLoaded", async () => {
     renderApp();
     try {
-      await loadState(false);
+      await Promise.all([loadState(false), loadStaticState()]);
       subscribeToMainEvents();
     } catch (error) {
       state.error = error.message || String(error);

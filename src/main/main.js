@@ -1,9 +1,27 @@
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow, dialog, safeStorage } = require("electron");
 const path = require("path");
 const { registerIpcHandlers } = require("./ipc-handlers");
+const { createUpdateService } = require("./updater");
 
 app.whenReady().then(() => {
-    const daemon = registerIpcHandlers();
+    const eng = require("../../engine");
+    if (!safeStorage.isEncryptionAvailable()) {
+        dialog.showErrorBox(
+            "Codex Account Manager",
+            "Windows 凭据保护不可用，账号 Token 无法安全保存。应用将退出。",
+        );
+        app.quit();
+        return;
+    }
+    eng.setSecretCodec({
+        name: "windows-dpapi",
+        encrypt: (plainText) => safeStorage.encryptString(plainText).toString("base64"),
+        decrypt: (encoded) => safeStorage.decryptString(Buffer.from(encoded, "base64")),
+    });
+    eng.listAccts();
+
+    const updateService = createUpdateService({ app, BrowserWindow });
+    const daemon = registerIpcHandlers(eng, { updateService });
     const win = new BrowserWindow({
         width: 1180, height: 760,
         minWidth: 420, minHeight: 560,
@@ -16,13 +34,15 @@ app.whenReady().then(() => {
         },
     });
 
-    win.once("ready-to-show", () => win.show());
+    win.once("ready-to-show", () => {
+        win.show();
+        updateService.startAutoCheck();
+    });
     win.loadFile(path.join(__dirname, "..", "renderer", "index.html"))
         .catch((error) => console.error("Failed to load renderer:", error));
 
     // 自动启动守护进程（如果配置启用）
     try {
-        const eng = require("../../engine");
         const cfg = eng.loadAutoSwitchCfg();
         if (cfg && cfg.enabled) {
             daemon.startDaemon();

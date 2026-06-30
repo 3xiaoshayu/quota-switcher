@@ -1,12 +1,17 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('codexDeskep', {
+const api = {
   // 窗口控制
   closeWindow: () => ipcRenderer.invoke('window:close'),
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
   toggleMaximize: () => ipcRenderer.invoke('window:maximize'),
 
-  // 主题
+  // 应用与发布
+  getAppInfo: () => ipcRenderer.invoke('app:info'),
+  getCodexStatus: () => ipcRenderer.invoke('codex:status'),
+  getUpdateStatus: () => ipcRenderer.invoke('update:status'),
+  checkForUpdates: () => ipcRenderer.invoke('update:check'),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
 
   // 账号管理
   listAccounts: () => ipcRenderer.invoke('account:list'),
@@ -58,4 +63,12 @@ contextBridge.exposeInMainWorld('codexDeskep', {
     ipcRenderer.on('autoswitch:executed', handler);
     return () => ipcRenderer.removeListener('autoswitch:executed', handler);
   },
-});
+  onUpdateStatus: (cb) => {
+    const handler = (e, d) => cb(d);
+    ipcRenderer.on('update:status', handler);
+    return () => ipcRenderer.removeListener('update:status', handler);
+  },
+};
+
+contextBridge.exposeInMainWorld('codexDeskep', api);
+contextBridge.exposeInMainWorld('codexAccountManager', api);

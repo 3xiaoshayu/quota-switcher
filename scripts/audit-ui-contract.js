@@ -6,7 +6,14 @@ const root = path.resolve(__dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 const rendererSource = read("src/renderer/app.js");
 const preloadSource = read("src/preload/preload.js");
-const mainSource = read("src/main/ipc-handlers.js");
+const mainSource = [
+  "src/main/ipc-handlers.js",
+  "src/main/main.js",
+  "src/main/updater.js",
+]
+  .filter((file) => fs.existsSync(path.join(root, file)))
+  .map(read)
+  .join("\n");
 
 const collect = (source, pattern, group = 1) => {
   const values = new Set();

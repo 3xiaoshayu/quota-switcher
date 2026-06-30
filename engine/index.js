@@ -1,7 +1,7 @@
 const { b64url, sha256hex, codeChallenge, ts, tsIso, buildId, jwtPayload, jwtExp, isTokenExpired, extractChatgptAccountId } = require("./crypto-utils");
 const { parseTsStr } = require("./time-utils");
 const { httpJson, buildCodexHeaders, extractErrorCode, isTokenRevoked } = require("./http-client");
-const { ensureDir, loadIdx, saveIdx, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct } = require("./storage");
+const { setSecretCodec, ensureDir, loadIdx, saveIdx, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct } = require("./storage");
 const { writeAuthJson, writeProjection, clearApiBaseUrl, killCodex, startCodex, doSwitch } = require("./switch");
 const { oauthLoginFlow, upsert } = require("./oauth");
 const { refreshOneTok, needsRefresh, refreshAll } = require("./token-refresh");
@@ -11,6 +11,7 @@ const { fetchSubscriptionStatus, refreshSubscription } = require("./subscription
 const { loadAutoSwitchCfg, saveAutoSwitchCfg, DEFAULT_AUTO_SWITCH_CFG } = require("./config-manager");
 const { metricCrossedThreshold, buildSwitchCandidate, pickBestCandidate, resolveMonitoredIds, autoSwitchTick } = require("./auto-switch");
 const { runDaemonWorker, getTickIntervalMs } = require("./daemon");
+const { getCodexInstallationStatus, assertOfficialCodexInstalled } = require("./codex-installation");
 
 module.exports = {
   // crypto-utils
@@ -20,7 +21,7 @@ module.exports = {
   // http-client
   httpJson, buildCodexHeaders, extractErrorCode, isTokenRevoked,
   // storage
-  ensureDir, loadIdx, saveIdx, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct,
+  setSecretCodec, ensureDir, loadIdx, saveIdx, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct,
   // switch
   writeAuthJson, writeProjection, clearApiBaseUrl, killCodex, startCodex, doSwitch,
   // oauth
@@ -39,4 +40,6 @@ module.exports = {
   metricCrossedThreshold, buildSwitchCandidate, pickBestCandidate, resolveMonitoredIds, autoSwitchTick,
   // daemon
   runDaemonWorker, getTickIntervalMs,
+  // codex installation
+  getCodexInstallationStatus, assertOfficialCodexInstalled,
 };

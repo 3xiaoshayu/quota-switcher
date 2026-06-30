@@ -5,6 +5,7 @@ const { tsIso, ts } = require("./crypto-utils");
 const { CODEX_DIR, CODEX_AUMID } = require("./config");
 const { loadIdx, saveIdx, loadAcct, saveAcct, currentAcct } = require("./storage");
 const { ensureDir } = require("./storage");
+const { assertOfficialCodexInstalled } = require("./codex-installation");
 
 function writeAuthJson(acct) {
   const obj = {
@@ -57,6 +58,7 @@ function doSwitch(acct) {
   const cur = currentAcct();
   if (cur && cur.id === acct.id) return { already: true, account: acct };
 
+  assertOfficialCodexInstalled();
   killCodex();
   const authPath = path.join(CODEX_DIR, "auth.json");
   if (fs.existsSync(authPath)) fs.copyFileSync(authPath, authPath + ".bak");

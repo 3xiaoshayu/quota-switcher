@@ -923,13 +923,22 @@ svg {
 .setting-label {
   min-width: 0;
   color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .setting-value {
-  flex: 0 0 auto;
+  min-width: 0;
+  flex: 0 1 auto;
   color: var(--ink);
   font-weight: 700;
+  text-align: right;
+  overflow-wrap: anywhere;
 }
+
+.setting-value.success { color: var(--success); }
+.setting-value.danger { color: var(--danger); }
 
 .toggle {
   width: 42px;
