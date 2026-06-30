@@ -164,7 +164,6 @@ export default function SettingsView({
               <motion.button
                 onClick={() => {
                   onToggleDaemon();
-                  onAddLog(`Daemon service was ${daemonState.status === 'Running' ? 'STOPPED' : 'STARTED'} manually.`, daemonState.status === 'Running' ? 'warning' : 'success');
                 }}
                 whileHover={{ scale: 1.04 }}
                 whileTap={{ scale: 0.95 }}

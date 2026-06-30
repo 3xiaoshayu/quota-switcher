@@ -415,7 +415,6 @@ export default function AccountsView({
                   <motion.button
                     onClick={() => {
                       onSwitchCurrentAccount(account.id);
-                      onAddLog(`Switched active context to account: ${account.email}`, 'success');
                     }}
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.95 }}
@@ -436,7 +435,6 @@ export default function AccountsView({
                       return;
                     }
                     onDeleteAccount(account.id);
-                    onAddLog(`Deleted account ${account.email} from manager configuration.`, 'warning');
                   }}
                   whileHover={account.isCurrent ? {} : { scale: 1.05, backgroundColor: 'rgba(239, 68, 68, 0.1)' }}
                   whileTap={account.isCurrent ? {} : { scale: 0.95 }}

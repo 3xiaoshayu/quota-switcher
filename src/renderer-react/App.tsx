@@ -439,6 +439,7 @@ export default function App() {
         else await desktopApi.startDaemon();
         await loadDashboardState(false);
         addToast(`Daemon ${nextAction === 'stop' ? 'stopped' : 'started'}`, nextAction === 'stop' ? 'warning' : 'success');
+        addLogEntry(`Daemon ${nextAction === 'stop' ? 'stopped' : 'started'}.`, nextAction === 'stop' ? 'warning' : 'success');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         addToast(message, 'error');
