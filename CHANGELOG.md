@@ -7,6 +7,8 @@ release is published.
 
 ## [Unreleased]
 
+## [0.1.0-beta.3] - 2026-06-30
+
 - Reorganize the repository for public open-source release.
 - Add synthetic product screenshots and complete install, privacy, security,
   architecture, troubleshooting, contribution, and release documentation.
