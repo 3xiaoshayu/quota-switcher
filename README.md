@@ -46,7 +46,7 @@ npm run build:dir
 npm run build:windows
 ```
 
-当前 `resources/icon.ico` 是临时应用图标，正式发布前可以直接替换为品牌图标。
+Windows 安装包、可执行文件和快捷方式统一使用 `resources/icon.ico` 作为应用图标。
 
 如果本地构建在下载 electron-builder 辅助包时超时，可临时使用镜像后重试：
 
