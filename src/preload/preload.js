@@ -31,11 +31,7 @@ const api = {
   getTokenStatus: (id) => ipcRenderer.invoke('token:status', id),
 
   // 重置额度
-  fetchResetCredits: (id) => ipcRenderer.invoke('reset:fetch', id),
   consumeResetCredit: (id) => ipcRenderer.invoke('reset:consume', id),
-
-  // 订阅
-  refreshSubscription: (id, force) => ipcRenderer.invoke('subscription:refresh', id, force),
 
   // 自动切号
   getAutoSwitchConfig: () => ipcRenderer.invoke('autoswitch:config:get'),

@@ -7,6 +7,14 @@ release is published.
 
 ## [Unreleased]
 
+## [0.1.0-beta.4] - 2026-06-30
+
+- Follow the active system or environment proxy for quota and token requests.
+- Treat manual token refresh as a login check and avoid unnecessary OAuth calls.
+- Keep all account actions on the card and remove the duplicate detail page.
+- Show reset-credit controls only when an account has a consumable credit.
+- Adopt the new transparent, multi-resolution Windows application icon.
+
 ## [0.1.0-beta.3] - 2026-06-30
 
 - Reorganize the repository for public open-source release.

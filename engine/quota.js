@@ -1,7 +1,24 @@
-const { ts } = require("./crypto-utils");
+const { ts, isTokenExpired } = require("./crypto-utils");
 const { USAGE_URL } = require("./config");
 const { httpJson, buildCodexHeaders } = require("./http-client");
 const { loadIdx, saveIdx, saveAcct } = require("./storage");
+
+function extractCodeFromError(err) {
+  const message = String(err?.message || err || "");
+  return message.match(/HTTP\s+\d+\s+([a-z0-9_]+)/i)?.[1] ||
+    message.match(/\b(error_code|code)=([a-z0-9_]+)/i)?.[2] ||
+    null;
+}
+
+async function ensureAccessTokenForQuota(acct) {
+  if (!isTokenExpired(acct.tokens?.access_token || "")) return;
+
+  const { refreshOneTok } = require("./token-refresh");
+  const result = await refreshOneTok(acct);
+  if (!result?.ok) {
+    throw new Error("Token 已过期且刷新失败: " + (result?.error || "未知错误"));
+  }
+}
 
 async function fetchQuota(acct) {
   const headers = buildCodexHeaders(acct);
@@ -43,22 +60,33 @@ async function fetchQuota(acct) {
 }
 
 async function refreshQuota(acct) {
-  const q = await fetchQuota(acct);
-  acct.quota = q;
-  acct.quota_error = null;
-  acct.usage_updated_at = ts();
-  if (q.plan_type && acct.plan_type !== q.plan_type) {
-    acct.plan_type = q.plan_type;
-    const idx = loadIdx();
-    const ai = idx.accounts.find((a) => a.id === acct.id);
-    if (ai) ai.plan_type = q.plan_type;
-    saveIdx(idx);
+  try {
+    await ensureAccessTokenForQuota(acct);
+    const q = await fetchQuota(acct);
+    acct.quota = q;
+    acct.quota_error = null;
+    acct.usage_updated_at = ts();
+    if (q.plan_type && acct.plan_type !== q.plan_type) {
+      acct.plan_type = q.plan_type;
+      const idx = loadIdx();
+      const ai = idx.accounts.find((a) => a.id === acct.id);
+      if (ai) ai.plan_type = q.plan_type;
+      saveIdx(idx);
+    }
+    if (q.reset_credits_available != null && q.reset_credits_available > 0 && !acct.reset_credits) {
+      acct.reset_credits = { available_count: q.reset_credits_available, credits: [], next_expires_at: null };
+    }
+    saveAcct(acct);
+    return q;
+  } catch (err) {
+    acct.quota_error = {
+      code: extractCodeFromError(err),
+      message: err?.message || String(err),
+      timestamp: ts(),
+    };
+    saveAcct(acct);
+    throw err;
   }
-  if (q.reset_credits_available != null && q.reset_credits_available > 0 && !acct.reset_credits) {
-    acct.reset_credits = { available_count: q.reset_credits_available, credits: [], next_expires_at: null };
-  }
-  saveAcct(acct);
-  return q;
 }
 
 // 自动切号指标提取

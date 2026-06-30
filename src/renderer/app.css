@@ -379,8 +379,7 @@ svg {
 
 .button,
 .icon-button,
-.card-action,
-.detail-action {
+.card-action {
   border: 0;
   cursor: pointer;
   transition: transform var(--motion-base) var(--ease-touch), color var(--motion-base) ease, background var(--motion-base) ease, border-color var(--motion-base) ease, box-shadow var(--motion-base) ease, filter var(--motion-base) ease;
@@ -389,10 +388,8 @@ svg {
 .button svg,
 .icon-button svg,
 .card-action svg,
-.detail-action svg,
 .nav-button svg,
-.window-control svg,
-.back-button svg {
+.window-control svg {
   transition: transform var(--motion-base) var(--ease-touch);
 }
 
@@ -436,8 +433,7 @@ svg {
 
 .button:disabled,
 .icon-button:disabled,
-.card-action:disabled,
-.detail-action:disabled {
+.card-action:disabled {
   opacity: 0.48;
   cursor: not-allowed;
   transform: none;
@@ -894,8 +890,7 @@ svg {
   gap: 16px;
 }
 
-.setting-panel,
-.detail-card {
+.setting-panel {
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
   background: var(--surface);
@@ -1072,93 +1067,6 @@ input[type="range"] {
   white-space: nowrap;
 }
 
-.detail-view {
-  width: min(780px, calc(100% - 32px));
-}
-
-.back-button {
-  width: 34px;
-  height: 34px;
-  flex: 0 0 34px;
-  padding: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--ink-soft);
-  background: rgba(255, 255, 255, 0.78);
-  cursor: pointer;
-  transition: color var(--motion-base) ease, background var(--motion-base) ease, border-color var(--motion-base) ease, transform var(--motion-base) var(--ease-touch), box-shadow var(--motion-base) ease;
-}
-
-.detail-card { overflow: hidden; }
-
-.detail-hero {
-  padding: 20px;
-  display: flex;
-  align-items: center;
-  gap: 13px;
-  border-bottom: 1px solid var(--line);
-}
-
-.detail-hero .account-avatar {
-  width: 48px;
-  height: 48px;
-  flex-basis: 48px;
-}
-
-.detail-body { padding: 4px 20px 16px; }
-
-.detail-section {
-  padding: 16px 0;
-  border-bottom: 1px solid var(--line);
-}
-
-.detail-section:last-child { border-bottom: 0; }
-
-.detail-section-title {
-  margin: 0 0 12px;
-  color: var(--ink-muted);
-  font-size: 11px;
-  font-weight: 760;
-  text-transform: uppercase;
-}
-
-.detail-row {
-  min-height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.detail-key { color: var(--ink-soft); }
-.detail-value { text-align: right; font-weight: 700; }
-
-.detail-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.detail-action {
-  min-height: 36px;
-  padding: 0 12px;
-  border-radius: 8px;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--ink-soft);
-  background: rgba(255, 255, 255, 0.76);
-  border: 1px solid rgba(23, 32, 51, 0.045);
-  font-weight: 700;
-}
-
-.detail-action:hover { color: var(--primary); background: var(--primary-soft); }
-.detail-action.primary { color: #fff; background: var(--primary); }
-.detail-action.danger:hover { color: #fff; background: var(--danger); }
-
 .empty-state,
 .fatal-state {
   min-height: 320px;
@@ -1313,10 +1221,8 @@ input[type="range"] {
   .button:not(:disabled):hover,
   .icon-button:not(:disabled):hover,
   .card-action:not(:disabled):hover,
-  .detail-action:not(:disabled):hover,
   .nav-button:not(:disabled):hover,
   .segment-button:not(:disabled):hover,
-  .back-button:not(:disabled):hover,
   .brand-button:not(:disabled):hover,
   .toggle:not(:disabled):hover {
     transform: translateY(-1px);
@@ -1325,15 +1231,12 @@ input[type="range"] {
   .button:not(:disabled):hover svg,
   .icon-button:not(:disabled):hover svg,
   .card-action:not(:disabled):hover svg,
-  .detail-action:not(:disabled):hover svg,
   .nav-button:not(:disabled):hover svg,
-  .window-control:not(:disabled):hover svg,
-  .back-button:not(:disabled):hover svg {
+  .window-control:not(:disabled):hover svg {
     transform: scale(1.1);
   }
 
-  .card-action.switch:not(:disabled):hover svg,
-  .detail-action.primary:not(:disabled):hover svg {
+  .card-action.switch:not(:disabled):hover svg {
     transform: translateX(1px) scale(1.1);
   }
 
@@ -1346,8 +1249,7 @@ input[type="range"] {
     transform: scale(1.045);
   }
 
-  .window-control:not(:disabled):hover,
-  .back-button:not(:disabled):hover {
+  .window-control:not(:disabled):hover {
     transform: translateY(-1px);
   }
 
@@ -1387,10 +1289,8 @@ input[type="range"] {
 .button:not(:disabled):active,
 .icon-button:not(:disabled):active,
 .card-action:not(:disabled):active,
-.detail-action:not(:disabled):active,
 .nav-button:not(:disabled):active,
 .segment-button:not(:disabled):active,
-.back-button:not(:disabled):active,
 .brand-button:not(:disabled):active,
 .window-control:not(:disabled):active,
 .toggle:not(:disabled):active {
@@ -1460,8 +1360,7 @@ input[type="range"]:active {
     font-size: 10px;
   }
   .workspace { padding-bottom: 0; }
-  .view,
-  .detail-view {
+  .view {
     width: calc(100% - 24px);
     padding-top: 18px;
   }
@@ -1494,8 +1393,6 @@ input[type="range"]:active {
   .card-action { width: 31px; height: 31px; flex-basis: 31px; }
   .summary-item { min-height: 64px; padding: 10px; }
   .summary-value { font-size: 18px; }
-  .detail-hero { padding: 16px; }
-  .detail-body { padding: 2px 16px 14px; }
   .dialog-backdrop { align-items: flex-end; padding: 12px; }
   .dialog { border-radius: 16px 16px 10px 10px; }
 }

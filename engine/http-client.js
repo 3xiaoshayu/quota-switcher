@@ -1,8 +1,63 @@
 const http = require("node:http");
 const https = require("node:https");
+const { ProxyAgent } = require("proxy-agent");
+const { getProxyForUrl: getEnvProxyForUrl } = require("proxy-from-env");
 const { REFRESH_TIMEOUT } = require("./config");
 
-function httpJson(url, opts = {}) {
+let sharedProxyAgent = null;
+
+function normalizeProxyRule(rule) {
+  if (!rule) return "";
+  const first = String(rule)
+    .split(";")
+    .map((item) => item.trim())
+    .find((item) => item && !/^direct$/i.test(item));
+  if (!first) return "";
+
+  if (/^(https?|socks4a?|socks5h?|socks5?|pac\+)/i.test(first)) {
+    return first;
+  }
+
+  const match = first.match(/^([a-z]+)\s+(.+)$/i);
+  if (!match) return `http://${first}`;
+
+  const type = match[1].toUpperCase();
+  const target = match[2].trim();
+  if (!target) return "";
+
+  if (type === "PROXY" || type === "HTTP") return `http://${target}`;
+  if (type === "HTTPS") return `https://${target}`;
+  if (type === "SOCKS" || type === "SOCKS5") return `socks5://${target}`;
+  if (type === "SOCKS4") return `socks4://${target}`;
+  return "";
+}
+
+async function getElectronProxyForUrl(url) {
+  try {
+    const electron = require("electron");
+    const defaultSession = electron?.session?.defaultSession;
+    if (!defaultSession?.resolveProxy) return "";
+    return normalizeProxyRule(await defaultSession.resolveProxy(url));
+  } catch {
+    return "";
+  }
+}
+
+async function resolveProxyForUrl(url) {
+  const envProxy = getEnvProxyForUrl(url);
+  if (envProxy) return envProxy;
+  return getElectronProxyForUrl(url);
+}
+
+function getProxyAgent() {
+  if (!sharedProxyAgent) {
+    sharedProxyAgent = new ProxyAgent({ getProxyForUrl: resolveProxyForUrl });
+  }
+  return sharedProxyAgent;
+}
+
+async function httpJson(url, opts = {}) {
+  const agent = getProxyAgent();
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const mod = u.protocol === "https:" ? https : http;
@@ -11,7 +66,7 @@ function httpJson(url, opts = {}) {
       opts.headers || {}
     );
     const timeout = opts.timeout || REFRESH_TIMEOUT;
-    const req = mod.request(url, { method: opts.method || "GET", headers, timeout }, (res) => {
+    const req = mod.request(url, { method: opts.method || "GET", headers, timeout, agent }, (res) => {
       const chunks = [];
       res.on("data", (c) => chunks.push(c));
       res.on("end", () => {

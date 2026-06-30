@@ -203,10 +203,6 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     });
 
     // 重置额度
-    ipcMain.handle("reset:fetch", async (e, id) => {
-        try { const a = loadAcctById(eng, id); if (!a) return fail("账号不存在"); const s = await eng.fetchResetCredits(a); a.reset_credits = s; eng.saveAcct(a); return ok(s); }
-        catch (e) { return fail(e.message); }
-    });
     ipcMain.handle("reset:consume", async (e, id) => {
         try { const a = loadAcctById(eng, id); if (!a) return fail("账号不存在"); await eng.consumeResetCredit(a); return ok(true); }
         catch (e) { return fail(e.message); }

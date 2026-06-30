@@ -1,10 +1,41 @@
 const { TOKEN_URL, CLIENT_ID } = require("./config");
-const { ts, isTokenExpired } = require("./crypto-utils");
+const { ts, isTokenExpired, jwtExp } = require("./crypto-utils");
 const { httpJson, extractErrorCode } = require("./http-client");
 const { saveAcct, loadAcct, listAccts } = require("./storage");
 const { writeAuthJson, writeProjection } = require("./switch");
 
-async function refreshOneTok(acct) {
+function tokenRefreshError(status, code) {
+  if (code === "unsupported_country_region_territory") {
+    return "当前网络出口被 OpenAI 判定为不支持的地区，请确认应用已走可用代理后重试";
+  }
+  return "HTTP " + status + (code ? " " + code : "");
+}
+
+function tokenTimeLeft(acct) {
+  const exp = acct.tokens?.access_token ? jwtExp(acct.tokens.access_token) : null;
+  return exp ? exp - ts() : null;
+}
+
+function hasTokenRepairSignal(acct) {
+  if (acct.requires_reauth) return true;
+  const code = String(acct.quota_error?.code || "").toLowerCase();
+  const message = String(acct.quota_error?.message || "").toLowerCase();
+  return [
+    "invalid_grant",
+    "invalid_token",
+    "token_revoked",
+    "token_invalidated",
+    "refresh_token_expired",
+    "refresh_token_invalidated",
+    "refresh_token_reused",
+  ].some((item) => code === item || message.includes(item));
+}
+
+async function refreshOneTok(acct, options = {}) {
+  const force = typeof options === "boolean" ? options : !!options.force;
+  if (!force && !needsRefresh(acct) && !hasTokenRepairSignal(acct)) {
+    return { ok: true, skipped: true, gen: acct.token_generation || 0, timeLeft: tokenTimeLeft(acct) };
+  }
   if (!acct.tokens.refresh_token) return { ok: false, error: "缺少 refresh_token", revoked: false };
   const body = JSON.stringify({
     client_id: CLIENT_ID, grant_type: "refresh_token",
@@ -18,7 +49,7 @@ async function refreshOneTok(acct) {
     if (resp.status >= 400) {
       const code = extractErrorCode(resp.body);
       const revoked = code === "token_revoked" || code === "token_invalidated";
-      return { ok: false, error: "HTTP " + resp.status + (code ? " " + code : ""), revoked, detail: resp.body.slice(0, 300) };
+      return { ok: false, error: tokenRefreshError(resp.status, code), revoked, detail: resp.body.slice(0, 300) };
     }
     const data = JSON.parse(resp.body);
     const idTok = data.id_token || acct.tokens.id_token;
@@ -38,7 +69,7 @@ async function refreshOneTok(acct) {
     acct.requires_reauth = false;
     acct.reauth_reason = null;
     saveAcct(acct);
-    return { ok: true, gen: acct.token_generation };
+    return { ok: true, skipped: false, gen: acct.token_generation };
   } catch (err) {
     return { ok: false, error: err.message, revoked: false };
   }
@@ -57,16 +88,17 @@ async function refreshAll(force) {
   const results = [];
 
   for (const a of accts) {
-    if (!force && !needsRefresh(a) && !a.quota_error && !a.requires_reauth) {
+    if (!force && !needsRefresh(a) && !hasTokenRepairSignal(a)) {
       okN++;
       results.push({ email: a.email, ok: true, skipped: true });
       continue;
     }
-    const r = await refreshOneTok(a);
+    const wasRepair = hasTokenRepairSignal(a);
+    const r = await refreshOneTok(a, { force });
     results.push({ email: a.email, ok: r.ok, skipped: false, gen: r.gen, error: r.error });
 
     if (r.ok) {
-      if (a.quota_error || a.requires_reauth) revived++;
+      if (wasRepair) revived++;
       else okN++;
     } else if (r.revoked) {
       dead++;

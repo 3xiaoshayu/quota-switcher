@@ -16,7 +16,6 @@
     updateStatus: null,
     daemonRunning: false,
     view: "accounts",
-    detailId: null,
     search: "",
     filter: "all",
     loading: true,
@@ -268,9 +267,8 @@
     }, 3200);
   }
 
-  function navigate(view, detailId = null) {
+  function navigate(view) {
     state.view = view;
-    state.detailId = detailId;
     renderApp();
   }
 
@@ -329,8 +327,7 @@
   }
 
   function navButton(view, iconName, label) {
-    const activeView = state.view === "detail" ? "accounts" : state.view;
-    const active = activeView === view;
+    const active = state.view === view;
     return el("button", {
       type: "button",
       className: `nav-button ${active ? "active" : ""}`,
@@ -415,7 +412,6 @@
     if (state.view === "quota") return renderQuotaView();
     if (state.view === "autoswitch") return renderAutoSwitchView();
     if (state.view === "settings") return renderSettingsView();
-    if (state.view === "detail") return renderDetailView();
     return renderAccountsView();
   }
 
@@ -514,7 +510,8 @@
     const tokenBusy = state.busy.has(`token:${account.id}`);
     const switchBusy = state.busy.has(`switch:${account.id}`);
     const deleteBusy = state.busy.has(`delete:${account.id}`);
-    const accountBusy = quotaBusy || tokenBusy || switchBusy || deleteBusy;
+    const resetConsumeBusy = state.busy.has(`reset:consume:${account.id}`);
+    const accountBusy = quotaBusy || tokenBusy || switchBusy || deleteBusy || resetConsumeBusy;
     const items = quotaItems(account);
     const creditCount = Number(account.reset_credits?.available_count || account.quota?.reset_credits_available || 0);
 
@@ -562,9 +559,11 @@
       el("footer", { className: "card-footer" },
         el("span", { className: "card-time", text: account.usage_updated_at ? `配额更新 ${formatDateTime(account.usage_updated_at)}` : `最近使用 ${formatDateTime(account.last_used || account.created_at)}` }),
         el("div", { className: "card-actions" },
-          actionButton("more-horizontal", "更多", () => navigate("detail", account.id)),
+          creditCount > 0
+            ? actionButton(resetConsumeBusy ? "loader-circle" : "ticket-check", "消耗重置额度", () => consumeResetCredit(account), { disabled: resetConsumeBusy, spinning: resetConsumeBusy })
+            : null,
           actionButton(quotaBusy ? "loader-circle" : "gauge", "刷新配额", () => refreshQuota(account), { disabled: quotaBusy, spinning: quotaBusy }),
-          actionButton(tokenBusy ? "loader-circle" : "key-round", "刷新 Token", () => refreshToken(account), { disabled: tokenBusy, spinning: tokenBusy }),
+          actionButton(tokenBusy ? "loader-circle" : "key-round", "检查登录", () => refreshToken(account), { disabled: tokenBusy, spinning: tokenBusy }),
           actionButton(switchBusy ? "loader-circle" : (current ? "check" : "play"), current ? "当前账号" : "切换账号", () => switchAccount(account), {
             variant: current ? "current" : "switch", disabled: current || switchBusy, spinning: switchBusy,
           }),
@@ -674,10 +673,11 @@
 
   async function refreshToken(account) {
     await runBusy(`token:${account.id}`, async () => {
-      const result = expectData(await API.refreshToken(account.id), "刷新 Token");
+      const result = expectData(await API.refreshToken(account.id), "检查登录");
       if (!result?.ok) throw new Error(result?.error || "Token 刷新失败");
       await loadState(false);
-    }, `${account.email} Token 已更新`);
+      showToast(result.skipped ? `${account.email} 登录仍有效` : `${account.email} 登录已续期`, "success");
+    });
   }
 
   async function deleteAccount(account) {
@@ -690,10 +690,6 @@
     if (!confirmed) return;
     await runBusy(`delete:${account.id}`, async () => {
       expectData(await API.deleteAccount(account.id), "删除账号");
-      if (state.detailId === account.id) {
-        state.view = "accounts";
-        state.detailId = null;
-      }
       await loadState(false);
     }, `已删除 ${account.email}`);
   }
@@ -1015,7 +1011,7 @@
 
   async function refreshAllTokens() {
     await runBusy("token:all", async () => {
-      const result = expectData(await API.refreshAllTokens(true), "刷新全部 Token");
+      const result = expectData(await API.refreshAllTokens(false), "检查全部登录");
       await loadState(false);
       showToast(`${result.okCount || 0} 正常，${result.revivedCount || 0} 恢复，${result.deadCount || 0} 失效`, result.deadCount ? "warning" : "success");
     });
@@ -1040,133 +1036,6 @@
       const status = expectData(await API.installUpdate(), "安装更新");
       if (status) state.updateStatus = status;
     });
-  }
-
-  function renderDetailView() {
-    const account = state.accounts.find((item) => item.id === state.detailId);
-    if (!account) {
-      state.view = "accounts";
-      state.detailId = null;
-      return renderAccountsView();
-    }
-    const token = tokenPresentation(account);
-    const current = account.id === state.current?.id;
-    const items = quotaItems(account);
-    const switchBusy = state.busy.has(`switch:${account.id}`);
-    const quotaBusy = state.busy.has(`quota:${account.id}`);
-    const tokenBusy = state.busy.has(`token:${account.id}`);
-    const subscriptionBusy = state.busy.has(`subscription:${account.id}`);
-    const deleteBusy = state.busy.has(`delete:${account.id}`);
-    const resetFetchBusy = state.busy.has(`reset:fetch:${account.id}`);
-    const resetConsumeBusy = state.busy.has(`reset:consume:${account.id}`);
-    const resetBusy = resetFetchBusy || resetConsumeBusy;
-    const resetCount = Number(account.reset_credits?.available_count || account.quota?.reset_credits_available || 0);
-    const detailBusy = switchBusy || quotaBusy || tokenBusy || subscriptionBusy || deleteBusy || resetBusy;
-    const quotaBlock = el("div", { className: "quota-stack" },
-      items.length ? items.map(renderQuotaItem) : el("div", { className: "quota-empty" }, icon("activity", 17), "尚无配额数据"),
-    );
-
-    return el("main", { className: "workspace" },
-      el("section", { className: "view detail-view" },
-        el("div", { className: "view-heading" },
-          el("div", { className: "view-title-row" },
-            el("button", { type: "button", className: "back-button", title: "返回", "aria-label": "返回", onClick: () => navigate("accounts") }, icon("arrow-left", 17)),
-            el("div", null, el("h1", { text: "账号详情" }), el("p", { className: "view-meta", text: account.email })),
-          ),
-        ),
-        el("article", { className: "detail-card", "aria-busy": detailBusy ? "true" : null },
-          el("header", { className: "detail-hero" },
-            el("span", { className: "account-avatar" }, icon("terminal", 22)),
-            el("div", { className: "account-title" },
-              el("span", { className: "account-email", text: account.email }),
-              el("span", { className: "account-subtitle" },
-                el("span", { className: `status-dot ${token.tone}` }),
-                el("span", { text: token.label }),
-              ),
-            ),
-            el("div", { className: "card-badges" },
-              current ? el("span", { className: "current-badge", text: "当前" }) : null,
-              el("span", { className: "plan-badge", text: planLabel(account) }),
-            ),
-          ),
-          el("div", { className: "detail-body" },
-            el("section", { className: "detail-section" },
-              el("h2", { className: "detail-section-title", text: "配额" }),
-              quotaBlock,
-            ),
-            el("section", { className: "detail-section" },
-              el("h2", { className: "detail-section-title", text: "账号" }),
-              detailRow("Token 代次", String(account.token_generation || 0)),
-              detailRow("Token 更新", formatDateTime(account.token_updated_at)),
-              detailRow("订阅有效期", formatDateTime(account.subscription_active_until)),
-              detailRow("创建时间", formatDateTime(account.created_at)),
-              detailRow("最近使用", formatDateTime(account.last_used)),
-            ),
-            el("section", { className: "detail-section" },
-              el("h2", { className: "detail-section-title", text: "重置额度" }),
-              detailRow("可用次数", String(resetCount)),
-              detailRow("下次到期", formatDateTime(account.reset_credits?.next_expires_at)),
-              el("div", { className: "detail-actions reset-actions" },
-                el("button", {
-                  type: "button", className: "detail-action", disabled: resetBusy,
-                  "aria-busy": resetFetchBusy ? "true" : null, onClick: () => fetchResetCredits(account),
-                }, icon(resetFetchBusy ? "loader-circle" : "refresh-cw", 16, resetFetchBusy ? "spin" : ""), "查询额度"),
-                el("button", {
-                  type: "button", className: "detail-action primary", disabled: resetBusy || resetCount <= 0,
-                  "aria-busy": resetConsumeBusy ? "true" : null, onClick: () => consumeResetCredit(account),
-                }, icon(resetConsumeBusy ? "loader-circle" : "ticket-check", 16, resetConsumeBusy ? "spin" : ""), "消耗一个"),
-              ),
-            ),
-            el("section", { className: "detail-section" },
-              el("h2", { className: "detail-section-title", text: "操作" }),
-              el("div", { className: "detail-actions" },
-                el("button", {
-                  type: "button", className: "detail-action primary", disabled: current || switchBusy,
-                  "aria-busy": switchBusy ? "true" : null, onClick: () => switchAccount(account),
-                }, icon(switchBusy ? "loader-circle" : (current ? "check" : "play"), 16, switchBusy ? "spin" : ""), current ? "当前账号" : "切换账号"),
-                el("button", {
-                  type: "button", className: "detail-action", disabled: quotaBusy,
-                  "aria-busy": quotaBusy ? "true" : null, onClick: () => refreshQuota(account),
-                }, icon(quotaBusy ? "loader-circle" : "gauge", 16, quotaBusy ? "spin" : ""), "刷新配额"),
-                el("button", {
-                  type: "button", className: "detail-action", disabled: tokenBusy,
-                  "aria-busy": tokenBusy ? "true" : null, onClick: () => refreshToken(account),
-                }, icon(tokenBusy ? "loader-circle" : "key-round", 16, tokenBusy ? "spin" : ""), "刷新 Token"),
-                el("button", {
-                  type: "button", className: "detail-action", disabled: subscriptionBusy,
-                  "aria-busy": subscriptionBusy ? "true" : null, onClick: () => refreshSubscription(account),
-                }, icon(subscriptionBusy ? "loader-circle" : "calendar-sync", 16, subscriptionBusy ? "spin" : ""), "刷新订阅"),
-                el("button", {
-                  type: "button", className: "detail-action danger", disabled: deleteBusy,
-                  "aria-busy": deleteBusy ? "true" : null, onClick: () => deleteAccount(account),
-                }, icon(deleteBusy ? "loader-circle" : "trash-2", 16, deleteBusy ? "spin" : ""), "删除"),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  function detailRow(label, value) {
-    return el("div", { className: "detail-row" },
-      el("span", { className: "detail-key", text: label }),
-      el("span", { className: "detail-value", text: value }),
-    );
-  }
-
-  async function refreshSubscription(account) {
-    await runBusy(`subscription:${account.id}`, async () => {
-      expectData(await API.refreshSubscription(account.id, true), "刷新订阅");
-      await loadState(false);
-    }, `${account.email} 订阅信息已更新`);
-  }
-
-  async function fetchResetCredits(account) {
-    await runBusy(`reset:fetch:${account.id}`, async () => {
-      expectData(await API.fetchResetCredits(account.id), "查询重置额度");
-      await loadState(false);
-    }, `${account.email} 重置额度已更新`);
   }
 
   async function consumeResetCredit(account) {
@@ -1257,12 +1126,6 @@
       renderApp();
     });
   }
-
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && state.view === "detail" && !document.querySelector(".dialog-backdrop")) {
-      navigate("accounts");
-    }
-  });
 
   document.addEventListener("DOMContentLoaded", async () => {
     renderApp();
