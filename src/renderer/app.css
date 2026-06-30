@@ -544,7 +544,6 @@ svg {
   backdrop-filter: var(--glass);
   -webkit-backdrop-filter: var(--glass);
   box-shadow: var(--shadow-sm);
-  cursor: pointer;
   outline: none;
   transition: transform var(--motion-base) var(--ease-touch), box-shadow var(--motion-base) ease, border-color var(--motion-base) ease, background var(--motion-base) ease;
 }
@@ -715,6 +714,7 @@ svg {
 .quota-value.high { color: var(--success); }
 .quota-value.medium { color: var(--warning); }
 .quota-value.low { color: var(--danger); }
+.quota-value.unknown { color: var(--ink-muted); }
 
 .quota-track {
   width: 100%;
@@ -733,6 +733,17 @@ svg {
 .quota-fill.high { background: var(--success); }
 .quota-fill.medium { background: var(--warning); }
 .quota-fill.low { background: var(--danger); }
+.quota-fill.unknown { background: transparent; }
+
+.quota-item.pending .quota-track {
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(23, 32, 51, 0.07) 0,
+    rgba(23, 32, 51, 0.07) 5px,
+    rgba(23, 32, 51, 0.035) 5px,
+    rgba(23, 32, 51, 0.035) 10px
+  );
+}
 
 .quota-reset {
   overflow: hidden;

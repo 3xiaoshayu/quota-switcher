@@ -2,6 +2,11 @@
   "use strict";
 
   const API = window.codexAccountManager || window.codexDeskep || null;
+  const QUOTA_AUTO_SYNC_STALE_MS = 10 * 60 * 1000;
+  const QUOTA_AUTO_SYNC_MIN_GAP_MS = 60 * 1000;
+  let quotaAutoSyncPromise = null;
+  let lastQuotaAutoSyncAt = 0;
+
   const state = {
     accounts: [],
     current: null,
@@ -175,7 +180,7 @@
   }
 
   function quotaTone(percentage) {
-    if (percentage === null) return "medium";
+    if (percentage === null) return "unknown";
     if (percentage > 50) return "high";
     if (percentage > 20) return "medium";
     return "low";
@@ -211,22 +216,39 @@
   }
 
   function quotaItems(account) {
-    const quota = account.quota;
-    if (!quota) return [];
-    const items = [];
-    const hourly = clampPercent(quota.hourly_percentage);
-    const weekly = clampPercent(quota.weekly_percentage);
-    if (quota.hourly_window_present !== false && hourly !== null) {
-      const minutes = Number(quota.hourly_window_minutes);
-      const label = Number.isFinite(minutes)
-        ? (minutes >= 60 ? `${Math.round(minutes / 60)} 小时配额` : `${minutes} 分钟配额`)
-        : "5 小时配额";
-      items.push({ key: "hourly", label, percentage: hourly, reset: quota.hourly_reset_time, icon: "clock-3" });
-    }
-    if (quota.weekly_window_present && weekly !== null) {
-      items.push({ key: "weekly", label: "周配额", percentage: weekly, reset: quota.weekly_reset_time, icon: "calendar-days" });
-    }
-    return items;
+    const quota = account.quota || null;
+    const hourly = quota ? clampPercent(quota.hourly_percentage) : null;
+    const weekly = quota ? clampPercent(quota.weekly_percentage) : null;
+    const hourlyKnown = !!quota && quota.hourly_window_present !== false && hourly !== null;
+    const weeklyKnown = !!quota && quota.weekly_window_present !== false && weekly !== null;
+    const minutes = Number(quota?.hourly_window_minutes);
+    const hourlyLabel = Number.isFinite(minutes)
+      ? (minutes >= 60 ? `${Math.round(minutes / 60)} 小时额度` : `${minutes} 分钟额度`)
+      : "5 小时额度";
+    const missingNote = quota ? "接口未返回" : "等待同步";
+
+    return [
+      {
+        key: "hourly",
+        label: hourlyLabel,
+        percentage: hourlyKnown ? hourly : null,
+        reset: hourlyKnown ? quota.hourly_reset_time : null,
+        icon: "clock-3",
+        note: hourlyKnown ? null : missingNote,
+      },
+      {
+        key: "weekly",
+        label: "周额度",
+        percentage: weeklyKnown ? weekly : null,
+        reset: weeklyKnown ? quota.weekly_reset_time : null,
+        icon: "calendar-days",
+        note: weeklyKnown ? null : missingNote,
+      },
+    ];
+  }
+
+  function accountHasQuotaData(account) {
+    return quotaItems(account).some((item) => item.percentage !== null);
   }
 
   function showToast(message, tone = "info") {
@@ -509,17 +531,8 @@
 
     const card = el("article", {
       className: `account-card ${current ? "current" : ""} ${attention ? "attention" : ""}`.trim(),
-      tabIndex: 0,
-      role: "button",
-      "aria-label": `查看 ${account.email} 详情`,
+      "aria-label": `账号 ${account.email}`,
       "aria-busy": accountBusy ? "true" : null,
-      onClick: () => navigate("detail", account.id),
-      onKeydown: (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          navigate("detail", account.id);
-        }
-      },
     },
       el("div", { className: "card-header" },
         el("span", { className: "account-avatar" }, icon("terminal", 20)),
@@ -549,7 +562,7 @@
       el("footer", { className: "card-footer" },
         el("span", { className: "card-time", text: account.usage_updated_at ? `配额更新 ${formatDateTime(account.usage_updated_at)}` : `最近使用 ${formatDateTime(account.last_used || account.created_at)}` }),
         el("div", { className: "card-actions" },
-          actionButton("info", "账号详情", () => navigate("detail", account.id)),
+          actionButton("more-horizontal", "更多", () => navigate("detail", account.id)),
           actionButton(quotaBusy ? "loader-circle" : "gauge", "刷新配额", () => refreshQuota(account), { disabled: quotaBusy, spinning: quotaBusy }),
           actionButton(tokenBusy ? "loader-circle" : "key-round", "刷新 Token", () => refreshToken(account), { disabled: tokenBusy, spinning: tokenBusy }),
           actionButton(switchBusy ? "loader-circle" : (current ? "check" : "play"), current ? "当前账号" : "切换账号", () => switchAccount(account), {
@@ -566,21 +579,72 @@
 
   function renderQuotaItem(item) {
     const tone = quotaTone(item.percentage);
-    return el("div", { className: "quota-item" },
+    const known = item.percentage !== null;
+    return el("div", { className: `quota-item ${known ? "" : "pending"}`.trim() },
       el("div", { className: "quota-head" },
         icon(item.icon, 14),
         el("span", { className: "quota-label", text: item.label }),
-        el("span", { className: `quota-value ${tone}`, text: `${Math.round(item.percentage)}%` }),
+        el("span", { className: `quota-value ${tone}`, text: known ? `${Math.round(item.percentage)}%` : "--" }),
       ),
       el("div", { className: "quota-track" },
-        el("div", { className: `quota-fill ${tone}`, style: { width: `${item.percentage}%` } }),
+        el("div", { className: `quota-fill ${tone}`, style: { width: known ? `${item.percentage}%` : "0%" } }),
       ),
-      item.reset ? el("span", { className: "quota-reset", text: formatResetTime(item.reset) }) : null,
+      item.reset || item.note ? el("span", { className: "quota-reset", text: item.reset ? formatResetTime(item.reset) : item.note }) : null,
     );
   }
 
+  function needsQuotaAutoSync(account) {
+    if (!account || state.busy.has(`quota:${account.id}`)) return false;
+    if (account.requires_reauth || account.token_status?.accessAvailable === false || account.token_status?.expired) return false;
+    if (!account.quota || account.quota_error || !accountHasQuotaData(account)) return true;
+    const updatedAt = toDate(account.usage_updated_at)?.getTime() || 0;
+    return !updatedAt || Date.now() - updatedAt > QUOTA_AUTO_SYNC_STALE_MS;
+  }
+
+  function queueQuotaAutoSync() {
+    if (!API || state.loading || quotaAutoSyncPromise) return quotaAutoSyncPromise;
+    if (Date.now() - lastQuotaAutoSyncAt < QUOTA_AUTO_SYNC_MIN_GAP_MS) return null;
+    const accounts = state.accounts.filter(needsQuotaAutoSync);
+    if (!accounts.length) return null;
+
+    lastQuotaAutoSyncAt = Date.now();
+    quotaAutoSyncPromise = syncQuotasInBackground(accounts).finally(() => {
+      quotaAutoSyncPromise = null;
+    });
+    return quotaAutoSyncPromise;
+  }
+
+  async function syncQuotasInBackground(accounts) {
+    accounts.forEach((account) => state.busy.add(`quota:${account.id}`));
+    renderApp();
+    const failed = [];
+    for (const account of accounts) {
+      try {
+        expectData(await API.refreshQuota(account.id), "自动同步配额");
+      } catch (error) {
+        failed.push(error);
+      } finally {
+        state.busy.delete(`quota:${account.id}`);
+      }
+    }
+
+    try {
+      await loadState(false);
+    } catch (error) {
+      failed.push(error);
+    }
+    renderApp();
+
+    if (failed.length && failed.length === accounts.length) {
+      showToast("自动同步配额失败，可稍后手动刷新", "warning");
+    }
+  }
+
   async function reloadLocalData() {
-    await runBusy("reload", async () => loadState(false), "本地数据已更新");
+    await runBusy("reload", async () => {
+      await loadState(false);
+      queueQuotaAutoSync();
+    }, "本地数据已更新");
   }
 
   async function addAccount() {
@@ -588,6 +652,7 @@
     await runBusy("add", async () => {
       const account = expectData(await API.addAccount(), "添加账号");
       await loadState(false);
+      queueQuotaAutoSync();
       showToast(`已添加 ${account.email}`, "success");
     });
   }
@@ -596,6 +661,7 @@
     await runBusy(`switch:${account.id}`, async () => {
       expectData(await API.switchAccount(account.id), "切换账号");
       await loadState(false);
+      queueQuotaAutoSync();
     }, `已切换到 ${account.email}`);
   }
 
@@ -633,9 +699,11 @@
   }
 
   function renderQuotaView() {
-    const withQuota = state.accounts.filter((account) => quotaItems(account).length > 0);
+    const withQuota = state.accounts.filter(accountHasQuotaData);
     const attention = state.accounts.filter(isAttention).length;
-    const percentages = withQuota.flatMap((account) => quotaItems(account).map((item) => item.percentage));
+    const percentages = state.accounts.flatMap((account) => quotaItems(account)
+      .filter((item) => item.percentage !== null)
+      .map((item) => item.percentage));
     const average = percentages.length
       ? Math.round(percentages.reduce((sum, value) => sum + value, 0) / percentages.length)
       : null;
@@ -647,7 +715,7 @@
 
     return el("main", { className: "workspace" },
       el("section", { className: "view" },
-        viewHeading("配额总览", `已缓存 ${withQuota.length}/${state.accounts.length}`, [refreshButton]),
+        viewHeading("配额总览", `已同步 ${withQuota.length}/${state.accounts.length}`, [refreshButton]),
         el("div", { className: "summary-band" },
           summaryItem("账号", state.accounts.length, ""),
           summaryItem("需要处理", attention, attention ? "warning" : "success"),
@@ -1154,6 +1222,7 @@
     renderApp();
     try {
       await Promise.all([loadState(false), loadStaticState()]);
+      queueQuotaAutoSync();
     } catch (error) {
       state.error = error.message || String(error);
       state.loading = false;
@@ -1164,12 +1233,22 @@
   function subscribeToMainEvents() {
     if (!API) return;
     API.onDaemonTick?.(() => {
-      loadState(false).then(renderApp).catch((error) => showToast(error.message, "error"));
+      loadState(false)
+        .then(() => {
+          renderApp();
+          queueQuotaAutoSync();
+        })
+        .catch((error) => showToast(error.message, "error"));
     });
     API.onDaemonError?.((payload) => showToast(payload?.message || "守护进程错误", "error"));
     API.onAutoSwitch?.((payload) => {
       if (payload?.switched) showToast(`自动切换到 ${payload.to?.email || "新账号"}`, "warning");
-      loadState(false).then(renderApp).catch(() => {});
+      loadState(false)
+        .then(() => {
+          renderApp();
+          queueQuotaAutoSync();
+        })
+        .catch(() => {});
     });
     API.onUpdateStatus?.((payload) => {
       state.updateStatus = payload || state.updateStatus;
@@ -1195,5 +1274,7 @@
       state.loading = false;
     }
     renderApp();
+    queueQuotaAutoSync();
+    window.setInterval(() => queueQuotaAutoSync(), QUOTA_AUTO_SYNC_STALE_MS);
   });
 })();
