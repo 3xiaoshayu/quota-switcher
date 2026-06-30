@@ -5,18 +5,20 @@
   "description": "Local-first Windows desktop manager for Codex accounts, quotas, tokens, and automatic switching",
   "main": "src/main/main.js",
   "scripts": {
-    "start": "electron .",
-    "dev": "electron . --dev",
+    "start": "npm run renderer:build && electron .",
+    "dev": "npm run renderer:build && electron . --dev",
+    "renderer:build": "vite build --config vite.renderer.config.ts",
+    "renderer:check": "tsc --noEmit -p tsconfig.renderer.json",
     "check:syntax": "node scripts/check-syntax.js",
     "check:docs": "node scripts/check-doc-links.js",
     "audit:ui": "node scripts/audit-ui-contract.js",
     "release:check": "node scripts/verify-release.js",
-    "check": "npm run check:syntax && npm run check:docs && npm run audit:ui && npm run release:check",
+    "check": "npm run renderer:check && npm run check:syntax && npm run check:docs && npm run audit:ui && npm run release:check",
     "test": "npm run check",
     "build": "npm run build:windows",
-    "build:dir": "electron-builder --dir --win --x64",
-    "build:windows": "npm run release:check && electron-builder --win nsis zip --x64 --publish never",
-    "build:nsis": "electron-builder --win nsis --x64 --publish never"
+    "build:dir": "npm run renderer:build && electron-builder --dir --win --x64",
+    "build:windows": "npm run renderer:build && npm run release:check && electron-builder --win nsis zip --x64 --publish never",
+    "build:nsis": "npm run renderer:build && electron-builder --win nsis --x64 --publish never"
   },
   "author": "WangJin",
   "license": "MIT",
@@ -42,8 +44,20 @@
     "node": ">=20"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.2",
+    "@types/node": "^22.20.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
     "electron": "^42.0.0",
-    "electron-builder": "^26.0.0"
+    "electron-builder": "^26.0.0",
+    "lucide-react": "^0.546.0",
+    "motion": "^12.42.2",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tailwindcss": "^4.3.2",
+    "typescript": "~5.8.2",
+    "vite": "^6.4.3"
   },
   "dependencies": {
     "electron-updater": "^6.6.2",

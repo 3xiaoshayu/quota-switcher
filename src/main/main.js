@@ -23,22 +23,27 @@ app.whenReady().then(() => {
     const updateService = createUpdateService({ app, BrowserWindow });
     const daemon = registerIpcHandlers(eng, { updateService });
     const win = new BrowserWindow({
-        width: 1180, height: 760,
-        minWidth: 420, minHeight: 560,
-        frame: false, titleBarStyle: "hidden",
-        backgroundColor: "#edf1f5",
+        width: 1440, height: 900,
+        minWidth: 1280, minHeight: 720,
+        center: true,
+        frame: true,
+        autoHideMenuBar: true,
+        title: "Codex Account Manager",
+        backgroundColor: "#0f172a",
         show: false,
+        icon: path.join(__dirname, "..", "..", "resources", "icon.ico"),
         webPreferences: {
             preload: path.join(__dirname, "..", "preload", "preload.js"),
             contextIsolation: true, nodeIntegration: false, sandbox: false,
         },
     });
+    win.setMenuBarVisibility(false);
 
     win.once("ready-to-show", () => {
         win.show();
         updateService.startAutoCheck();
     });
-    win.loadFile(path.join(__dirname, "..", "renderer", "index.html"))
+    win.loadFile(path.join(__dirname, "..", "renderer-dist", "index.html"))
         .catch((error) => console.error("Failed to load renderer:", error));
 
     // 自动启动守护进程（如果配置启用）

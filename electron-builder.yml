@@ -33,3 +33,4 @@ files:
   - engine/**/*
   - package.json
   - "!**/*.map"
+  - "!src/renderer-react/**"
