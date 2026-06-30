@@ -1,20 +1,45 @@
 name: Feature request
-description: Suggest a useful improvement.
+description: Propose a focused improvement to an existing workflow.
 title: "[Feature]: "
 labels: ["enhancement"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Keep proposals local-first and specific to Codex account, quota, token, or switching workflows.
+
   - type: textarea
     id: problem
     attributes:
       label: Problem
-      description: What user workflow would this improve?
-    validations:
-      required: true
-  - type: textarea
-    id: proposal
-    attributes:
-      label: Proposal
-      description: Describe the smallest useful version of the feature.
+      description: What workflow is difficult today, and who experiences it?
     validations:
       required: true
 
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful version and its expected result.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: How do you handle this workflow today?
+
+  - type: textarea
+    id: safety
+    attributes:
+      label: Privacy and safety impact
+      description: Does this add storage, network access, background behavior, or destructive actions?
+
+  - type: checkboxes
+    id: existing
+    attributes:
+      label: Existing requests
+      options:
+        - label: I searched existing issues and did not find the same request.
+          required: true

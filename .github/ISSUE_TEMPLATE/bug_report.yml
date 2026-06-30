@@ -3,6 +3,12 @@ description: Report a reproducible problem in Codex Account Manager.
 title: "[Bug]: "
 labels: ["bug"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include tokens, auth files, OAuth callback URLs, real account identifiers, or unredacted screenshots.
+        For security vulnerabilities, use private vulnerability reporting instead of this form.
+
   - type: textarea
     id: summary
     attributes:
@@ -10,23 +16,37 @@ body:
       description: What happened, and what did you expect instead?
     validations:
       required: true
+
   - type: textarea
     id: steps
     attributes:
       label: Steps to reproduce
       placeholder: |
         1. Open ...
-        2. Click ...
-        3. See ...
+        2. Select ...
+        3. Observe ...
     validations:
       required: true
+
   - type: input
     id: version
     attributes:
       label: App version
-      placeholder: 0.1.0-beta.1
+      placeholder: 0.1.0-beta.2
     validations:
       required: true
+
+  - type: dropdown
+    id: windows
+    attributes:
+      label: Windows version
+      options:
+        - Windows 11 x64
+        - Windows 10 x64
+        - Other or unknown
+    validations:
+      required: true
+
   - type: dropdown
     id: codex
     attributes:
@@ -37,9 +57,37 @@ body:
         - Not sure
     validations:
       required: true
-  - type: textarea
-    id: logs
-    attributes:
-      label: Logs or screenshots
-      description: Remove account tokens and private data before posting.
 
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Affected accounts
+      options:
+        - One saved account
+        - All saved accounts
+        - No account required
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics
+      description: Add a redacted screenshot or short error message if useful. Never attach account or auth files.
+
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy confirmation
+      options:
+        - label: I removed tokens, callback URLs, email addresses, account IDs, and authorization headers.
+          required: true
+
+  - type: checkboxes
+    id: existing
+    attributes:
+      label: Existing reports
+      options:
+        - label: I searched existing issues and reviewed the troubleshooting guide.
+          required: true

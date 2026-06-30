@@ -24,12 +24,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Audit UI contract
-        run: npm run audit:ui
-
-      - name: Verify release metadata
-        run: npm run release:check
+      - name: Run project checks
+        run: npm run check
 
       - name: Build unpacked Windows app
         run: npm run build:dir
-

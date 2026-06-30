@@ -42,8 +42,8 @@ jobs:
           "version=$($pkg.version)" >> $env:GITHUB_OUTPUT
           "tag=v$($pkg.version)" >> $env:GITHUB_OUTPUT
 
-      - name: Audit UI contract
-        run: npm run audit:ui
+      - name: Run project checks
+        run: npm run check
 
       - name: Build installer and ZIP
         run: npm run build:windows
@@ -66,6 +66,7 @@ jobs:
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || steps.package.outputs.tag }}
           name: Codex Account Manager ${{ steps.package.outputs.version }}
           prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease == 'true' || contains(github.ref_name, '-beta') || contains(steps.package.outputs.version, '-beta') }}
+          generate_release_notes: true
           files: |
             dist/*.exe
             dist/*.zip

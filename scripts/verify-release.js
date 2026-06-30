@@ -6,7 +6,13 @@ const pkg = require(path.join(root, "package.json"));
 const requiredFiles = [
   "LICENSE",
   "README.md",
+  "README.en.md",
+  "CODE_OF_CONDUCT.md",
+  "CONTRIBUTING.md",
   "SECURITY.md",
+  "ASSET_LICENSE.md",
+  "THIRD_PARTY_NOTICES.md",
+  "docs/images/account-dashboard.png",
   "resources/icon.ico",
 ];
 
@@ -19,6 +25,14 @@ if (missing.length) {
 if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(pkg.version)) {
   console.error(`Invalid release version: ${pkg.version}`);
   process.exit(1);
+}
+
+if (process.env.GITHUB_REF_TYPE === "tag") {
+  const expectedTag = `v${pkg.version}`;
+  if (process.env.GITHUB_REF_NAME !== expectedTag) {
+    console.error(`Release tag ${process.env.GITHUB_REF_NAME} does not match ${expectedTag}`);
+    process.exit(1);
+  }
 }
 
 console.log(`Release metadata OK: ${pkg.name} ${pkg.version}`);

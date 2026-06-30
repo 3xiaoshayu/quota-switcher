@@ -1,7 +1,17 @@
 node_modules/
 dist/
+coverage/
 .vscode/
 *.log
 .reference/
 HANDOFF.md
 *.tmp
+.env
+.env.*
+!.env.example
+*.pem
+*.pfx
+*.p12
+*.key
+.DS_Store
+Thumbs.db

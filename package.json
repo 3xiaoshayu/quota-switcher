@@ -1,13 +1,18 @@
 {
   "name": "codex-account-manager",
   "version": "0.1.0-beta.2",
-  "description": "Windows desktop account, quota, and token manager for Codex",
+  "private": true,
+  "description": "Local-first Windows desktop manager for Codex accounts, quotas, tokens, and automatic switching",
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
+    "check:syntax": "node scripts/check-syntax.js",
+    "check:docs": "node scripts/check-doc-links.js",
     "audit:ui": "node scripts/audit-ui-contract.js",
     "release:check": "node scripts/verify-release.js",
+    "check": "npm run check:syntax && npm run check:docs && npm run audit:ui && npm run release:check",
+    "test": "npm run check",
     "build": "npm run build:windows",
     "build:dir": "electron-builder --dir --win --x64",
     "build:windows": "npm run release:check && electron-builder --win nsis zip --x64 --publish never",
@@ -22,6 +27,19 @@
   },
   "bugs": {
     "url": "https://github.com/3xiaoshayu/codex-account-manager/issues"
+  },
+  "keywords": [
+    "codex",
+    "openai",
+    "account-manager",
+    "account-switcher",
+    "quota-tracker",
+    "electron",
+    "windows",
+    "local-first"
+  ],
+  "engines": {
+    "node": ">=20"
   },
   "devDependencies": {
     "electron": "^42.0.0",
