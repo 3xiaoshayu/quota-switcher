@@ -1,0 +1,22 @@
+{
+  "name": "codex-deskep",
+  "version": "1.0.0",
+  "description": "Codex 多账号桌面管理工具",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "audit:ui": "node scripts/audit-ui-contract.js",
+    "build": "electron-builder --win portable",
+    "build:nsis": "electron-builder --win nsis"
+  },
+  "author": "wonde",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^42.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "dependencies": {
+    "lucide": "^1.22.0"
+  }
+}

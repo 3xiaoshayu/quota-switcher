@@ -1,0 +1,32 @@
+appId: com.wonde.codex-deskep
+productName: Codex Deskep
+copyright: Copyright © 2026
+
+directories:
+  output: dist
+  buildResources: resources
+
+win:
+  target:
+    - target: portable
+      arch: [x64]
+    - target: nsis
+      arch: [x64]
+  icon: src/renderer/assets/icon.ico
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+
+portable:
+  artifactName: "${productName}-${version}-portable.${ext}"
+  requestExecutionLevel: user
+
+files:
+  - src/**/*
+  - engine/**/*
+  - package.json
+  - "!**/*.map"

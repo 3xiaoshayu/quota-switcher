@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html><head><meta charset='UTF-8'><title>IPC Test</title></head>
+<body style='font-family:monospace;background:#111;color:#0f0;padding:20px;'>
+<div id='out'>Loading...</div>
+<script>
+var o = document.getElementById('out');
+function log(s) { o.innerHTML += s + '<br>'; }
+log('preload:' + (window.codexDeskep ? 'YES' : 'NO'));
+try {
+  var api = window.codexDeskep || {};
+  log('methods:' + Object.keys(api).join(','));
+  api.listAccounts().then(function(r) {
+    log('listAccounts:' + JSON.stringify({success:r&&r.success,count:r&&r.data?r.data.length:'N/A',error:r&&r.error}));
+    api.getCurrentAccount().then(function(c) {
+      log('current:' + JSON.stringify({success:c&&c.success,email:c&&c.data?c.data.email:'N/A'}));
+    }).catch(function(e){log('current-err:'+e.message);});
+  }).catch(function(e){log('list-err:'+e.message);});
+} catch(e) { log('FATAL:'+e.message); }
+</script></body></html>
