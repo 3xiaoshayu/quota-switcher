@@ -171,7 +171,7 @@ export const INITIAL_SETTINGS: SystemSettings = {
   weeklyThreshold: 5,
   clientDetected: true,
   updateChannel: 'Beta Channel',
-  version: '0.1.0-beta.4',
+  version: '0.1.0-beta.7',
   latestStatus: 'Up to date',
 };
 

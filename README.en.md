@@ -18,7 +18,7 @@ See each account's 5-hour and weekly quota, token health, and active Codex ident
 
 </div>
 
-![Codex Account Manager account cards with synthetic demo accounts](docs/images/account-dashboard.png)
+![Codex Account Manager account cards with synthetic demo accounts](docs/images/account-dashboard.jpg)
 
 > [!IMPORTANT]
 > The current Windows x64 release is a prerelease and is not code-signed.

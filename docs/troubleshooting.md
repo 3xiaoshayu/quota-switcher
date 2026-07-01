@@ -34,6 +34,15 @@ The OAuth callback listens on local port `1455`.
 - Check whether firewall or security software blocks local loopback traffic.
 - Retry **Add account** after the previous login attempt has ended.
 
+If the modal reports `Client network socket disconnected before secure TLS
+connection was established`, or an error starting with `授权已返回，但交换
+Token 失败`, the browser authorization step has already returned to the app,
+but the token exchange request could not reach the OpenAI authorization
+endpoint. Check whether your proxy, VPN, TUN mode, firewall, or security
+software applies to desktop applications as well as the browser. If the browser
+works but the app does not, switch the proxy from browser-only mode to system or
+TUN mode, then retry **Add account**.
+
 Do not post the callback URL in an issue; it can contain sensitive authorization
 data.
 

@@ -7,6 +7,31 @@ release is published.
 
 ## [Unreleased]
 
+## [0.1.0-beta.7] - 2026-07-01
+
+- Add a second token-exchange network path and a single transient retry for
+  OAuth account additions.
+- Show clearer diagnostics when browser authorization succeeds but token
+  exchange fails.
+- Keep the add-account modal locked while OAuth is in progress so the pending
+  request cannot be dismissed accidentally.
+
+## [0.1.0-beta.6] - 2026-07-01
+
+- Route API requests through Electron's network stack first so system proxy,
+  VPN, and TUN-mode environments behave closer to the installed app.
+- Keep the Node HTTP stack as a fallback when Electron networking is not
+  available.
+
+## [0.1.0-beta.5] - 2026-07-01
+
+- Connect the redesigned renderer to desktop account, quota, token, subscription,
+  update, daemon, and external-link services.
+- Make the sync interval configurable and reload the daemon timer after changes.
+- Fix fake or wrongly disabled UI entries, including reset-credit menus,
+  subscription refresh, update install gating, and external documentation links.
+- Add static UI contract checks for renderer APIs and IPC handlers.
+
 ## [0.1.0-beta.4] - 2026-06-30
 
 - Follow the active system or environment proxy for quota and token requests.

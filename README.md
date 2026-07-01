@@ -18,7 +18,7 @@
 
 </div>
 
-![Codex Account Manager 账号卡片界面，使用虚构演示账号](docs/images/account-dashboard.png)
+![Codex Account Manager 账号卡片界面，使用虚构演示账号](docs/images/account-dashboard.jpg)
 
 > [!IMPORTANT]
 > 当前版本为 Windows x64 预发布版，安装包尚未进行代码签名。Windows SmartScreen
