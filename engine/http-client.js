@@ -6,6 +6,62 @@ const { REFRESH_TIMEOUT } = require("./config");
 
 let sharedProxyAgent = null;
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function errorMessage(error) {
+  if (!error) return "unknown error";
+  const code = error.code || error.name || "";
+  const message = error.message || String(error);
+  return code ? `${code}: ${message}` : message;
+}
+
+function asError(error) {
+  if (error instanceof Error) return error;
+  return new Error(String(error));
+}
+
+function isTransientNetworkError(error) {
+  const text = errorMessage(error).toLowerCase();
+  return text.includes("socket") ||
+    text.includes("tls") ||
+    text.includes("timeout") ||
+    text.includes("econnreset") ||
+    text.includes("econnaborted") ||
+    text.includes("etimedout") ||
+    text.includes("network");
+}
+
+async function withOneRetry(label, task) {
+  try {
+    return await task();
+  } catch (firstError) {
+    if (!isTransientNetworkError(firstError)) throw firstError;
+    await delay(500);
+    try {
+      return await task();
+    } catch (secondError) {
+      const retryError = asError(secondError);
+      retryError.message = `${label} failed after retry: ${errorMessage(retryError)}; first error: ${errorMessage(firstError)}`;
+      throw retryError;
+    }
+  }
+}
+
+function buildNetworkFailure(url, attempts) {
+  const host = (() => {
+    try { return new URL(url).host; } catch { return url; }
+  })();
+  const details = attempts
+    .map((attempt) => `${attempt.label}: ${errorMessage(attempt.error)}`)
+    .join(" | ");
+  return new Error(
+    `网络请求失败 (${host})。已尝试可用网络栈。` +
+    `如果正在使用代理/TUN，请确认它允许 Codex Account Manager 访问 OpenAI。详情：${details}`,
+  );
+}
+
 function toHeaderObject(headers) {
   const out = {};
   if (!headers || typeof headers.forEach !== "function") return out;
@@ -125,10 +181,20 @@ async function httpJson(url, opts = {}) {
   );
   const timeout = opts.timeout || REFRESH_TIMEOUT;
 
-  const electronResult = await electronHttpJson(url, opts, headers, timeout);
-  if (electronResult) return electronResult;
+  const attempts = [];
+  try {
+    const electronResult = await withOneRetry("Electron network", () => electronHttpJson(url, opts, headers, timeout));
+    if (electronResult) return electronResult;
+  } catch (error) {
+    attempts.push({ label: "Electron", error });
+  }
 
-  return nodeHttpJson(url, opts, headers, timeout);
+  try {
+    return await withOneRetry("Node network", () => nodeHttpJson(url, opts, headers, timeout));
+  } catch (error) {
+    attempts.push({ label: "Node", error });
+    throw buildNetworkFailure(url, attempts);
+  }
 }
 
 function buildCodexHeaders(acct) {

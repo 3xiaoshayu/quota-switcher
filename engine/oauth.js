@@ -74,15 +74,20 @@ async function oauthLoginFlow() {
     redirect_uri: redirectUri, code_verifier: verifier, scope: SCOPES,
   }).map(([k, v]) => encodeURIComponent(k) + "=" + encodeURIComponent(v)).join("&");
 
-  const resp = await httpJson(TOKEN_URL, {
-    method: "POST", body: formBody,
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-  });
+  let resp;
+  try {
+    resp = await httpJson(TOKEN_URL, {
+      method: "POST", body: formBody,
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    });
+  } catch (error) {
+    throw new Error("授权已返回，但交换 Token 失败：" + (error && error.message ? error.message : String(error)));
+  }
 
   if (resp.status >= 400) {
     const { extractErrorCode } = require("./http-client");
     const ec = extractErrorCode(resp.body);
-    throw new Error("Token 交换失败: HTTP " + resp.status + (ec ? " " + ec : ""));
+    throw new Error("授权已返回，但交换 Token 失败: HTTP " + resp.status + (ec ? " " + ec : ""));
   }
 
   const data = JSON.parse(resp.body);

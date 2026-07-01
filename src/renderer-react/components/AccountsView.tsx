@@ -462,8 +462,11 @@ export default function AccountsView({
               id="add-account-modal"
             >
               <button
-                onClick={() => setShowAddModal(false)}
-                className="absolute top-5 right-5 p-2 hover:bg-white/10 rounded-xl text-slate-400 hover:text-white transition-all cursor-pointer"
+                onClick={() => {
+                  if (!isAdding) setShowAddModal(false);
+                }}
+                disabled={isAdding}
+                className="absolute top-5 right-5 p-2 hover:bg-white/10 rounded-xl text-slate-400 hover:text-white transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 id="btn-close-modal"
               >
                 <X className="w-4 h-4" />
@@ -557,7 +560,7 @@ export default function AccountsView({
                 </div>
 
                 {formError && (
-                  <p className="text-xs text-rose-400 font-semibold bg-rose-500/10 border border-rose-500/20 p-3 rounded-2xl text-center">
+                  <p className="text-xs text-rose-400 font-semibold bg-rose-500/10 border border-rose-500/20 p-3 rounded-2xl text-center break-words">
                     {formError}
                   </p>
                 )}
@@ -565,8 +568,11 @@ export default function AccountsView({
                 <div className="flex gap-3 pt-4 border-t border-white/5">
                   <button
                     type="button"
-                    onClick={() => setShowAddModal(false)}
-                    className="flex-1 py-3 bg-white/5 hover:bg-white/10 text-white rounded-2xl text-xs font-semibold cursor-pointer transition-all"
+                    onClick={() => {
+                      if (!isAdding) setShowAddModal(false);
+                    }}
+                    disabled={isAdding}
+                    className="flex-1 py-3 bg-white/5 hover:bg-white/10 text-white rounded-2xl text-xs font-semibold cursor-pointer transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     取消
                   </button>
