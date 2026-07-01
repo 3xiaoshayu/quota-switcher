@@ -3,11 +3,13 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const root = path.resolve(__dirname, "..");
-const targets = ["engine", "scripts", "src/main", "src/preload", "src/renderer"];
+const targets = ["engine", "scripts", "src/main", "src/preload", "src/renderer-react"];
 const files = [];
 
 function collect(relativePath) {
   const absolutePath = path.join(root, relativePath);
+  if (!fs.existsSync(absolutePath)) return;
+
   const stat = fs.statSync(absolutePath);
 
   if (stat.isFile()) {
