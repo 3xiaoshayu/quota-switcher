@@ -741,8 +741,7 @@ export default function App() {
       return `linear-gradient(to bottom, rgba(15, 23, 42, 0.45), rgba(15, 23, 42, 0.7)), url('https://images.unsplash.com/photo-1493976040374-85c8e12f0c0e?auto=format&fit=crop&w=2000&q=80')`;
     }
     if (activeTab === 'settings') {
-      // Soft twilight lavender foggy dawn Mt Fuji
-      return `linear-gradient(to bottom, rgba(15, 23, 42, 0.45), rgba(15, 23, 42, 0.7)), url('https://images.unsplash.com/photo-1542640244-7e672d6cef21?auto=format&fit=crop&w=2000&q=80')`;
+      return `linear-gradient(to bottom, rgba(15, 23, 42, 0.45), rgba(15, 23, 42, 0.7)), url('https://images.unsplash.com/photo-1493976040374-85c8e12f0c0e?auto=format&fit=crop&w=2000&q=80')`;
     }
     // 'quotas' or 'autoswitch' view: Foggy dawn Mount Fuji
     return `linear-gradient(to bottom, rgba(15, 23, 42, 0.45), rgba(15, 23, 42, 0.75)), url('https://images.unsplash.com/photo-1509023464722-18d996393ca8?auto=format&fit=crop&w=2000&q=80')`;
