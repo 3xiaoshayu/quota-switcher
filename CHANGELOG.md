@@ -7,6 +7,10 @@ release is published.
 
 ## [Unreleased]
 
+No unreleased changes.
+
+## [0.1.0-beta.8] - 2026-07-01
+
 - Detect official Codex authentication changes and require an explicit adopt or
   reapply decision before managed credentials can be written again.
 - Make account switching transactional with exact process targeting, atomic
