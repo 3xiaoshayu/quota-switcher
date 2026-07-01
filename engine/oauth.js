@@ -151,7 +151,6 @@ function upsert(tokens) {
   } else {
     found.last_used = acct.last_used;
   }
-  idx.current_account_id = cid;
   saveIdx(idx);
 
   return acct;

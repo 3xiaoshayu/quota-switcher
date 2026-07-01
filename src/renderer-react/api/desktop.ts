@@ -53,12 +53,24 @@ type AutoSwitchResult = {
   to?: DesktopAccount | null;
 };
 
+type DesktopDaemonStatus = {
+  running: boolean;
+  syncIntervalMinutes?: number | null;
+};
+
+type DesktopSubscriptionRefreshResult = {
+  changed?: boolean;
+  plan_type?: string | null;
+  subscription_active_until?: string | number | null;
+};
+
 interface DesktopBridge {
   getAppInfo: () => Promise<ApiResponse<DesktopAppInfo>>;
   getCodexStatus: () => Promise<ApiResponse<DesktopCodexStatus>>;
   getUpdateStatus: () => Promise<ApiResponse<DesktopUpdateStatus>>;
   checkForUpdates: () => Promise<ApiResponse<unknown>>;
   installUpdate: () => Promise<ApiResponse<unknown>>;
+  openExternal: (url: string) => Promise<ApiResponse<boolean>>;
   listAccounts: () => Promise<ApiResponse<DesktopAccount[]>>;
   getCurrentAccount: () => Promise<ApiResponse<DesktopAccount | null>>;
   addAccount: () => Promise<ApiResponse<DesktopAccount | null>>;
@@ -69,12 +81,13 @@ interface DesktopBridge {
   refreshToken: (id: string) => Promise<ApiResponse<{ ok?: boolean; skipped?: boolean; error?: string }>>;
   refreshAllTokens: (force?: boolean) => Promise<ApiResponse<unknown>>;
   consumeResetCredit: (id: string) => Promise<ApiResponse<boolean>>;
+  refreshSubscription: (id: string, force?: boolean) => Promise<ApiResponse<DesktopSubscriptionRefreshResult>>;
   getAutoSwitchConfig: () => Promise<ApiResponse<DesktopAutoSwitchConfig>>;
   saveAutoSwitchConfig: (cfg: DesktopAutoSwitchConfig) => Promise<ApiResponse<boolean>>;
   runAutoSwitchTick: () => Promise<ApiResponse<AutoSwitchResult>>;
   startDaemon: () => Promise<ApiResponse<string>>;
   stopDaemon: () => Promise<ApiResponse<string>>;
-  getDaemonStatus: () => Promise<ApiResponse<{ running: boolean }>>;
+  getDaemonStatus: () => Promise<ApiResponse<DesktopDaemonStatus>>;
   onDaemonTick?: (cb: (payload: unknown) => void) => () => void;
   onDaemonError?: (cb: (payload: { message?: string }) => void) => () => void;
   onAutoSwitch?: (cb: (payload: AutoSwitchResult) => void) => () => void;
@@ -93,6 +106,7 @@ export interface DashboardState {
   rawAccounts: DesktopAccount[];
   currentAccount: DesktopAccount | null;
   daemonRunning: boolean;
+  daemonSyncInterval: number;
   config: DesktopAutoSwitchConfig;
   appInfo: DesktopAppInfo | null;
   codexStatus: DesktopCodexStatus | null;
@@ -132,7 +146,14 @@ function defaultConfig(): DesktopAutoSwitchConfig {
     secondary_threshold: 30,
     account_scope_mode: 'all',
     selected_account_ids: [],
+    sync_interval_minutes: 10,
   };
+}
+
+function clampSyncIntervalMinutes(value: unknown): number {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 10;
+  return Math.min(60, Math.max(1, Math.round(number)));
 }
 
 function clampPercent(value: unknown): number | null {
@@ -297,6 +318,7 @@ export const desktopApi = {
       rawAccounts,
       currentAccount,
       daemonRunning: !!daemon?.running,
+      daemonSyncInterval: clampSyncIntervalMinutes(daemon?.syncIntervalMinutes ?? config.sync_interval_minutes),
       config,
       appInfo: expectData(appResponse, 'Read app info') || null,
       codexStatus: expectData(codexResponse, 'Read Codex status') || null,
@@ -338,6 +360,10 @@ export const desktopApi = {
     return expectData(await bridge().consumeResetCredit(id), 'Consume reset credit');
   },
 
+  async refreshSubscription(id: string, force = true) {
+    return expectData(await bridge().refreshSubscription(id, force), 'Refresh subscription');
+  },
+
   async saveAutoSwitchConfig(config: DesktopAutoSwitchConfig) {
     return expectData(await bridge().saveAutoSwitchConfig(config), 'Save auto-switch config');
   },
@@ -360,6 +386,14 @@ export const desktopApi = {
 
   async checkForUpdates() {
     return expectData(await bridge().checkForUpdates(), 'Check for updates');
+  },
+
+  async installUpdate() {
+    return expectData(await bridge().installUpdate(), 'Install update');
+  },
+
+  async openExternal(url: string) {
+    return expectData(await bridge().openExternal(url), 'Open external URL');
   },
 
   subscribe(events: {

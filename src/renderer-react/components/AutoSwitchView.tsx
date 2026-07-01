@@ -1,19 +1,11 @@
 import { useEffect, useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import { 
-  ShieldAlert, 
-  Settings, 
-  Activity, 
   Zap, 
   Check, 
   CheckCircle2, 
-  AlertCircle, 
   Clock, 
-  Users,
-  Sliders,
-  ChevronRight,
-  Sparkles,
-  Info
+  Users
 } from 'lucide-react';
 import { AccountQuota, LogEntry, SystemSettings, DaemonState } from '../types';
 

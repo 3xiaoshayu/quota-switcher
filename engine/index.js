@@ -10,7 +10,7 @@ const { fetchResetCredits, consumeResetCredit } = require("./reset-credits");
 const { fetchSubscriptionStatus, refreshSubscription } = require("./subscription");
 const { loadAutoSwitchCfg, saveAutoSwitchCfg, DEFAULT_AUTO_SWITCH_CFG } = require("./config-manager");
 const { metricCrossedThreshold, buildSwitchCandidate, pickBestCandidate, resolveMonitoredIds, autoSwitchTick } = require("./auto-switch");
-const { runDaemonWorker, getTickIntervalMs } = require("./daemon");
+const { runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes } = require("./daemon");
 const { getCodexInstallationStatus, assertOfficialCodexInstalled } = require("./codex-installation");
 
 module.exports = {
@@ -39,7 +39,7 @@ module.exports = {
   // auto-switch
   metricCrossedThreshold, buildSwitchCandidate, pickBestCandidate, resolveMonitoredIds, autoSwitchTick,
   // daemon
-  runDaemonWorker, getTickIntervalMs,
+  runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes,
   // codex installation
   getCodexInstallationStatus, assertOfficialCodexInstalled,
 };

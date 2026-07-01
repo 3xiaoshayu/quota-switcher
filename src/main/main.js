@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, safeStorage } = require("electron");
+const { app, BrowserWindow, dialog, safeStorage, shell } = require("electron");
 const path = require("path");
 const { registerIpcHandlers } = require("./ipc-handlers");
 const { createUpdateService } = require("./updater");
@@ -38,6 +38,21 @@ app.whenReady().then(() => {
         },
     });
     win.setMenuBarVisibility(false);
+
+    const openExternalUrl = (url) => {
+        if (!/^https?:\/\//i.test(String(url || ""))) return;
+        shell.openExternal(url).catch((error) => console.error("Failed to open external URL:", error));
+    };
+    win.webContents.setWindowOpenHandler(({ url }) => {
+        openExternalUrl(url);
+        return { action: "deny" };
+    });
+    win.webContents.on("will-navigate", (event, url) => {
+        if (url === win.webContents.getURL()) return;
+        if (!/^https?:\/\//i.test(String(url || ""))) return;
+        event.preventDefault();
+        openExternalUrl(url);
+    });
 
     win.once("ready-to-show", () => {
         win.show();

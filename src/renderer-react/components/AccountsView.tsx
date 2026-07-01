@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import { 
   Users, 
   Award, 
@@ -11,12 +11,9 @@ import {
   AlertTriangle, 
   ArrowLeftRight, 
   Trash2, 
-  Check, 
   Star,
   X,
-  Mail,
-  Shield,
-  Clock
+  Mail
 } from 'lucide-react';
 import { AccountQuota } from '../types';
 
@@ -456,13 +453,11 @@ export default function AccountsView({
       </div>
 
       {/* Add Account Modal Overlay */}
-      <AnimatePresence>
-        {showAddModal && (
+      {showAddModal && (
           <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
             <motion.div
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
               className="backdrop-blur-2xl bg-slate-900/90 border border-white/10 rounded-3xl p-8 w-full max-w-lg shadow-2xl relative text-white select-none"
               id="add-account-modal"
             >
@@ -586,8 +581,7 @@ export default function AccountsView({
               </form>
             </motion.div>
           </div>
-        )}
-      </AnimatePresence>
+      )}
     </div>
   );
 }

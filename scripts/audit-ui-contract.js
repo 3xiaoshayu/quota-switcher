@@ -5,6 +5,7 @@ const vm = require("node:vm");
 const root = path.resolve(__dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 const rendererSource = read("src/renderer/app.js");
+const reactDesktopSource = read("src/renderer-react/api/desktop.ts");
 const preloadSource = read("src/preload/preload.js");
 const mainSource = [
   "src/main/ipc-handlers.js",
@@ -22,6 +23,8 @@ const collect = (source, pattern, group = 1) => {
 };
 
 const rendererMethods = collect(rendererSource, /\bAPI(?:\?\.|\.)([A-Za-z_$][\w$]*)/g);
+for (const method of collect(reactDesktopSource, /\bbridge\(\)\.([A-Za-z_$][\w$]*)/g)) rendererMethods.add(method);
+for (const method of collect(reactDesktopSource, /\bapi\.([A-Za-z_$][\w$]*)/g)) rendererMethods.add(method);
 const mainHandlers = collect(mainSource, /ipcMain\.handle\(["']([^"']+)["']/g);
 const mainEvents = collect(mainSource, /webContents\.send\(["']([^"']+)["']/g);
 const invokedChannels = new Set();

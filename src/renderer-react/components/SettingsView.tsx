@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import { 
   Server, 
   Key, 
@@ -13,8 +13,7 @@ import {
   Github, 
   FileText,
   Activity,
-  Zap,
-  HelpCircle
+  Zap
 } from 'lucide-react';
 import { SystemSettings, DaemonState } from '../types';
 
@@ -23,11 +22,12 @@ interface SettingsProps {
   daemonState: DaemonState;
   onToggleDaemon: () => void;
   onUpdateSyncInterval: (interval: number) => void;
-  onUpdateChannel: (channel: SystemSettings['updateChannel']) => void;
   onAddLog: (msg: string, type: 'success' | 'info' | 'warning' | 'error') => void;
   onBatchVerifyTokens?: () => Promise<void>;
   onDetectClient?: () => Promise<void>;
   onCheckUpdates?: () => Promise<void>;
+  onInstallUpdate?: () => Promise<void>;
+  canInstallUpdate?: boolean;
   accountCount?: number;
   repositoryUrl?: string;
 }
@@ -37,11 +37,12 @@ export default function SettingsView({
   daemonState,
   onToggleDaemon,
   onUpdateSyncInterval,
-  onUpdateChannel,
   onAddLog,
   onBatchVerifyTokens,
   onDetectClient,
   onCheckUpdates,
+  onInstallUpdate,
+  canInstallUpdate = false,
   accountCount = 128,
   repositoryUrl = 'https://github.com',
 }: SettingsProps) {
@@ -49,6 +50,7 @@ export default function SettingsView({
   const [isVerifyingTokens, setIsVerifyingTokens] = useState(false);
   const [tokenVerifyProgress, setTokenVerifyProgress] = useState(0);
   const [isDetectingClient, setIsDetectingClient] = useState(false);
+  const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
 
   // Batch verify tokens simulation
   const handleBatchVerify = () => {
@@ -128,6 +130,15 @@ export default function SettingsView({
       setIsCheckingUpdates(false);
       onAddLog('You are running the latest version of Codex Account Manager.', 'success');
     }, 1500);
+  };
+
+  const handleInstallUpdate = () => {
+    if (!onInstallUpdate) return;
+    setIsInstallingUpdate(true);
+    onAddLog('Installing downloaded update and restarting application...', 'info');
+    onInstallUpdate()
+      .catch((error) => onAddLog(error instanceof Error ? error.message : String(error), 'error'))
+      .finally(() => setIsInstallingUpdate(false));
   };
 
   return (
@@ -332,18 +343,34 @@ export default function SettingsView({
                 </span>
               </div>
 
-              <motion.button
-                onClick={handleCheckUpdates}
-                disabled={isCheckingUpdates}
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                transition={{ type: 'spring', stiffness: 450, damping: 20 }}
-                className="w-full py-2.5 bg-blue-500/10 hover:bg-blue-500/15 border border-blue-500/20 text-blue-300 hover:text-blue-200 text-xs font-bold rounded-2xl cursor-pointer transition-all flex items-center justify-center gap-1.5"
-                id="btn-check-for-updates"
-              >
-                <Activity className={`w-3.5 h-3.5 text-blue-400 ${isCheckingUpdates ? 'animate-spin' : ''}`} />
-                {isCheckingUpdates ? 'Checking for updates...' : 'Check for Updates'}
-              </motion.button>
+              <div className={`grid gap-2 ${canInstallUpdate ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                <motion.button
+                  onClick={handleCheckUpdates}
+                  disabled={isCheckingUpdates}
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  transition={{ type: 'spring', stiffness: 450, damping: 20 }}
+                  className="w-full py-2.5 bg-blue-500/10 hover:bg-blue-500/15 border border-blue-500/20 text-blue-300 hover:text-blue-200 text-xs font-bold rounded-2xl cursor-pointer transition-all flex items-center justify-center gap-1.5"
+                  id="btn-check-for-updates"
+                >
+                  <Activity className={`w-3.5 h-3.5 text-blue-400 ${isCheckingUpdates ? 'animate-spin' : ''}`} />
+                  {isCheckingUpdates ? 'Checking...' : 'Check for Updates'}
+                </motion.button>
+                {canInstallUpdate && (
+                  <motion.button
+                    onClick={handleInstallUpdate}
+                    disabled={isInstallingUpdate || !onInstallUpdate}
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    transition={{ type: 'spring', stiffness: 450, damping: 20 }}
+                    className="w-full py-2.5 bg-emerald-500/10 hover:bg-emerald-500/15 border border-emerald-500/20 text-emerald-300 hover:text-emerald-200 text-xs font-bold rounded-2xl cursor-pointer transition-all flex items-center justify-center gap-1.5 disabled:opacity-50"
+                    id="btn-install-update"
+                  >
+                    <Download className={`w-3.5 h-3.5 ${isInstallingUpdate ? 'animate-pulse' : ''}`} />
+                    {isInstallingUpdate ? 'Installing...' : 'Install & Restart'}
+                  </motion.button>
+                )}
+              </div>
             </div>
           </div>
         </div>

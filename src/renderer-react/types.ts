@@ -53,6 +53,7 @@ export interface DesktopAutoSwitchConfig {
   secondary_threshold: number;
   account_scope_mode: 'all' | 'selected';
   selected_account_ids: string[];
+  sync_interval_minutes?: number;
 }
 
 export interface DesktopAppInfo {

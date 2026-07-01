@@ -1,4 +1,4 @@
-import { Users, Gauge, Shuffle, Settings, RefreshCw, HelpCircle, ShieldAlert, CheckCircle2, XCircle } from 'lucide-react';
+import { Users, Gauge, Shuffle, Settings, RefreshCw, HelpCircle } from 'lucide-react';
 import { motion } from 'motion/react';
 import { DaemonState } from '../types';
 

@@ -73,7 +73,7 @@ function publicAutoSwitchResult(eng, result) {
 
 // ═══════════════ 注册所有 IPC ═══════════════
 function registerIpcHandlers(engineInstance = null, services = {}) {
-    const { ipcMain, BrowserWindow, app } = require("electron");
+    const { ipcMain, BrowserWindow, app, shell } = require("electron");
     if (engineInstance) engine = engineInstance;
     const eng = engineInstance || getEngine();
     const updateService = services.updateService || null;
@@ -112,6 +112,15 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     ipcMain.handle("update:install", () => {
         try {
             return ok(updateService ? updateService.installUpdate() : null);
+        } catch (e) { return fail(e.message); }
+    });
+
+    ipcMain.handle("app:openExternal", async (e, url) => {
+        try {
+            const target = String(url || "");
+            if (!/^https?:\/\//i.test(target)) return fail("Unsupported external URL");
+            await shell.openExternal(target);
+            return ok(true);
         } catch (e) { return fail(e.message); }
     });
 
@@ -216,11 +225,21 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
 
     // 自动切号
     ipcMain.handle("autoswitch:config:get", () => ok(eng.loadAutoSwitchCfg()));
-    ipcMain.handle("autoswitch:config:save", (e, cfg) => { try { eng.saveAutoSwitchCfg(cfg); return ok(true); } catch (e) { return fail(e.message); } });
+    ipcMain.handle("autoswitch:config:save", (e, cfg) => {
+        try {
+            eng.saveAutoSwitchCfg(cfg);
+            restartDaemonTimer();
+            return ok(true);
+        } catch (e) { return fail(e.message); }
+    });
     ipcMain.handle("autoswitch:tick", async () => { try { return ok(publicAutoSwitchResult(eng, await eng.autoSwitchTick(eng.loadAutoSwitchCfg()))); } catch (e) { return fail(e.message); } });
 
     // 守护进程
     let daemonTimer = null;
+    const getDaemonIntervalMinutes = () => {
+        if (typeof eng.getTickIntervalMinutes === "function") return eng.getTickIntervalMinutes();
+        return Math.max(1, Math.round(eng.getTickIntervalMs() / 60000));
+    };
 
     const runDaemon = async () => {
         try {
@@ -238,9 +257,19 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         }
     };
 
+    const startDaemonTimer = () => {
+        daemonTimer = setInterval(runDaemon, eng.getTickIntervalMs());
+    };
+
+    const restartDaemonTimer = () => {
+        if (!daemonTimer) return;
+        clearInterval(daemonTimer);
+        startDaemonTimer();
+    };
+
     const startDaemon = () => {
         if (daemonTimer) return ok("已在运行");
-        daemonTimer = setInterval(runDaemon, eng.getTickIntervalMs());
+        startDaemonTimer();
         return ok("已启动");
     };
 
@@ -252,7 +281,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
 
     ipcMain.handle("daemon:start", startDaemon);
     ipcMain.handle("daemon:stop", stopDaemon);
-    ipcMain.handle("daemon:status", () => ok({ running: daemonTimer !== null }));
+    ipcMain.handle("daemon:status", () => ok({ running: daemonTimer !== null, syncIntervalMinutes: getDaemonIntervalMinutes() }));
 
     return { startDaemon, stopDaemon };
 }

@@ -7,15 +7,11 @@ import {
   Cloud, 
   Database, 
   AlertTriangle, 
-  Play, 
   MoreHorizontal, 
   RefreshCw, 
   RotateCcw,
   Sparkles,
-  HelpCircle,
-  Activity,
-  CheckCircle2,
-  XCircle
+  Activity
 } from 'lucide-react';
 import { AccountQuota } from '../types';
 
@@ -24,6 +20,7 @@ interface QuotasProps {
   onRefreshAccount: (id: string) => void | Promise<void>;
   onResetAccount: (id: string) => void | Promise<void>;
   onRefreshToken?: (id: string) => void | Promise<void>;
+  onRefreshSubscription?: (id: string) => void | Promise<void>;
   onRefreshAll: () => void | Promise<void>;
   isRefreshingAll: boolean;
 }
@@ -33,11 +30,13 @@ export default function QuotasView({
   onRefreshAccount,
   onResetAccount,
   onRefreshToken,
+  onRefreshSubscription,
   onRefreshAll,
   isRefreshingAll,
 }: QuotasProps) {
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
   const [refreshingCardId, setRefreshingCardId] = useState<string | null>(null);
+  const [refreshingSubscriptionId, setRefreshingSubscriptionId] = useState<string | null>(null);
 
   const gridAccounts = accounts;
 
@@ -61,6 +60,16 @@ export default function QuotasView({
       await onRefreshAccount(id);
     } finally {
       setRefreshingCardId(null);
+    }
+  };
+
+  const handleSubscriptionRefresh = async (id: string) => {
+    if (!onRefreshSubscription) return;
+    setRefreshingSubscriptionId(id);
+    try {
+      await onRefreshSubscription(id);
+    } finally {
+      setRefreshingSubscriptionId(null);
     }
   };
 
@@ -104,7 +113,7 @@ export default function QuotasView({
     }
   };
 
-  const getAccountIcon = (id: string, status: AccountQuota['status']) => {
+  const getAccountIcon = (id: string) => {
     const baseClasses = "w-11 h-11 rounded-2xl flex items-center justify-center border shadow-md";
     if (id === '1') {
       return (
@@ -224,6 +233,7 @@ export default function QuotasView({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6" id="quotas-accounts-grid">
         {gridAccounts.map((account) => {
           const isCardRefreshing = refreshingCardId === account.id;
+          const isSubscriptionRefreshing = refreshingSubscriptionId === account.id;
           const fiveHourPercentage = Math.min((account.fiveHourQuotaUsed / account.fiveHourQuotaTotal) * 100, 100);
           const weeklyPercentage = Math.min((account.weeklyQuotaUsed / account.weeklyQuotaTotal) * 100, 100);
           const isExceeded = account.status === 'EXPIRED';
@@ -253,7 +263,7 @@ export default function QuotasView({
               {/* Card Header Row */}
               <div className="flex items-start justify-between mb-6" id={`quota-card-header-${account.id}`}>
                 <div className="flex items-center gap-4" id={`quota-card-meta-${account.id}`}>
-                  {getAccountIcon(account.id, account.status)}
+                  {getAccountIcon(account.id)}
                   <div className="flex flex-col select-all" id={`quota-card-titles-${account.id}`}>
                     <h3 className="font-bold text-slate-100 tracking-wide text-sm font-sans">{account.name}</h3>
                     <span className="text-xs text-slate-400 mt-0.5">{account.email}</span>
@@ -362,22 +372,37 @@ export default function QuotasView({
                               setActiveMenuId(null);
                               handleCardRefresh(account.id);
                             }}
-                            disabled={!hasResetCredits}
+                            disabled={isCardRefreshing}
                             className="w-full px-3 py-2 hover:bg-white/5 rounded-xl text-left text-xs flex items-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           >
-                            <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
+                            <RefreshCw className={`w-3.5 h-3.5 text-blue-400 ${isCardRefreshing ? 'animate-spin' : ''}`} />
                             立即同步
                           </button>
-                          <button
-                            onClick={() => {
-                              setActiveMenuId(null);
-                              onResetAccount(account.id);
-                            }}
-                            className="w-full px-3 py-2 hover:bg-white/5 rounded-xl text-left text-xs flex items-center gap-2 cursor-pointer"
-                          >
-                            <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
-                            重置统计
-                          </button>
+                          {onRefreshSubscription && (
+                            <button
+                              onClick={() => {
+                                setActiveMenuId(null);
+                                handleSubscriptionRefresh(account.id);
+                              }}
+                              disabled={isSubscriptionRefreshing}
+                              className="w-full px-3 py-2 hover:bg-white/5 rounded-xl text-left text-xs flex items-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              <Sparkles className={`w-3.5 h-3.5 text-cyan-400 ${isSubscriptionRefreshing ? 'animate-pulse' : ''}`} />
+                              刷新订阅/套餐
+                            </button>
+                          )}
+                          {hasResetCredits && (
+                            <button
+                              onClick={() => {
+                                setActiveMenuId(null);
+                                onResetAccount(account.id);
+                              }}
+                              className="w-full px-3 py-2 hover:bg-white/5 rounded-xl text-left text-xs flex items-center gap-2 cursor-pointer"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
+                              消耗重置额度
+                            </button>
+                          )}
                           <div className="h-[1px] bg-white/5 my-1" />
                           <button
                             onClick={() => {

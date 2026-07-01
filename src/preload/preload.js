@@ -12,6 +12,7 @@ const api = {
   getUpdateStatus: () => ipcRenderer.invoke('update:status'),
   checkForUpdates: () => ipcRenderer.invoke('update:check'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
+  openExternal: (url) => ipcRenderer.invoke('app:openExternal', url),
 
   // 账号管理
   listAccounts: () => ipcRenderer.invoke('account:list'),
@@ -32,6 +33,7 @@ const api = {
 
   // 重置额度
   consumeResetCredit: (id) => ipcRenderer.invoke('reset:consume', id),
+  refreshSubscription: (id, force) => ipcRenderer.invoke('subscription:refresh', id, force),
 
   // 自动切号
   getAutoSwitchConfig: () => ipcRenderer.invoke('autoswitch:config:get'),

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   INITIAL_ACCOUNTS, 
@@ -37,12 +37,8 @@ import {
   AlertCircle, 
   Info, 
   ShieldAlert, 
-  MessageSquare, 
-  ArrowRight,
-  Sparkles,
   HelpCircle,
-  Activity,
-  UserCheck
+  Activity
 } from 'lucide-react';
 
 const desktopBridgeAvailable = hasDesktopBridge();
@@ -53,6 +49,7 @@ const DEFAULT_CONFIG: DesktopAutoSwitchConfig = {
   secondary_threshold: 30,
   account_scope_mode: 'all',
   selected_account_ids: [],
+  sync_interval_minutes: 10,
 };
 
 function updateChannelForUi(status: DesktopUpdateStatus | null): SystemSettings['updateChannel'] {
@@ -111,8 +108,6 @@ export default function App() {
   const [appInfo, setAppInfo] = useState<DesktopAppInfo | null>(null);
   const [codexStatus, setCodexStatus] = useState<DesktopCodexStatus | null>(null);
   const [updateStatus, setUpdateStatus] = useState<DesktopUpdateStatus | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [isDashboardLoading, setIsDashboardLoading] = useState(false);
   const quotaAutoSyncPromise = useRef<Promise<void> | null>(null);
   const lastQuotaAutoSyncAt = useRef(0);
   const accountsRef = useRef<AccountQuota[]>(accounts);
@@ -163,7 +158,7 @@ export default function App() {
     setSettings(settingsFromDesktopState(snapshot.config, snapshot.appInfo, snapshot.codexStatus, snapshot.updateStatus));
     setDaemonState({
       status: snapshot.daemonRunning ? 'Running' : 'Stopped',
-      syncInterval: 10,
+      syncInterval: snapshot.daemonSyncInterval,
       lastChecked: formatDateTime(Date.now()),
     });
     setSelectedAccountIds(
@@ -179,20 +174,16 @@ export default function App() {
 
   const loadDashboardState = useCallback(async (showLoading = false) => {
     if (!desktopBridgeAvailable) return null;
-    if (showLoading) setIsDashboardLoading(true);
+    void showLoading;
     try {
       const snapshot = await desktopApi.loadDashboardState();
       applyDashboardState(snapshot);
-      setLoadError(null);
       return snapshot;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setLoadError(message);
       addToast(message, 'error');
       addLogEntry(message, 'error');
       return null;
-    } finally {
-      if (showLoading) setIsDashboardLoading(false);
     }
   }, [addLogEntry, addToast, applyDashboardState]);
 
@@ -430,6 +421,27 @@ export default function App() {
     }
   };
 
+  const handleRefreshSubscription = async (id: string) => {
+    if (!desktopBridgeAvailable) return;
+    const account = accountsRef.current.find(item => item.id === id);
+    try {
+      const result = await desktopApi.refreshSubscription(id, true);
+      const snapshot = await loadDashboardState(false);
+      if (snapshot) queueQuotaAutoSync(snapshot.accounts);
+      addToast(
+        result?.changed
+          ? `${account?.email || id} subscription updated`
+          : `${account?.email || id} subscription already current`,
+        'success',
+      );
+      addLogEntry(`Subscription refreshed: ${account?.email || id}`, 'success');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      addToast(message, 'error');
+      addLogEntry(message, 'error');
+    }
+  };
+
   // Toggle Daemon
   const handleToggleDaemon = async () => {
     if (desktopBridgeAvailable) {
@@ -460,21 +472,25 @@ export default function App() {
 
   // Update sync interval
   const handleUpdateSyncInterval = (val: number) => {
+    const syncInterval = Math.min(60, Math.max(1, Math.round(Number(val) || 10)));
     if (desktopBridgeAvailable) {
+      const nextConfig = {
+        ...autoSwitchConfig,
+        sync_interval_minutes: syncInterval,
+      };
       setDaemonState(prev => ({
         ...prev,
-        syncInterval: 10,
+        syncInterval,
       }));
-      addToast('Daemon sync interval is fixed at 10 minutes by the engine.', 'info');
-      addLogEntry('Daemon sync interval is fixed at 10 minutes by the desktop engine.', 'info');
+      void saveAutoSwitchConfig(nextConfig);
       return;
     }
     setDaemonState(prev => ({
       ...prev,
-      syncInterval: val,
+      syncInterval,
     }));
     addToast(`同步间隔已调整为 ${val} 分钟`, 'info');
-    addLogEntry(`Daemon sync interval adjusted to ${val} minutes.`, 'info');
+    addLogEntry(`Daemon sync interval adjusted to ${syncInterval} minutes.`, 'info');
   };
 
   // Add new account
@@ -597,7 +613,7 @@ export default function App() {
 
   const saveAutoSwitchConfig = async (nextConfig: DesktopAutoSwitchConfig) => {
     setAutoSwitchConfig(nextConfig);
-    setSettings(prev => settingsFromDesktopState(nextConfig, appInfo, codexStatus, updateStatus || null));
+    setSettings(settingsFromDesktopState(nextConfig, appInfo, codexStatus, updateStatus || null));
     try {
       await desktopApi.saveAutoSwitchConfig(nextConfig);
       await loadDashboardState(false);
@@ -669,6 +685,32 @@ export default function App() {
     if (snapshot?.updateStatus) {
       addToast(latestStatusForUi(snapshot.updateStatus), 'info');
     }
+  };
+
+  const handleInstallUpdate = async () => {
+    if (!desktopBridgeAvailable) return;
+    try {
+      await desktopApi.installUpdate();
+      addToast('Installing update and restarting...', 'info');
+      addLogEntry('Update installation requested.', 'info');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      addToast(message, 'error');
+      addLogEntry(message, 'error');
+    }
+  };
+
+  const handleOpenExternal = async (url: string) => {
+    if (desktopBridgeAvailable) {
+      try {
+        await desktopApi.openExternal(url);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        addToast(message, 'error');
+      }
+      return;
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   const handleRunAutoSwitchTick = async () => {
@@ -763,22 +805,21 @@ export default function App() {
 
         {/* Dashboard Content Scroller with Transition animations */}
         <main className="flex-1 overflow-hidden flex flex-col position-relative" id="main-content">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={activeTab}
-              initial={{ opacity: 0, scale: 0.988, y: 6 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.988, y: -6 }}
-              transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-              className="flex-1 flex flex-col overflow-hidden"
-              id="active-view-animator"
-            >
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, scale: 0.988, y: 6 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+            className="flex-1 flex flex-col overflow-hidden"
+            id="active-view-animator"
+          >
               {activeTab === 'quotas' && (
                 <QuotasView 
                   accounts={accounts}
                   onRefreshAccount={handleRefreshAccount}
                   onResetAccount={handleResetAccount}
                   onRefreshToken={desktopBridgeAvailable ? handleRefreshToken : undefined}
+                  onRefreshSubscription={desktopBridgeAvailable ? handleRefreshSubscription : undefined}
                   onRefreshAll={handleRefreshAll}
                   isRefreshingAll={isRefreshingAll}
                 />
@@ -823,20 +864,17 @@ export default function App() {
                   daemonState={daemonState}
                   onToggleDaemon={handleToggleDaemon}
                   onUpdateSyncInterval={handleUpdateSyncInterval}
-                  onUpdateChannel={(channel) => {
-                    setSettings(prev => ({ ...prev, updateChannel: channel }));
-                    addToast(`软件更新通道已切换为 ${channel}`, 'success');
-                  }}
                   onAddLog={addLogEntry}
                   onBatchVerifyTokens={desktopBridgeAvailable ? handleBatchVerifyTokens : undefined}
                   onDetectClient={desktopBridgeAvailable ? handleDetectClient : undefined}
                   onCheckUpdates={desktopBridgeAvailable ? handleCheckUpdates : undefined}
+                  onInstallUpdate={desktopBridgeAvailable ? handleInstallUpdate : undefined}
+                  canInstallUpdate={updateStatus?.status === 'downloaded'}
                   accountCount={accounts.length}
                   repositoryUrl={appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}
                 />
               )}
-            </motion.div>
-          </AnimatePresence>
+          </motion.div>
         </main>
 
         {/* Global Footer bar matching image */}
@@ -854,7 +892,9 @@ export default function App() {
           </div>
           <div className="flex items-center gap-4" id="footer-right">
             <button 
-              onClick={() => addToast('Privacy Policy: All token authorizations are securely encrypted locally inside your client sandbox.', 'info')} 
+              onClick={() => {
+                void handleOpenExternal(`${appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}/blob/main/docs/privacy.md`);
+              }}
               className="hover:text-slate-200 cursor-pointer"
             >
               Privacy Policy
@@ -870,18 +910,13 @@ export default function App() {
       </div>
 
       {/* Overlay Notification Center Sidebar panel */}
-      <AnimatePresence>
-        {showNotifications && (
+      {showNotifications && (
           <>
             <div 
               className="fixed inset-0 bg-black/40 z-35" 
               onClick={() => setShowNotifications(false)} 
             />
             <motion.div
-              initial={{ x: '100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '100%' }}
-              transition={{ type: 'spring', damping: 25, stiffness: 220 }}
               className="fixed right-0 top-0 bottom-0 w-80 backdrop-blur-2xl bg-slate-900/95 border-l border-white/10 p-6 z-40 shadow-2xl flex flex-col text-slate-200 text-left"
               id="notification-sidebar-center"
             >
@@ -919,17 +954,14 @@ export default function App() {
               </div>
             </motion.div>
           </>
-        )}
-      </AnimatePresence>
+      )}
 
       {/* Support Dialog modal */}
-      <AnimatePresence>
-        {showSupport && (
+      {showSupport && (
           <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
             <motion.div
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
               className="backdrop-blur-2xl bg-slate-900/90 border border-white/10 rounded-3xl p-8 w-full max-w-md shadow-2xl relative text-white text-left select-none"
               id="support-modal-popup"
             >
@@ -965,17 +997,14 @@ export default function App() {
               </button>
             </motion.div>
           </div>
-        )}
-      </AnimatePresence>
+      )}
 
       {/* Release Notes / Updates dialog modal */}
-      <AnimatePresence>
-        {showUpdates && (
+      {showUpdates && (
           <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
             <motion.div
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
               className="backdrop-blur-2xl bg-slate-900/90 border border-white/10 rounded-3xl p-8 w-full max-w-md shadow-2xl relative text-white text-left select-none"
               id="updates-modal-popup"
             >
@@ -1018,8 +1047,7 @@ export default function App() {
               </button>
             </motion.div>
           </div>
-        )}
-      </AnimatePresence>
+      )}
     </div>
   );
 }

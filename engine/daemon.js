@@ -2,7 +2,7 @@ const { REFRESH_MINUTES } = require("./config");
 const { needsRefresh, refreshOneTok, refreshAll } = require("./token-refresh");
 const { refreshQuota } = require("./quota");
 const { fetchResetCredits } = require("./reset-credits");
-const { loadAutoSwitchCfg } = require("./config-manager");
+const { loadAutoSwitchCfg, normalizeSyncIntervalMinutes } = require("./config-manager");
 const { autoSwitchTick } = require("./auto-switch");
 const { loadIdx, listAccts, saveAcct, loadAcct } = require("./storage");
 const { writeAuthJson, writeProjection } = require("./switch");
@@ -59,8 +59,16 @@ async function runDaemonWorker() {
   return { accountsUpdated, tokenRefreshes, autoSwitchResult };
 }
 
-function getTickIntervalMs() {
-  return REFRESH_MINUTES * 60000;
+function getTickIntervalMinutes() {
+  try {
+    return normalizeSyncIntervalMinutes(loadAutoSwitchCfg().sync_interval_minutes);
+  } catch {
+    return REFRESH_MINUTES;
+  }
 }
 
-module.exports = { runDaemonWorker, getTickIntervalMs };
+function getTickIntervalMs() {
+  return getTickIntervalMinutes() * 60000;
+}
+
+module.exports = { runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes };
