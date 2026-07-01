@@ -1,8 +1,19 @@
 const { TOKEN_URL, CLIENT_ID } = require("./config");
 const { ts, isTokenExpired, jwtExp } = require("./crypto-utils");
 const { httpJson, extractErrorCode } = require("./http-client");
-const { saveAcct, loadAcct, listAccts } = require("./storage");
+const { saveAcct, loadAcct, listAccts, loadIdx } = require("./storage");
 const { writeAuthJson, writeProjection } = require("./switch");
+const { withAccountLock } = require("./operation-locks");
+
+const REAUTH_ERROR_CODES = new Set([
+  "invalid_grant",
+  "invalid_token",
+  "token_revoked",
+  "token_invalidated",
+  "refresh_token_expired",
+  "refresh_token_invalidated",
+  "refresh_token_reused",
+]);
 
 function tokenRefreshError(status, code) {
   if (code === "unsupported_country_region_territory") {
@@ -31,12 +42,35 @@ function hasTokenRepairSignal(acct) {
   ].some((item) => code === item || message.includes(item));
 }
 
+function isReauthErrorCode(code) {
+  return REAUTH_ERROR_CODES.has(String(code || "").toLowerCase());
+}
+
+function markRequiresReauth(acct, code, detail) {
+  acct.quota_error = { code: code || "token_refresh_failed", message: detail || null, timestamp: ts() };
+  acct.requires_reauth = true;
+  acct.reauth_reason = "refresh_token needs re-authorization";
+  saveAcct(acct);
+}
+
+function syncCurrentAuthIfNeeded(acct, authWasAligned = false) {
+  const idx = loadIdx();
+  if (idx.current_account_id !== acct.id) return;
+  const { inspectAuthState } = require("./auth-state");
+  if (!authWasAligned && inspectAuthState().requiresResolution) return;
+  writeAuthJson(acct);
+  writeProjection(acct);
+}
+
 async function refreshOneTok(acct, options = {}) {
   const force = typeof options === "boolean" ? options : !!options.force;
   if (!force && !needsRefresh(acct) && !hasTokenRepairSignal(acct)) {
     return { ok: true, skipped: true, gen: acct.token_generation || 0, timeLeft: tokenTimeLeft(acct) };
   }
   if (!acct.tokens.refresh_token) return { ok: false, error: "缺少 refresh_token", revoked: false };
+  const currentIndex = loadIdx();
+  const authWasAligned = currentIndex.current_account_id === acct.id
+    && !require("./auth-state").inspectAuthState().requiresResolution;
   const body = JSON.stringify({
     client_id: CLIENT_ID, grant_type: "refresh_token",
     refresh_token: acct.tokens.refresh_token,
@@ -48,7 +82,8 @@ async function refreshOneTok(acct, options = {}) {
     });
     if (resp.status >= 400) {
       const code = extractErrorCode(resp.body);
-      const revoked = code === "token_revoked" || code === "token_invalidated";
+      const revoked = isReauthErrorCode(code);
+      if (revoked) markRequiresReauth(acct, code, resp.body.slice(0, 300));
       return { ok: false, error: tokenRefreshError(resp.status, code), revoked, detail: resp.body.slice(0, 300) };
     }
     const data = JSON.parse(resp.body);
@@ -69,6 +104,7 @@ async function refreshOneTok(acct, options = {}) {
     acct.requires_reauth = false;
     acct.reauth_reason = null;
     saveAcct(acct);
+    syncCurrentAuthIfNeeded(acct, authWasAligned);
     return { ok: true, skipped: false, gen: acct.token_generation };
   } catch (err) {
     return { ok: false, error: err.message, revoked: false };
@@ -87,35 +123,34 @@ async function refreshAll(force) {
   let okN = 0, revived = 0, dead = 0;
   const results = [];
 
-  for (const a of accts) {
-    if (!force && !needsRefresh(a) && !hasTokenRepairSignal(a)) {
-      okN++;
-      results.push({ email: a.email, ok: true, skipped: true });
-      continue;
-    }
-    const wasRepair = hasTokenRepairSignal(a);
-    const r = await refreshOneTok(a, { force });
-    results.push({ email: a.email, ok: r.ok, skipped: false, gen: r.gen, error: r.error });
+  for (const listed of accts) {
+    await withAccountLock(listed.id, async () => {
+      const a = loadAcct(listed.id);
+      if (!a) return;
+      if (!force && !needsRefresh(a) && !hasTokenRepairSignal(a)) {
+        okN++;
+        results.push({ email: a.email, ok: true, skipped: true });
+        return;
+      }
+      const wasRepair = hasTokenRepairSignal(a);
+      const r = await refreshOneTok(a, { force });
+      results.push({ email: a.email, ok: r.ok, skipped: false, gen: r.gen, error: r.error });
 
-    if (r.ok) {
-      if (wasRepair) revived++;
-      else okN++;
-    } else if (r.revoked) {
-      dead++;
-      a.quota_error = { code: "token_revoked", message: r.detail, timestamp: ts() };
-      a.requires_reauth = true;
-      a.reauth_reason = "refresh_token 已被撤销";
-      saveAcct(a);
-    }
+      if (r.ok) {
+        if (wasRepair) revived++;
+        else okN++;
+      } else if (r.revoked) {
+        dead++;
+        markRequiresReauth(a, "token_revoked", r.detail);
+      }
+    });
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-
   // 保持当前账号 auth.json 最新
-  const { loadIdx } = require("./storage");
   const idx = loadIdx();
   if (idx.current_account_id) {
     const cur = loadAcct(idx.current_account_id);
-    if (cur) { writeAuthJson(cur); writeProjection(cur); }
+    if (cur) syncCurrentAuthIfNeeded(cur);
   }
 
   return { okCount: okN, revivedCount: revived, deadCount: dead, results };

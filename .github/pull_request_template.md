@@ -7,7 +7,7 @@ Describe the user-visible behavior and why this change is needed.
 List commands and manual scenarios that were completed.
 
 ```text
-npm run check
+npm test
 npm run build:dir
 ```
 

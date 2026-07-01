@@ -13,7 +13,8 @@ import {
   Github, 
   FileText,
   Activity,
-  Zap
+  Zap,
+  FolderOpen
 } from 'lucide-react';
 import { SystemSettings, DaemonState } from '../types';
 
@@ -30,6 +31,7 @@ interface SettingsProps {
   canInstallUpdate?: boolean;
   accountCount?: number;
   repositoryUrl?: string;
+  onOpenLogs?: () => Promise<void>;
 }
 
 export default function SettingsView({
@@ -45,6 +47,7 @@ export default function SettingsView({
   canInstallUpdate = false,
   accountCount = 128,
   repositoryUrl = 'https://github.com',
+  onOpenLogs,
 }: SettingsProps) {
   const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
   const [isVerifyingTokens, setIsVerifyingTokens] = useState(false);
@@ -213,6 +216,14 @@ export default function SettingsView({
                     daemonState.status === 'Running' ? 'text-emerald-400' : 'text-rose-400'
                   }`}>{daemonState.status}</span>
                 </div>
+                {daemonState.pausedReason && (
+                  <span className="block text-[10px] text-amber-300">Paused: {daemonState.pausedReason}</span>
+                )}
+                {daemonState.lastError && (
+                  <span className="block max-w-xs truncate text-[10px] text-rose-300" title={daemonState.lastError}>
+                    {daemonState.lastError}
+                  </span>
+                )}
               </div>
 
               {/* Sync Interval Slider */}
@@ -398,6 +409,20 @@ export default function SettingsView({
         </div>
 
         <div className="flex items-center gap-3 shrink-0" id="footer-banner-actions">
+          {onOpenLogs && (
+            <motion.button
+              onClick={() => {
+                onOpenLogs().catch(error => onAddLog(error instanceof Error ? error.message : String(error), 'error'));
+              }}
+              whileHover={{ scale: 1.04 }}
+              whileTap={{ scale: 0.96 }}
+              className="px-5 py-3 rounded-2xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-all border border-white/5"
+              id="btn-open-logs"
+            >
+              <FolderOpen className="w-3.5 h-3.5" />
+              Logs
+            </motion.button>
+          )}
           <motion.a
             href={repositoryUrl}
             target="_blank"

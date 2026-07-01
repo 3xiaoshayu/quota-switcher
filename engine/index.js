@@ -1,14 +1,17 @@
 const { b64url, sha256hex, codeChallenge, ts, tsIso, buildId, jwtPayload, jwtExp, isTokenExpired, extractChatgptAccountId } = require("./crypto-utils");
 const { parseTsStr } = require("./time-utils");
 const { httpJson, buildCodexHeaders, extractErrorCode, isTokenRevoked } = require("./http-client");
-const { setSecretCodec, ensureDir, loadIdx, saveIdx, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct } = require("./storage");
-const { writeAuthJson, writeProjection, clearApiBaseUrl, killCodex, startCodex, doSwitch } = require("./switch");
-const { oauthLoginFlow, upsert } = require("./oauth");
+const { setSecretCodec, protectData, unprotectData, ensureDir, loadIdx, saveIdx, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct, getStorageDiagnostics, rebuildIndex } = require("./storage");
+const { writeAuthJson, writeProjection, clearApiBaseUrl, killCodex, startCodex, doSwitch, setSwitchRuntimeForTests } = require("./switch");
+const { oauthLoginFlow, restorePendingOAuth, cancelOAuth, completeOAuthManually, getOAuthStatus, upsert } = require("./oauth");
+const { inspectAuthState, adoptOfficialAuth, reapplyManagedAuth, authFingerprint } = require("./auth-state");
+const { initLogger, logInfo, logWarn, logError, getLogDir, sanitizeMessage } = require("./logger");
 const { refreshOneTok, needsRefresh, refreshAll } = require("./token-refresh");
 const { fetchQuota, refreshQuota, extractQuotaMetrics } = require("./quota");
 const { fetchResetCredits, consumeResetCredit } = require("./reset-credits");
 const { fetchSubscriptionStatus, refreshSubscription } = require("./subscription");
 const { loadAutoSwitchCfg, saveAutoSwitchCfg, DEFAULT_AUTO_SWITCH_CFG } = require("./config-manager");
+const { withAccountLock, withAccountLocks } = require("./operation-locks");
 const { metricCrossedThreshold, buildSwitchCandidate, pickBestCandidate, resolveMonitoredIds, autoSwitchTick } = require("./auto-switch");
 const { runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes } = require("./daemon");
 const { getCodexInstallationStatus, assertOfficialCodexInstalled } = require("./codex-installation");
@@ -21,11 +24,15 @@ module.exports = {
   // http-client
   httpJson, buildCodexHeaders, extractErrorCode, isTokenRevoked,
   // storage
-  setSecretCodec, ensureDir, loadIdx, saveIdx, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct,
+  setSecretCodec, protectData, unprotectData, ensureDir, loadIdx, saveIdx, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct, getStorageDiagnostics, rebuildIndex,
   // switch
-  writeAuthJson, writeProjection, clearApiBaseUrl, killCodex, startCodex, doSwitch,
+  writeAuthJson, writeProjection, clearApiBaseUrl, killCodex, startCodex, doSwitch, setSwitchRuntimeForTests,
   // oauth
-  oauthLoginFlow, upsert,
+  oauthLoginFlow, restorePendingOAuth, cancelOAuth, completeOAuthManually, getOAuthStatus, upsert,
+  // auth state
+  inspectAuthState, adoptOfficialAuth, reapplyManagedAuth, authFingerprint,
+  // logger
+  initLogger, logInfo, logWarn, logError, getLogDir, sanitizeMessage,
   // token-refresh
   refreshOneTok, needsRefresh, refreshAll,
   // quota
@@ -36,6 +43,8 @@ module.exports = {
   fetchSubscriptionStatus, refreshSubscription,
   // config-manager
   loadAutoSwitchCfg, saveAutoSwitchCfg, DEFAULT_AUTO_SWITCH_CFG,
+  // operation-locks
+  withAccountLock, withAccountLocks,
   // auto-switch
   metricCrossedThreshold, buildSwitchCandidate, pickBestCandidate, resolveMonitoredIds, autoSwitchTick,
   // daemon

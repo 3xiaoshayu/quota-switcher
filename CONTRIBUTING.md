@@ -21,19 +21,20 @@ not a public issue.
 Requirements:
 
 - Windows 10 or 11 x64;
-- Node.js 20 or newer;
+- Node.js 22 or newer;
 - the official Microsoft Store Codex app for integration checks.
 
 ```powershell
 git clone https://github.com/3xiaoshayu/codex-account-manager.git
 cd codex-account-manager
 npm ci
-npm run check
+npm test
 npm start
 ```
 
-`npm run check` performs JavaScript syntax checks, renderer/preload/IPC contract
-validation, and release metadata validation.
+`npm test` runs the engine behavior suite, TypeScript checks, JavaScript syntax
+checks, renderer/preload/IPC contract validation, documentation checks, and
+release metadata validation.
 
 ## Project conventions
 
@@ -54,7 +55,7 @@ validation, and release metadata validation.
 Run before submitting:
 
 ```powershell
-npm run check
+npm test
 npm run build:dir
 ```
 

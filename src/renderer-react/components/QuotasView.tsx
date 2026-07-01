@@ -45,11 +45,13 @@ export default function QuotasView({
   const actionRequiredCount = accounts.filter(acc => acc.status === 'EXPIRED' || acc.status === 'WARNING' || acc.status === 'SUSPENDED').length;
   
   // Calculate average quota remaining
+  const visibleFiveHourQuotas = accounts
+    .filter(account => account.fiveHourQuotaRemaining != null)
+    .map(account => ((account.fiveHourQuotaRemaining || 0) / account.fiveHourQuotaTotal) * 100);
   const avgRemaining = Math.round(
-    accounts.length ? accounts.reduce((acc, curr) => {
-      const remainingPct = (curr.fiveHourQuotaUsed / curr.fiveHourQuotaTotal) * 100;
-      return acc + remainingPct;
-    }, 0) / accounts.length : 0
+    visibleFiveHourQuotas.length
+      ? visibleFiveHourQuotas.reduce((sum, percentage) => sum + percentage, 0) / visibleFiveHourQuotas.length
+      : 0,
   );
 
   const syncedCount = accounts.filter(acc => acc.quotaUpdatedAt && !acc.quotaError).length;
@@ -58,6 +60,8 @@ export default function QuotasView({
     setRefreshingCardId(id);
     try {
       await onRefreshAccount(id);
+    } catch {
+      // The app-level handler already reports the error through toast/log state.
     } finally {
       setRefreshingCardId(null);
     }
@@ -234,19 +238,31 @@ export default function QuotasView({
         {gridAccounts.map((account) => {
           const isCardRefreshing = refreshingCardId === account.id;
           const isSubscriptionRefreshing = refreshingSubscriptionId === account.id;
-          const fiveHourPercentage = Math.min((account.fiveHourQuotaUsed / account.fiveHourQuotaTotal) * 100, 100);
-          const weeklyPercentage = Math.min((account.weeklyQuotaUsed / account.weeklyQuotaTotal) * 100, 100);
+          const fiveHourPercentage = account.fiveHourQuotaRemaining == null
+            ? null
+            : Math.min((account.fiveHourQuotaRemaining / account.fiveHourQuotaTotal) * 100, 100);
+          const weeklyPercentage = account.weeklyQuotaRemaining == null
+            ? null
+            : Math.min((account.weeklyQuotaRemaining / account.weeklyQuotaTotal) * 100, 100);
           const isExceeded = account.status === 'EXPIRED';
           const hasResetCredits = Number(account.resetCreditsAvailable || 0) > 0;
 
-          // Progress bar color selection
-          let barColor5h = "bg-gradient-to-r from-teal-500/40 via-teal-400/50 to-cyan-500/40 shadow-[0_0_12px_rgba(45,212,191,0.15)]";
-          if (account.status === 'WARNING') barColor5h = "bg-gradient-to-r from-amber-500/40 via-yellow-400/50 to-amber-500/40 shadow-[0_0_12px_rgba(251,191,36,0.1)]";
-          if (account.status === 'EXPIRED') barColor5h = "bg-gradient-to-r from-rose-500/40 via-rose-400/50 to-rose-500/40 shadow-[0_0_12px_rgba(244,63,94,0.1)]";
+          // Progress color follows remaining quota: low red, medium amber, high green.
+          const barColor5h = fiveHourPercentage == null
+            ? "bg-slate-600/40"
+            : fiveHourPercentage <= 25
+            ? "bg-gradient-to-r from-rose-500/40 via-rose-400/50 to-rose-500/40 shadow-[0_0_12px_rgba(244,63,94,0.1)]"
+            : fiveHourPercentage >= 70
+              ? "bg-gradient-to-r from-emerald-500/40 via-green-400/50 to-emerald-500/40 shadow-[0_0_12px_rgba(52,211,153,0.15)]"
+              : "bg-gradient-to-r from-amber-500/40 via-yellow-400/50 to-amber-500/40 shadow-[0_0_12px_rgba(251,191,36,0.1)]";
 
-          let barColorWeekly = "bg-gradient-to-r from-blue-500/40 via-indigo-400/50 to-cyan-500/40 shadow-[0_0_12px_rgba(99,102,241,0.15)]";
-          if (account.status === 'WARNING') barColorWeekly = "bg-gradient-to-r from-amber-600/40 via-yellow-500/50 to-amber-600/40 shadow-[0_0_12px_rgba(217,119,6,0.1)]";
-          if (account.status === 'EXPIRED') barColorWeekly = "bg-gradient-to-r from-rose-600/40 via-rose-500/50 to-rose-600/40 shadow-[0_0_12px_rgba(225,29,72,0.1)]";
+          const barColorWeekly = weeklyPercentage == null
+            ? "bg-slate-600/40"
+            : weeklyPercentage <= 25
+            ? "bg-gradient-to-r from-rose-600/40 via-rose-500/50 to-rose-600/40 shadow-[0_0_12px_rgba(225,29,72,0.1)]"
+            : weeklyPercentage >= 70
+              ? "bg-gradient-to-r from-emerald-600/40 via-green-500/50 to-emerald-600/40 shadow-[0_0_12px_rgba(16,185,129,0.15)]"
+              : "bg-gradient-to-r from-amber-600/40 via-yellow-500/50 to-amber-600/40 shadow-[0_0_12px_rgba(217,119,6,0.1)]";
 
           return (
             <motion.div
@@ -275,6 +291,7 @@ export default function QuotasView({
               {/* Quotas Progress Info */}
               <div className="space-y-4 flex-1 select-none" id={`quota-progress-container-${account.id}`}>
                 {/* 5h Quota */}
+                {fiveHourPercentage !== null && (
                 <div className="space-y-1.5" id={`quota-5h-row-${account.id}`}>
                   <div className="flex items-center justify-between text-xs font-semibold" id={`quota-5h-labels-${account.id}`}>
                     <span className="text-slate-400">5h Quota</span>
@@ -291,8 +308,10 @@ export default function QuotasView({
                     />
                   </div>
                 </div>
+                )}
 
                 {/* Weekly Quota */}
+                {weeklyPercentage !== null && (
                 <div className="space-y-1.5 animate-pulse-slow" id={`quota-weekly-row-${account.id}`}>
                   <div className="flex items-center justify-between text-xs font-semibold" id={`quota-weekly-labels-${account.id}`}>
                     <span className="text-slate-400">Weekly Quota</span>
@@ -309,6 +328,12 @@ export default function QuotasView({
                     />
                   </div>
                 </div>
+                )}
+                {fiveHourPercentage === null && weeklyPercentage === null && (
+                  <div className="rounded-xl border border-white/5 bg-slate-950/20 px-3 py-4 text-xs text-slate-400">
+                    No quota windows were returned for this account.
+                  </div>
+                )}
               </div>
 
               {/* Action Buttons Row */}

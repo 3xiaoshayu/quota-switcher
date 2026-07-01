@@ -10,6 +10,8 @@ backend, telemetry pipeline, advertising service, or cross-device account sync.
 | `%USERPROFILE%\.codex-switch\accounts.json` | Account index and current account ID |
 | `%USERPROFILE%\.codex-switch\auto-switch.json` | Thresholds, scope, and daemon settings |
 | `%USERPROFILE%\.codex-switch\accounts\*.json` | Account metadata and DPAPI-encrypted OAuth tokens |
+| `%USERPROFILE%\.codex-switch\codex_oauth_pending.json` | DPAPI-encrypted temporary OAuth state removed after completion, cancellation, or expiry |
+| `%USERPROFILE%\.codex-switch\logs\app-YYYY-MM-DD.log` | Sanitized operational diagnostics retained for three days |
 | `%USERPROFILE%\.codex\auth.json` | Active authentication state consumed by Codex |
 | `%USERPROFILE%\.codex\auth.json.bak` | Previous active authentication state |
 | `%USERPROFILE%\.codex\codex_auth_projection.json` | Manager projection of the selected account |
@@ -33,6 +35,9 @@ protect against:
 
 The active Codex `auth.json` must remain readable by Codex and should always be
 treated as sensitive.
+
+Application logs mask OAuth tokens, callback codes, state values, bearer
+credentials, JWTs, and email addresses. Review diagnostic logs before sharing.
 
 ## Network requests
 
@@ -62,12 +67,17 @@ additional quota and cannot bypass upstream limits.
 
 Switching accounts:
 
-- stops `Codex.exe` and associated `node_repl.exe` processes;
+- requests a normal close for the official Codex process tree and force-closes
+  only matching processes that remain after a timeout;
 - creates or updates `auth.json.bak`;
 - removes `api_base_url` and `openai_base_url` overrides from Codex
   `%USERPROFILE%\.codex\config.toml`;
 - writes the selected account to Codex `auth.json`;
 - restarts the official Microsoft Store Codex app.
+
+If official Codex authentication changes outside the manager, authentication
+writes and automatic switching pause until the user adopts the official login
+or reapplies the managed account.
 
 Finish active work before switching and keep an independent backup of custom
 Codex configuration when using advanced local endpoints.

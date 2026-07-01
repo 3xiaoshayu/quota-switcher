@@ -18,7 +18,9 @@ app.whenReady().then(() => {
         encrypt: (plainText) => safeStorage.encryptString(plainText).toString("base64"),
         decrypt: (encoded) => safeStorage.decryptString(Buffer.from(encoded, "base64")),
     });
+    eng.initLogger();
     eng.listAccts();
+    eng.restorePendingOAuth();
 
     const updateService = createUpdateService({ app, BrowserWindow });
     const daemon = registerIpcHandlers(eng, { updateService });

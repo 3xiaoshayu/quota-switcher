@@ -3,6 +3,7 @@ const { RESET_CREDITS_URL, RESET_CONSUME_URL } = require("./config");
 const { parseTsStr } = require("./time-utils");
 const { httpJson, buildCodexHeaders, extractErrorCode } = require("./http-client");
 const { saveAcct } = require("./storage");
+const { ts } = require("./crypto-utils");
 
 async function fetchResetCredits(acct) {
   const headers = buildCodexHeaders(acct);
@@ -12,6 +13,10 @@ async function fetchResetCredits(acct) {
     throw new Error("HTTP " + resp.status + (code ? " " + code : "") + " " + resp.body.slice(0, 200));
   }
   const payload = JSON.parse(resp.body);
+  return parseResetCreditsPayload(payload);
+}
+
+function parseResetCreditsPayload(payload) {
   const creditArr = payload.credits || (payload.data || {}).credits || [];
   const credits = creditArr
     .map((cr) => ({
@@ -26,13 +31,15 @@ async function fetchResetCredits(acct) {
       const st = c.status;
       return st !== "redeemed" && st !== "used" && st !== "consumed" && st !== "expired";
     });
-  const available =
-    payload.available_count || payload.availableCount ||
-    (payload.data && (payload.data.available_count || payload.data.availableCount)) ||
-    credits.length;
+  const explicitAvailable =
+    payload.available_count ?? payload.availableCount ??
+    (payload.data && (payload.data.available_count ?? payload.data.availableCount));
+  const available = explicitAvailable == null
+    ? credits.length
+    : Math.max(0, Number(explicitAvailable) || 0);
   const nextExpiry = credits.length > 0 ? credits.map((c) => c.expires_at).filter(Boolean).sort()[0] : null;
 
-  return { available_count: available, credits, next_expires_at: nextExpiry };
+  return { available_count: available, credits, next_expires_at: nextExpiry, updated_at: ts() };
 }
 
 async function consumeResetCredit(acct) {
@@ -50,9 +57,16 @@ async function consumeResetCredit(acct) {
   try {
     const snap = await fetchResetCredits(acct);
     acct.reset_credits = snap;
+    acct.reset_credits_error = null;
     saveAcct(acct);
-  } catch {}
+  } catch (error) {
+    acct.reset_credits_error = { message: error.message || String(error), timestamp: ts() };
+    saveAcct(acct);
+    const partial = new Error(`Reset credit was consumed, but the remaining balance could not be refreshed: ${error.message || error}`);
+    partial.code = "reset_consumed_refresh_failed";
+    throw partial;
+  }
   return true;
 }
 
-module.exports = { fetchResetCredits, consumeResetCredit };
+module.exports = { fetchResetCredits, consumeResetCredit, parseResetCreditsPayload };

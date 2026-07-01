@@ -12,7 +12,7 @@ const requiredFiles = [
   "SECURITY.md",
   "ASSET_LICENSE.md",
   "THIRD_PARTY_NOTICES.md",
-  "docs/images/account-dashboard.jpg",
+  "docs/images/account-dashboard.png",
   "resources/icon.ico",
 ];
 

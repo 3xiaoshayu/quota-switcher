@@ -10,6 +10,7 @@ import {
   AccountQuota,
   DesktopAppInfo,
   DesktopAutoSwitchConfig,
+  DesktopAuthState,
   DesktopCodexStatus,
   DesktopUpdateStatus,
   LogEntry,
@@ -50,6 +51,15 @@ const DEFAULT_CONFIG: DesktopAutoSwitchConfig = {
   account_scope_mode: 'all',
   selected_account_ids: [],
   sync_interval_minutes: 10,
+};
+
+const EMPTY_AUTH_STATE: DesktopAuthState = {
+  status: 'empty',
+  requiresResolution: false,
+  currentAccountId: null,
+  matchedAccountId: null,
+  officialIdentity: null,
+  message: null,
 };
 
 function updateChannelForUi(status: DesktopUpdateStatus | null): SystemSettings['updateChannel'] {
@@ -93,7 +103,7 @@ export default function App() {
   });
   
   const [userEmail, setUserEmail] = useState<string>(() => {
-    return localStorage.getItem('codex_auth_email') || 'hamadeeufrosina@gmail.com';
+    return localStorage.getItem('codex_auth_email') || 'user@example.com';
   });
 
   // Main UI States
@@ -108,9 +118,12 @@ export default function App() {
   const [appInfo, setAppInfo] = useState<DesktopAppInfo | null>(null);
   const [codexStatus, setCodexStatus] = useState<DesktopCodexStatus | null>(null);
   const [updateStatus, setUpdateStatus] = useState<DesktopUpdateStatus | null>(null);
+  const [authState, setAuthState] = useState<DesktopAuthState>(EMPTY_AUTH_STATE);
+  const [isResolvingAuth, setIsResolvingAuth] = useState(false);
   const quotaAutoSyncPromise = useRef<Promise<void> | null>(null);
   const lastQuotaAutoSyncAt = useRef(0);
   const accountsRef = useRef<AccountQuota[]>(accounts);
+  const accountOperationIds = useRef<Set<string>>(new Set());
   
   // Auto-switch scope checkmarks list (Premium_Member_01, Team_Admin_Shared, Internal_Dev_Account checked initially)
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>(
@@ -149,17 +162,33 @@ export default function App() {
     setLogs(prev => [newLog, ...prev]);
   }, []);
 
+  const runAccountOperation = useCallback(async <T,>(id: string, task: () => Promise<T>): Promise<T> => {
+    if (accountOperationIds.current.has(id)) {
+      throw new Error('This account already has an operation in progress.');
+    }
+    accountOperationIds.current.add(id);
+    try {
+      return await task();
+    } finally {
+      accountOperationIds.current.delete(id);
+    }
+  }, []);
+
   const applyDashboardState = useCallback((snapshot: Awaited<ReturnType<typeof desktopApi.loadDashboardState>>) => {
     setAccounts(snapshot.accounts);
     setAutoSwitchConfig(snapshot.config);
     setAppInfo(snapshot.appInfo);
     setCodexStatus(snapshot.codexStatus);
     setUpdateStatus(snapshot.updateStatus);
+    setAuthState(snapshot.authState);
     setSettings(settingsFromDesktopState(snapshot.config, snapshot.appInfo, snapshot.codexStatus, snapshot.updateStatus));
     setDaemonState({
       status: snapshot.daemonRunning ? 'Running' : 'Stopped',
       syncInterval: snapshot.daemonSyncInterval,
       lastChecked: formatDateTime(Date.now()),
+      lastSuccessAt: snapshot.daemonLastSuccessAt,
+      lastError: snapshot.daemonLastError,
+      pausedReason: snapshot.daemonPausedReason,
     });
     setSelectedAccountIds(
       snapshot.config.account_scope_mode === 'selected'
@@ -190,7 +219,9 @@ export default function App() {
   const queueQuotaAutoSync = useCallback((candidateAccounts: AccountQuota[]) => {
     if (!desktopBridgeAvailable || quotaAutoSyncPromise.current) return;
     if (Date.now() - lastQuotaAutoSyncAt.current < QUOTA_AUTO_SYNC_MIN_GAP_MS) return;
-    const staleAccounts = candidateAccounts.filter(needsQuotaAutoSync);
+    const staleAccounts = candidateAccounts.filter((account) => (
+      !accountOperationIds.current.has(account.id) && needsQuotaAutoSync(account)
+    ));
     if (!staleAccounts.length) return;
 
     lastQuotaAutoSyncAt.current = Date.now();
@@ -276,6 +307,10 @@ export default function App() {
         setUpdateStatus(status);
         setSettings(prev => ({ ...prev, latestStatus: latestStatusForUi(status), updateChannel: updateChannelForUi(status) }));
       },
+      onAuthConflict: (state) => {
+        setAuthState(state);
+        addToast(state.message || 'Official Codex authentication changed.', 'warning');
+      },
     });
 
     return () => {
@@ -321,11 +356,11 @@ export default function App() {
         // Randomly adjust quota slightly to simulate active refreshing
         if (acc.status === 'EXPIRED') return acc;
         const change = Math.floor(Math.random() * 200) + 50;
-        const newUsed = Math.min(acc.fiveHourQuotaUsed + change, acc.fiveHourQuotaTotal);
+        const newRemaining = Math.max(0, (acc.fiveHourQuotaRemaining ?? 0) - change);
         return {
           ...acc,
-          fiveHourQuotaUsed: newUsed,
-          status: newUsed >= acc.fiveHourQuotaTotal ? 'EXPIRED' : acc.status,
+          fiveHourQuotaRemaining: newRemaining,
+          status: newRemaining <= 0 ? 'EXPIRED' : acc.status,
           tokenValidity: '23h 59m left',
         };
       }));
@@ -340,7 +375,7 @@ export default function App() {
     if (desktopBridgeAvailable) {
       const account = accountsRef.current.find(item => item.id === id);
       try {
-        await desktopApi.refreshQuota(id);
+        await runAccountOperation(id, () => desktopApi.refreshQuota(id));
         const snapshot = await loadDashboardState(false);
         if (snapshot) queueQuotaAutoSync(snapshot.accounts);
         addToast(`${account?.email || id} quota refreshed`, 'success');
@@ -349,6 +384,7 @@ export default function App() {
         const message = error instanceof Error ? error.message : String(error);
         addToast(message, 'error');
         addLogEntry(message, 'error');
+        throw error;
       }
       return;
     }
@@ -357,7 +393,7 @@ export default function App() {
         addToast(`账号 ${acc.name} 的配额已重新同步`, 'success');
         return {
           ...acc,
-          fiveHourQuotaUsed: Math.max(0, acc.fiveHourQuotaUsed - 400),
+          fiveHourQuotaRemaining: Math.min(acc.fiveHourQuotaTotal, (acc.fiveHourQuotaRemaining ?? 0) + 400),
           status: 'ACTIVE',
         };
       }
@@ -378,8 +414,10 @@ export default function App() {
       const confirmed = window.confirm(`Consume one reset credit for ${account.email}?`);
       if (!confirmed) return;
       try {
-        await desktopApi.consumeResetCredit(id);
-        await desktopApi.refreshQuota(id);
+        await runAccountOperation(id, async () => {
+          await desktopApi.consumeResetCredit(id);
+          await desktopApi.refreshQuota(id);
+        });
         const snapshot = await loadDashboardState(false);
         if (snapshot) queueQuotaAutoSync(snapshot.accounts);
         addToast(`${account.email} reset credit consumed`, 'success');
@@ -397,8 +435,8 @@ export default function App() {
         addLogEntry(`Manually reset statistics & status for endpoint: ${acc.email}`, 'info');
         return {
           ...acc,
-          fiveHourQuotaUsed: 0,
-          weeklyQuotaUsed: 500,
+          fiveHourQuotaRemaining: acc.fiveHourQuotaTotal,
+          weeklyQuotaRemaining: acc.weeklyQuotaTotal,
           status: 'ACTIVE',
         };
       }
@@ -410,7 +448,7 @@ export default function App() {
     if (!desktopBridgeAvailable) return;
     const account = accountsRef.current.find(item => item.id === id);
     try {
-      const result = await desktopApi.refreshToken(id);
+      const result = await runAccountOperation(id, () => desktopApi.refreshToken(id));
       await loadDashboardState(false);
       addToast(result?.skipped ? `${account?.email || id} Token is still valid` : `${account?.email || id} Token refreshed`, 'success');
       addLogEntry(`Token check completed: ${account?.email || id}`, 'success');
@@ -425,7 +463,7 @@ export default function App() {
     if (!desktopBridgeAvailable) return;
     const account = accountsRef.current.find(item => item.id === id);
     try {
-      const result = await desktopApi.refreshSubscription(id, true);
+      const result = await runAccountOperation(id, () => desktopApi.refreshSubscription(id, true));
       const snapshot = await loadDashboardState(false);
       if (snapshot) queueQuotaAutoSync(snapshot.accounts);
       addToast(
@@ -499,10 +537,10 @@ export default function App() {
       addToast('Opening OAuth login...', 'info');
       addLogEntry('Opening OAuth login flow for a new account.', 'info');
       try {
-        const account = await desktopApi.addAccount();
+        const result = await desktopApi.addAccount();
         const snapshot = await loadDashboardState(false);
         if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-        addToast(account?.email ? `Added ${account.email}` : 'Account added', 'success');
+        addToast(result.account?.email ? `Added ${result.account.email}` : 'Account added', 'success');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         addToast(message, 'error');
@@ -519,6 +557,50 @@ export default function App() {
     addToast(`已成功添加账号 ${acc.email}`, 'success');
   };
 
+  const handleReauthorizeAccount = async (id: string) => {
+    const target = accountsRef.current.find(account => account.id === id);
+    const result = await desktopApi.reauthorizeAccount(id);
+    const snapshot = await loadDashboardState(false);
+    if (snapshot) queueQuotaAutoSync(snapshot.accounts);
+    if (result.mismatch) {
+      addToast(`The browser used a different account. ${result.account?.email || 'It'} was saved separately.`, 'warning');
+      addLogEntry(`Reauthorization identity did not match ${target?.email || id}; the new account was saved separately.`, 'warning');
+      return;
+    }
+    addToast(`${target?.email || id} reauthorized`, 'success');
+    addLogEntry(`Account reauthorized: ${target?.email || id}`, 'success');
+  };
+
+  const handleCancelOAuth = async () => {
+    await desktopApi.cancelOAuth();
+    addLogEntry('OAuth authorization cancelled.', 'warning');
+  };
+
+  const handleCompleteOAuthManually = async (callbackUrl: string) => {
+    await desktopApi.completeOAuthManually(callbackUrl);
+    addLogEntry('Manual OAuth callback submitted.', 'info');
+  };
+
+  const handleResolveAuthConflict = async (action: 'adopt' | 'reapply') => {
+    setIsResolvingAuth(true);
+    try {
+      if (action === 'adopt') {
+        const account = await desktopApi.adoptOfficialAccount();
+        addToast(`Official Codex account adopted: ${account.email}`, 'success');
+      } else {
+        await desktopApi.reapplyManagedAccount(authState.currentAccountId || null);
+        addToast('Managed account reapplied to official Codex.', 'success');
+      }
+      await loadDashboardState(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      addToast(message, 'error');
+      addLogEntry(message, 'error');
+    } finally {
+      setIsResolvingAuth(false);
+    }
+  };
+
   // Delete account
   const handleDeleteAccount = async (id: string) => {
     const target = accounts.find(a => a.id === id);
@@ -527,7 +609,7 @@ export default function App() {
       const confirmed = window.confirm(`Delete ${target.email}? This cannot be undone.`);
       if (!confirmed) return;
       try {
-        await desktopApi.deleteAccount(id);
+        await runAccountOperation(id, () => desktopApi.deleteAccount(id));
         const snapshot = await loadDashboardState(false);
         if (snapshot) queueQuotaAutoSync(snapshot.accounts);
         addToast(`Deleted ${target.email}`, 'warning');
@@ -550,7 +632,7 @@ export default function App() {
     if (desktopBridgeAvailable) {
       const selected = accountsRef.current.find(a => a.id === id);
       try {
-        await desktopApi.switchAccount(id);
+        await runAccountOperation(id, () => desktopApi.switchAccount(id));
         const snapshot = await loadDashboardState(false);
         if (snapshot) queueQuotaAutoSync(snapshot.accounts);
         addToast(`Current account switched to ${selected?.email || id}`, 'success');
@@ -848,6 +930,9 @@ export default function App() {
                   onDeleteAccount={handleDeleteAccount}
                   onSwitchCurrentAccount={handleSwitchCurrentAccount}
                   onRefreshAccount={handleRefreshAccount}
+                  onReauthorizeAccount={desktopBridgeAvailable ? handleReauthorizeAccount : undefined}
+                  onCancelOAuth={desktopBridgeAvailable ? handleCancelOAuth : undefined}
+                  onCompleteOAuthManually={desktopBridgeAvailable ? handleCompleteOAuthManually : undefined}
                   onAddLog={addLogEntry}
                   oauthMode={desktopBridgeAvailable}
                   onReloadAccounts={desktopBridgeAvailable ? async () => {
@@ -871,6 +956,7 @@ export default function App() {
                   canInstallUpdate={updateStatus?.status === 'downloaded'}
                   accountCount={accounts.length}
                   repositoryUrl={appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}
+                  onOpenLogs={desktopBridgeAvailable ? async () => { await desktopApi.openLogs(); } : undefined}
                 />
               )}
           </motion.div>
@@ -907,6 +993,58 @@ export default function App() {
           </div>
         </footer>
       </div>
+
+      {authState.requiresResolution && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/85 p-4 backdrop-blur-md">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="w-full max-w-md rounded-3xl border border-amber-500/20 bg-slate-900/95 p-7 text-left shadow-2xl"
+            id="auth-conflict-modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="auth-conflict-title"
+          >
+            <ShieldAlert className="mb-4 h-10 w-10 text-amber-400" />
+            <h3 id="auth-conflict-title" className="text-lg font-bold text-white">
+              Official Codex login changed
+            </h3>
+            <p className="mt-2 text-xs leading-relaxed text-slate-300">
+              {authState.message || 'The official Codex login no longer matches the account managed by this app.'}
+            </p>
+            {authState.officialIdentity?.email && (
+              <div className="mt-4 rounded-2xl border border-white/5 bg-slate-950/35 px-4 py-3 text-xs text-slate-300">
+                Official account: <strong className="text-white">{authState.officialIdentity.email}</strong>
+              </div>
+            )}
+            <p className="mt-4 text-[11px] leading-relaxed text-slate-400">
+              Automatic switching and authentication writes are paused until this is resolved.
+            </p>
+            <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {(authState.status === 'conflict' || authState.status === 'unmanaged_official_auth') && (
+                <button
+                  onClick={() => void handleResolveAuthConflict('adopt')}
+                  disabled={isResolvingAuth}
+                  className="rounded-2xl border border-blue-500/25 bg-blue-500/10 px-4 py-3 text-xs font-bold text-blue-300 hover:bg-blue-500/15 disabled:opacity-50"
+                  id="auth-conflict-adopt"
+                >
+                  Adopt official account
+                </button>
+              )}
+              {authState.currentAccountId && (
+                <button
+                  onClick={() => void handleResolveAuthConflict('reapply')}
+                  disabled={isResolvingAuth}
+                  className="rounded-2xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-xs font-bold text-amber-300 hover:bg-amber-500/15 disabled:opacity-50"
+                  id="auth-conflict-reapply"
+                >
+                  Reapply managed account
+                </button>
+              )}
+            </div>
+          </motion.div>
+        </div>
+      )}
 
       {/* Overlay Notification Center Sidebar panel */}
       {showNotifications && (

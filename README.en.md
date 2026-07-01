@@ -18,7 +18,7 @@ See each account's 5-hour and weekly quota, token health, and active Codex ident
 
 </div>
 
-![Codex Account Manager account cards with synthetic demo accounts](docs/images/account-dashboard.jpg)
+![Codex Account Manager account cards with synthetic demo accounts](docs/images/account-dashboard.png)
 
 > [!IMPORTANT]
 > The current Windows x64 release is a prerelease and is not code-signed.
@@ -32,12 +32,12 @@ easy to inspect and safe to switch.
 
 | Capability | What it does |
 | --- | --- |
-| Quota on every card | Shows the 5-hour and weekly windows with reset times |
+| Quota on every card | Shows the 5-hour and weekly windows actually returned upstream, with reset times |
 | Background sync | Refreshes missing or stale quota data without removing manual control |
 | One-click switching | Updates local Codex auth state and restarts the official Codex app |
 | Token health | Shows expiry state and refreshes one or all saved accounts |
 | Automatic switching | Uses local thresholds, account scope, and a local daemon |
-| Account maintenance | OAuth add, delete, subscription refresh, and reset-credit controls |
+| Account maintenance | OAuth add and reauthorization, delete, subscription refresh, and reset-credit controls |
 | Local-first storage | Runs without a project-operated cloud service or token sync |
 
 The app does not create, bypass, or modify account limits. Automatic switching
@@ -92,9 +92,9 @@ controls the current Windows user session. See [Privacy](docs/privacy.md) for
 the full data inventory, network behavior, and uninstall notes.
 
 > [!WARNING]
-> Switching accounts stops running `Codex.exe` and associated `node_repl.exe`
-> processes, writes the new authentication state, and restarts Codex. Let
-> active work finish before switching.
+> Switching accounts stops the official Codex process tree, writes the new
+> authentication state, and restarts Codex. Let active work finish before
+> switching.
 
 ## How it works
 
@@ -112,13 +112,13 @@ See [Architecture](docs/architecture.md) for module boundaries and data flow.
 
 ## Run from source
 
-Node.js 20 or newer is required.
+Node.js 22 or newer is required; CI and release builds use Node.js 24 LTS.
 
 ```powershell
 git clone https://github.com/3xiaoshayu/codex-account-manager.git
 cd codex-account-manager
 npm ci
-npm run check
+npm test
 npm start
 ```
 
@@ -171,9 +171,9 @@ account rotation through this application.
 
 ## License
 
-Source code is available under the [MIT License](LICENSE). The Mount Fuji
-background has a separate distribution license and is not covered by MIT;
-see [ASSET_LICENSE.md](ASSET_LICENSE.md). Third-party notices are listed in
+Source code is available under the [MIT License](LICENSE). Runtime backgrounds
+retain their respective third-party licenses; see
+[ASSET_LICENSE.md](ASSET_LICENSE.md). Third-party notices are listed in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 All emails, quota values, and dates in repository screenshots are synthetic.

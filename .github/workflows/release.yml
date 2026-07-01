@@ -28,7 +28,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install dependencies
@@ -42,8 +42,8 @@ jobs:
           "version=$($pkg.version)" >> $env:GITHUB_OUTPUT
           "tag=v$($pkg.version)" >> $env:GITHUB_OUTPUT
 
-      - name: Run project checks
-        run: npm run check
+      - name: Run tests and project checks
+        run: npm test
 
       - name: Build installer and ZIP
         run: npm run build:windows

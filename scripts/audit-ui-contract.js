@@ -4,7 +4,6 @@ const vm = require("node:vm");
 
 const root = path.resolve(__dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
-const rendererSource = read("src/renderer/app.js");
 const reactDesktopSource = read("src/renderer-react/api/desktop.ts");
 const preloadSource = read("src/preload/preload.js");
 const mainSource = [
@@ -22,7 +21,7 @@ const collect = (source, pattern, group = 1) => {
   return values;
 };
 
-const rendererMethods = collect(rendererSource, /\bAPI(?:\?\.|\.)([A-Za-z_$][\w$]*)/g);
+const rendererMethods = new Set();
 for (const method of collect(reactDesktopSource, /\bbridge\(\)\.([A-Za-z_$][\w$]*)/g)) rendererMethods.add(method);
 for (const method of collect(reactDesktopSource, /\bapi\.([A-Za-z_$][\w$]*)/g)) rendererMethods.add(method);
 const mainHandlers = collect(mainSource, /ipcMain\.handle\(["']([^"']+)["']/g);

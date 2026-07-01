@@ -20,7 +20,7 @@ migration from the latest beta have been verified.
 
 ```powershell
 npm ci
-npm run check
+npm test
 npm run build:windows
 ```
 
@@ -49,7 +49,7 @@ git push origin v<version>
 The Release workflow:
 
 1. installs locked dependencies with `npm ci`;
-2. verifies the renderer/preload/IPC contract;
+2. runs engine behavior tests and verifies the renderer/preload/IPC contract;
 3. verifies release metadata and the tag/version match;
 4. builds x64 NSIS and ZIP artifacts;
 5. creates `SHA256SUMS.txt`;

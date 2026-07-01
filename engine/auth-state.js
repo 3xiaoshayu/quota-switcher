@@ -1,0 +1,205 @@
+const fs = require("node:fs");
+const path = require("node:path");
+const { CODEX_DIR } = require("./config");
+const { sha256hex, jwtPayload, extractChatgptAccountId } = require("./crypto-utils");
+const { writeJsonAtomic } = require("./atomic-file");
+const { loadIdx, saveIdx, loadAcct, listAccts } = require("./storage");
+const { logInfo, logWarn } = require("./logger");
+
+const AUTH_PATH = path.join(CODEX_DIR, "auth.json");
+const PROJECTION_PATH = path.join(CODEX_DIR, "codex_auth_projection.json");
+
+function canonicalAuthTokens(value) {
+  const tokens = value?.tokens || {};
+  return {
+    id_token: String(tokens.id_token || ""),
+    access_token: String(tokens.access_token || ""),
+    refresh_token: String(tokens.refresh_token || ""),
+    account_id: String(tokens.account_id || value?.account_id || ""),
+  };
+}
+
+function accountAuthValue(account) {
+  return {
+    tokens: {
+      id_token: account?.tokens?.id_token || "",
+      access_token: account?.tokens?.access_token || "",
+      refresh_token: account?.tokens?.refresh_token || "",
+      account_id: account?.account_id || account?.tokens?.account_id || "",
+    },
+  };
+}
+
+function authFingerprint(value) {
+  return sha256hex(JSON.stringify(canonicalAuthTokens(value)));
+}
+
+function readJson(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function readOfficialAuth() {
+  const value = readJson(AUTH_PATH);
+  if (!value) return null;
+  const tokens = canonicalAuthTokens(value);
+  if (!tokens.access_token && !tokens.id_token) {
+    return { value, tokens, supported: false, fingerprint: authFingerprint(value), identity: null };
+  }
+  const payload = jwtPayload(tokens.id_token) || jwtPayload(tokens.access_token) || {};
+  const auth = payload["https://api.openai.com/auth"] || {};
+  const identity = {
+    email: payload.email ? String(payload.email) : null,
+    accountId: tokens.account_id || (auth.account_id ? String(auth.account_id) : extractChatgptAccountId(tokens.access_token)),
+  };
+  return { value, tokens, supported: true, fingerprint: authFingerprint(value), identity };
+}
+
+function readManagedProjection() {
+  return readJson(PROJECTION_PATH);
+}
+
+function writeManagedProjection(account, authValue = accountAuthValue(account)) {
+  const projection = {
+    version: 2,
+    writer: "codex-account-manager",
+    account_id: account.id,
+    email: account.email,
+    token_generation: account.token_generation || 0,
+    auth_fingerprint: authFingerprint(authValue),
+    written_at: Math.floor(Date.now() / 1000),
+  };
+  writeJsonAtomic(PROJECTION_PATH, projection);
+  return projection;
+}
+
+function publicOfficialIdentity(official) {
+  return official?.identity ? {
+    email: official.identity.email,
+    accountId: official.identity.accountId,
+  } : null;
+}
+
+function findMatchingAccount(official, accounts) {
+  if (!official?.supported) return null;
+  return accounts.find((account) => authFingerprint(accountAuthValue(account)) === official.fingerprint)
+    || accounts.find((account) => {
+      const accountId = account.account_id || account.tokens?.account_id || extractChatgptAccountId(account.tokens?.access_token || "");
+      return official.identity?.accountId && accountId === official.identity.accountId;
+    })
+    || null;
+}
+
+function inspectAuthState(options = {}) {
+  const migrateProjection = options.migrateProjection !== false;
+  const index = loadIdx();
+  const current = index.current_account_id ? loadAcct(index.current_account_id) : null;
+  const official = readOfficialAuth();
+  const projection = readManagedProjection();
+  const accounts = listAccts();
+
+  if (!official) {
+    return {
+      status: current ? "missing_official_auth" : "empty",
+      requiresResolution: !!current,
+      currentAccountId: current?.id || null,
+      matchedAccountId: null,
+      officialIdentity: null,
+      message: current ? "Official Codex authentication is missing." : null,
+    };
+  }
+
+  if (!official.supported) {
+    return {
+      status: "unsupported_official_auth",
+      requiresResolution: !!current,
+      currentAccountId: current?.id || null,
+      matchedAccountId: null,
+      officialIdentity: null,
+      message: "The official Codex authentication format is not an OAuth account.",
+    };
+  }
+
+  const matching = findMatchingAccount(official, accounts);
+  const projectionAligned = !!current
+    && projection?.account_id === current.id
+    && projection?.auth_fingerprint === official.fingerprint;
+  const accountAligned = !!current
+    && authFingerprint(accountAuthValue(current)) === official.fingerprint;
+
+  if (projectionAligned || accountAligned) {
+    if (migrateProjection && !projectionAligned) {
+      writeManagedProjection(current, official.value);
+      logInfo("Migrated the managed Codex authentication projection");
+    }
+    return {
+      status: "aligned",
+      requiresResolution: false,
+      currentAccountId: current.id,
+      matchedAccountId: current.id,
+      officialIdentity: publicOfficialIdentity(official),
+      message: null,
+    };
+  }
+
+  if (!current) {
+    return {
+      status: "unmanaged_official_auth",
+      requiresResolution: true,
+      currentAccountId: null,
+      matchedAccountId: matching?.id || null,
+      officialIdentity: publicOfficialIdentity(official),
+      message: "An official Codex login is present but is not managed yet.",
+    };
+  }
+
+  logWarn("Official Codex authentication differs from the managed current account");
+  return {
+    status: "conflict",
+    requiresResolution: true,
+    currentAccountId: current.id,
+    matchedAccountId: matching?.id || null,
+    officialIdentity: publicOfficialIdentity(official),
+    message: "Official Codex was signed into a different account outside this manager.",
+  };
+}
+
+function adoptOfficialAuth() {
+  const official = readOfficialAuth();
+  if (!official?.supported) throw new Error("No supported official Codex OAuth login was found");
+  const { upsert } = require("./oauth");
+  const result = upsert(official.tokens);
+  const account = result.account || result;
+  const index = loadIdx();
+  index.current_account_id = account.id;
+  saveIdx(index);
+  writeManagedProjection(account, official.value);
+  logInfo("Adopted the official Codex login as the managed current account");
+  return account;
+}
+
+function reapplyManagedAuth(accountId = null) {
+  const index = loadIdx();
+  const targetId = accountId || index.current_account_id;
+  const account = targetId ? loadAcct(targetId) : null;
+  if (!account) throw new Error("The managed current account is not available");
+  const { doSwitch } = require("./switch");
+  return doSwitch(account, { force: true });
+}
+
+module.exports = {
+  AUTH_PATH,
+  PROJECTION_PATH,
+  canonicalAuthTokens,
+  accountAuthValue,
+  authFingerprint,
+  readOfficialAuth,
+  readManagedProjection,
+  writeManagedProjection,
+  inspectAuthState,
+  adoptOfficialAuth,
+  reapplyManagedAuth,
+};

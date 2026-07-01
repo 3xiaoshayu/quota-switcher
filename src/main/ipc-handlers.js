@@ -2,20 +2,16 @@ const path = require("node:path");
 let engine = null;
 
 function getEngine() {
-    if (!engine) {
-        engine = require(path.resolve(__dirname, "..", "..", "engine"));
-    }
+    if (!engine) engine = require(path.resolve(__dirname, "..", "..", "engine"));
     return engine;
 }
 
 function ok(data) { return { success: true, data }; }
-function fail(msg) { return { success: false, error: String(msg) }; }
+function fail(message) { return { success: false, error: String(message) }; }
 
 function loadAcctById(eng, id) {
     if (!id) return null;
-    let a = eng.loadAcct(id);
-    if (a) return a;
-    return eng.listAccts().find(x => x.email === id || x.id === id) || null;
+    return eng.loadAcct(id) || eng.listAccts().find(account => account.email === id || account.id === id) || null;
 }
 
 function publicQuota(quota) {
@@ -40,6 +36,8 @@ function publicAccount(eng, account) {
         created_at: account.created_at,
         last_used: account.last_used,
         usage_updated_at: account.usage_updated_at,
+        quota_last_attempt_at: account.quota_last_attempt_at || null,
+        quota_next_retry_at: account.quota_next_retry_at || null,
         requires_reauth: !!account.requires_reauth,
         reauth_reason: account.reauth_reason || null,
         quota: publicQuota(account.quota),
@@ -49,8 +47,12 @@ function publicAccount(eng, account) {
             timestamp: account.quota_error.timestamp || null,
         } : null,
         reset_credits: account.reset_credits ? {
-            available_count: account.reset_credits.available_count || 0,
+            available_count: account.reset_credits.available_count ?? 0,
             next_expires_at: account.reset_credits.next_expires_at || null,
+        } : null,
+        reset_credits_error: account.reset_credits_error ? {
+            message: account.reset_credits_error.message || String(account.reset_credits_error),
+            timestamp: account.reset_credits_error.timestamp || null,
         } : null,
         token_status: {
             accessAvailable: !!accessToken,
@@ -71,22 +73,20 @@ function publicAutoSwitchResult(eng, result) {
     };
 }
 
-// ═══════════════ 注册所有 IPC ═══════════════
+async function withFreshAccount(eng, id, task) {
+    return eng.withAccountLock(id, async () => {
+        const account = loadAcctById(eng, id);
+        if (!account) return fail("Account does not exist");
+        return task(account);
+    });
+}
+
 function registerIpcHandlers(engineInstance = null, services = {}) {
     const { ipcMain, BrowserWindow, app, shell } = require("electron");
     if (engineInstance) engine = engineInstance;
     const eng = engineInstance || getEngine();
     const updateService = services.updateService || null;
 
-    // 窗口
-    ipcMain.handle("window:close", () => BrowserWindow.getFocusedWindow()?.close());
-    ipcMain.handle("window:minimize", () => BrowserWindow.getFocusedWindow()?.minimize());
-    ipcMain.handle("window:maximize", () => {
-        const w = BrowserWindow.getFocusedWindow();
-        if (w) w.isMaximized() ? w.unmaximize() : w.maximize();
-    });
-
-    // 应用与发布状态
     ipcMain.handle("app:info", () => ok(updateService?.getAppInfo?.() || {
         name: "Codex Account Manager",
         version: app.getVersion(),
@@ -95,195 +95,280 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         updateEnabled: false,
         repository: "https://github.com/3xiaoshayu/codex-account-manager",
     }));
-
     ipcMain.handle("update:status", () => ok(updateService?.getStatus?.() || {
         status: "disabled",
         enabled: false,
         channel: String(app.getVersion()).includes("-") ? "beta" : "stable",
-        message: "更新服务未初始化",
+        message: "Update service is not initialized",
     }));
-
     ipcMain.handle("update:check", async () => {
-        try {
-            return ok(updateService ? await updateService.checkForUpdates() : null);
-        } catch (e) { return fail(e.message); }
+        try { return ok(updateService ? await updateService.checkForUpdates() : null); }
+        catch (error) { return fail(error.message); }
     });
-
     ipcMain.handle("update:install", () => {
-        try {
-            return ok(updateService ? updateService.installUpdate() : null);
-        } catch (e) { return fail(e.message); }
+        try { return ok(updateService ? updateService.installUpdate() : null); }
+        catch (error) { return fail(error.message); }
     });
-
-    ipcMain.handle("app:openExternal", async (e, url) => {
+    ipcMain.handle("app:openExternal", async (event, url) => {
         try {
             const target = String(url || "");
             if (!/^https?:\/\//i.test(target)) return fail("Unsupported external URL");
             await shell.openExternal(target);
             return ok(true);
-        } catch (e) { return fail(e.message); }
+        } catch (error) { return fail(error.message); }
     });
+    ipcMain.handle("app:openLogs", async () => {
+        try {
+            const error = await shell.openPath(eng.getLogDir());
+            return error ? fail(error) : ok(true);
+        } catch (openError) { return fail(openError.message); }
+    });
+    ipcMain.handle("storage:diagnostics", () => ok(eng.getStorageDiagnostics()));
 
     ipcMain.handle("codex:status", () => {
-        try {
-            return ok(eng.getCodexInstallationStatus());
-        } catch (e) { return fail(e.message); }
+        try { return ok(eng.getCodexInstallationStatus()); }
+        catch (error) { return fail(error.message); }
     });
 
-    // 账号列表 — 直接返回 account 对象数组
-    ipcMain.handle("account:list", () => {
-        const accts = eng.listAccts();
-        return ok(accts.map((account) => publicAccount(eng, account)));
-    });
-
+    ipcMain.handle("account:list", () => ok(eng.listAccts().map(account => publicAccount(eng, account))));
     ipcMain.handle("account:current", () => ok(publicAccount(eng, eng.currentAcct())));
-
-    ipcMain.handle("account:get", (e, id) => {
-        const a = eng.loadAcct(id);
-        return a ? ok(publicAccount(eng, a)) : fail("账号不存在");
+    ipcMain.handle("account:get", (event, id) => {
+        const account = eng.loadAcct(id);
+        return account ? ok(publicAccount(eng, account)) : fail("Account does not exist");
+    });
+    ipcMain.handle("account:authState", () => {
+        try { return ok(eng.inspectAuthState()); }
+        catch (error) { return fail(error.message); }
+    });
+    ipcMain.handle("account:adoptOfficial", () => {
+        try { return ok(publicAccount(eng, eng.adoptOfficialAuth())); }
+        catch (error) { return fail(error.message); }
+    });
+    ipcMain.handle("account:reapplyManaged", (event, id) => {
+        try {
+            const result = eng.reapplyManagedAuth(id || null);
+            return ok({ ...result, account: publicAccount(eng, result.account) });
+        } catch (error) { return fail(error.message); }
     });
 
-    // OAuth 登录 — 打开浏览器 + 监听回调
     ipcMain.handle("account:add", async () => {
         try {
-            const acct = await eng.oauthLoginFlow();
-            if (!acct) return fail("登录已取消");
-            eng.doSwitch(acct);
-            return ok(publicAccount(eng, acct));
-        } catch (e) { return fail(e.message); }
+            const result = await eng.oauthLoginFlow();
+            return ok({
+                account: publicAccount(eng, result.account),
+                mismatch: !!result.mismatch,
+                targetAccountId: result.targetAccountId || null,
+            });
+        } catch (error) { return fail(error.message); }
     });
-
-    // 删除
-    ipcMain.handle("account:delete", (e, id) => {
+    ipcMain.handle("account:reauthorize", async (event, id) => {
         try {
-            const a = loadAcctById(eng, id);
-            if (!a) return fail("账号不存在");
-            const idx = eng.loadIdx();
-            idx.accounts = idx.accounts.filter(x => x.id !== a.id);
-            if (idx.current_account_id === a.id) idx.current_account_id = null;
-            eng.saveIdx(idx);
-            eng.deleteAcct(a.id);
-            return ok(true);
-        } catch (e) { return fail(e.message); }
+            const target = loadAcctById(eng, id);
+            if (!target) return fail("Account does not exist");
+            const result = await eng.oauthLoginFlow({ targetAccountId: target.id });
+            return ok({
+                account: publicAccount(eng, result.account),
+                mismatch: !!result.mismatch,
+                targetAccountId: target.id,
+            });
+        } catch (error) { return fail(error.message); }
+    });
+    ipcMain.handle("oauth:status", () => ok(eng.getOAuthStatus()));
+    ipcMain.handle("oauth:cancel", () => {
+        try { return ok(eng.cancelOAuth()); }
+        catch (error) { return fail(error.message); }
+    });
+    ipcMain.handle("oauth:completeManual", (event, callbackUrl) => {
+        try { return ok(eng.completeOAuthManually(callbackUrl)); }
+        catch (error) { return fail(error.message); }
     });
 
-    // 切换
-    ipcMain.handle("account:switch", (e, id) => {
+    ipcMain.handle("account:delete", async (event, id) => {
         try {
-            const a = loadAcctById(eng, id);
-            if (!a) return fail("账号不存在: " + id);
-            const result = eng.doSwitch(a);
-            return ok({ ...result, account: publicAccount(eng, result.account) });
-        } catch (e) { return fail(e.message); }
+            return await withFreshAccount(eng, id, async account => {
+                const index = eng.loadIdx();
+                if (index.current_account_id === account.id) {
+                    return fail("Switch to another account before deleting the current account.");
+                }
+                index.accounts = index.accounts.filter(item => item.id !== account.id);
+                eng.saveIdx(index);
+                eng.deleteAcct(account.id);
+                return ok(true);
+            });
+        } catch (error) { return fail(error.message); }
     });
-
-    // 配额
-    ipcMain.handle("quota:refresh", async (e, id) => {
+    ipcMain.handle("account:switch", async (event, id) => {
         try {
-            const a = loadAcctById(eng, id);
-            if (!a) return fail("账号不存在");
-            const q = await eng.refreshQuota(a);
-            return ok(publicQuota(q));
-        } catch (e) { return fail(e.message); }
+            return await eng.withAccountLocks(["__switch__", id], async () => {
+                const account = loadAcctById(eng, id);
+                if (!account) return fail("Account does not exist");
+                const result = eng.doSwitch(account);
+                return ok({ ...result, account: publicAccount(eng, result.account) });
+            });
+        } catch (error) { return fail(error.message); }
     });
 
+    ipcMain.handle("quota:refresh", async (event, id) => {
+        try {
+            return await withFreshAccount(eng, id, async account => {
+                const quota = await eng.refreshQuota(account, { force: true });
+                return ok(publicQuota(quota));
+            });
+        } catch (error) { return fail(error.message); }
+    });
     ipcMain.handle("quota:refreshAll", async () => {
-        const r = [];
-        for (const a of eng.listAccts()) {
-            try { r.push({ id: a.id, email: a.email, quota: publicQuota(await eng.refreshQuota(a)) }); }
-            catch (e) { r.push({ id: a.id, email: a.email, error: e.message }); }
+        const results = [];
+        for (const listed of eng.listAccts()) {
+            try {
+                await eng.withAccountLock(listed.id, async () => {
+                    const account = eng.loadAcct(listed.id);
+                    if (!account) return;
+                    const quota = await eng.refreshQuota(account, { force: true });
+                    results.push({ id: account.id, email: account.email, quota: publicQuota(quota) });
+                });
+            } catch (error) {
+                results.push({ id: listed.id, email: listed.email, error: error.message });
+            }
         }
-        return ok(r);
+        return ok(results);
     });
 
-    // Token
-    ipcMain.handle("token:refresh", async (e, id) => {
-        try { const a = loadAcctById(eng, id); if (!a) return fail("账号不存在"); return ok(await eng.refreshOneTok(a)); }
-        catch (e) { return fail(e.message); }
+    ipcMain.handle("token:refresh", async (event, id) => {
+        try { return await withFreshAccount(eng, id, async account => ok(await eng.refreshOneTok(account))); }
+        catch (error) { return fail(error.message); }
     });
-    ipcMain.handle("token:refreshAll", async (e, force) => {
-        try { return ok(await eng.refreshAll(!!force)); } catch (e) { return fail(e.message); }
+    ipcMain.handle("token:refreshAll", async (event, force) => {
+        try { return ok(await eng.refreshAll(!!force)); }
+        catch (error) { return fail(error.message); }
     });
-    ipcMain.handle("token:status", (e, id) => {
-        const a = loadAcctById(eng, id);
-        if (!a || !a.tokens?.access_token) return ok({ expired: true, refreshAvailable: false });
-        const exp = eng.jwtExp(a.tokens.access_token);
-        return ok({ expired: eng.isTokenExpired(a.tokens.access_token), refreshAvailable: !!a.tokens.refresh_token, expiryDate: exp, timeLeft: exp ? (exp - eng.ts()) : null });
+    ipcMain.handle("token:status", (event, id) => {
+        const account = loadAcctById(eng, id);
+        if (!account?.tokens?.access_token) return ok({ expired: true, refreshAvailable: false });
+        const expiryDate = eng.jwtExp(account.tokens.access_token);
+        return ok({
+            expired: eng.isTokenExpired(account.tokens.access_token),
+            refreshAvailable: !!account.tokens.refresh_token,
+            expiryDate,
+            timeLeft: expiryDate ? expiryDate - eng.ts() : null,
+        });
     });
-
-    // 重置额度
-    ipcMain.handle("reset:consume", async (e, id) => {
-        try { const a = loadAcctById(eng, id); if (!a) return fail("账号不存在"); await eng.consumeResetCredit(a); return ok(true); }
-        catch (e) { return fail(e.message); }
-    });
-
-    // 订阅
-    ipcMain.handle("subscription:refresh", async (e, id, force) => {
-        try { const a = loadAcctById(eng, id); if (!a) return fail("账号不存在"); const changed = await eng.refreshSubscription(a, !!force); return ok({ changed, plan_type: a.plan_type, subscription_active_until: a.subscription_active_until }); }
-        catch (e) { return fail(e.message); }
-    });
-
-    // 自动切号
-    ipcMain.handle("autoswitch:config:get", () => ok(eng.loadAutoSwitchCfg()));
-    ipcMain.handle("autoswitch:config:save", (e, cfg) => {
+    ipcMain.handle("reset:consume", async (event, id) => {
         try {
-            eng.saveAutoSwitchCfg(cfg);
-            restartDaemonTimer();
-            return ok(true);
-        } catch (e) { return fail(e.message); }
+            return await withFreshAccount(eng, id, async account => {
+                await eng.consumeResetCredit(account);
+                return ok(true);
+            });
+        } catch (error) { return fail(error.message); }
     });
-    ipcMain.handle("autoswitch:tick", async () => { try { return ok(publicAutoSwitchResult(eng, await eng.autoSwitchTick(eng.loadAutoSwitchCfg()))); } catch (e) { return fail(e.message); } });
+    ipcMain.handle("subscription:refresh", async (event, id, force) => {
+        try {
+            return await withFreshAccount(eng, id, async account => {
+                const changed = await eng.refreshSubscription(account, !!force);
+                return ok({
+                    changed,
+                    plan_type: account.plan_type,
+                    subscription_active_until: account.subscription_active_until,
+                });
+            });
+        } catch (error) { return fail(error.message); }
+    });
 
-    // 守护进程
     let daemonTimer = null;
-    const getDaemonIntervalMinutes = () => {
-        if (typeof eng.getTickIntervalMinutes === "function") return eng.getTickIntervalMinutes();
-        return Math.max(1, Math.round(eng.getTickIntervalMs() / 60000));
+    let daemonInFlight = false;
+    const daemonRuntimeState = {
+        lastRunAt: null,
+        lastSuccessAt: null,
+        lastError: null,
+        pausedReason: null,
     };
+    const daemonIntervalMinutes = () => typeof eng.getTickIntervalMinutes === "function"
+        ? eng.getTickIntervalMinutes()
+        : Math.max(1, Math.round(eng.getTickIntervalMs() / 60000));
 
     const runDaemon = async () => {
+        if (daemonInFlight) return;
+        daemonInFlight = true;
         try {
             const result = await eng.runDaemonWorker();
+            daemonRuntimeState.lastRunAt = result.completedAt || Date.now();
+            daemonRuntimeState.pausedReason = result.pausedReason || null;
+            daemonRuntimeState.lastError = result.failures?.length
+                ? result.failures.map(item => item.message).join("; ")
+                : null;
+            if (!result.pausedReason && !result.failures?.length) {
+                daemonRuntimeState.lastSuccessAt = result.completedAt || Date.now();
+            }
             const safeResult = {
                 ...result,
                 autoSwitchResult: publicAutoSwitchResult(eng, result.autoSwitchResult),
             };
-            BrowserWindow.getAllWindows().forEach(w => w.webContents.send("daemon:tick", { ts: Date.now(), result: safeResult }));
+            BrowserWindow.getAllWindows().forEach(window => window.webContents.send("daemon:tick", {
+                ts: Date.now(),
+                result: safeResult,
+            }));
             if (safeResult.autoSwitchResult?.switched) {
-                BrowserWindow.getAllWindows().forEach(w => w.webContents.send("autoswitch:executed", safeResult.autoSwitchResult));
+                BrowserWindow.getAllWindows().forEach(window => window.webContents.send("autoswitch:executed", safeResult.autoSwitchResult));
+            }
+            if (safeResult.pausedReason === "auth_conflict") {
+                BrowserWindow.getAllWindows().forEach(window => window.webContents.send("auth:conflict", safeResult.authState));
+            }
+            if (safeResult.failures?.length) {
+                BrowserWindow.getAllWindows().forEach(window => window.webContents.send("daemon:error", {
+                    message: safeResult.failures.map(item => item.message).join("; "),
+                    failures: safeResult.failures,
+                }));
             }
         } catch (error) {
-            BrowserWindow.getAllWindows().forEach(w => w.webContents.send("daemon:error", { message: error.message }));
+            daemonRuntimeState.lastRunAt = Date.now();
+            daemonRuntimeState.lastError = error.message;
+            BrowserWindow.getAllWindows().forEach(window => window.webContents.send("daemon:error", { message: error.message }));
+        } finally {
+            daemonInFlight = false;
         }
     };
 
     const startDaemonTimer = () => {
         daemonTimer = setInterval(runDaemon, eng.getTickIntervalMs());
     };
-
     const restartDaemonTimer = () => {
         if (!daemonTimer) return;
         clearInterval(daemonTimer);
         startDaemonTimer();
     };
-
     const startDaemon = () => {
-        if (daemonTimer) return ok("已在运行");
+        if (daemonTimer) return ok("Already running");
         startDaemonTimer();
-        return ok("已启动");
+        void runDaemon();
+        return ok("Started");
     };
-
     const stopDaemon = () => {
-        if (!daemonTimer) return ok("未运行");
-        clearInterval(daemonTimer); daemonTimer = null;
-        return ok("已停止");
+        if (!daemonTimer) return ok("Not running");
+        clearInterval(daemonTimer);
+        daemonTimer = null;
+        return ok("Stopped");
     };
 
+    ipcMain.handle("autoswitch:config:get", () => ok(eng.loadAutoSwitchCfg()));
+    ipcMain.handle("autoswitch:config:save", (event, config) => {
+        try {
+            eng.saveAutoSwitchCfg(config);
+            restartDaemonTimer();
+            return ok(true);
+        } catch (error) { return fail(error.message); }
+    });
+    ipcMain.handle("autoswitch:tick", async () => {
+        try { return ok(publicAutoSwitchResult(eng, await eng.autoSwitchTick(eng.loadAutoSwitchCfg()))); }
+        catch (error) { return fail(error.message); }
+    });
     ipcMain.handle("daemon:start", startDaemon);
     ipcMain.handle("daemon:stop", stopDaemon);
-    ipcMain.handle("daemon:status", () => ok({ running: daemonTimer !== null, syncIntervalMinutes: getDaemonIntervalMinutes() }));
+    ipcMain.handle("daemon:status", () => ok({
+        running: daemonTimer !== null,
+        syncIntervalMinutes: daemonIntervalMinutes(),
+        ...daemonRuntimeState,
+    }));
 
-    return { startDaemon, stopDaemon };
+    return { startDaemon, stopDaemon, runDaemon };
 }
 
 module.exports = { registerIpcHandlers };

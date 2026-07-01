@@ -18,7 +18,7 @@
 
 </div>
 
-![Codex Account Manager 账号卡片界面，使用虚构演示账号](docs/images/account-dashboard.jpg)
+![Codex Account Manager 账号卡片界面，使用虚构演示账号](docs/images/account-dashboard.png)
 
 > [!IMPORTANT]
 > 当前版本为 Windows x64 预发布版，安装包尚未进行代码签名。Windows SmartScreen
@@ -30,12 +30,12 @@ Codex Account Manager 专注于一个具体工作流：让多个 Codex 账号的
 
 | 能力 | 说明 |
 | --- | --- |
-| 卡片式额度 | 每个账号固定显示 5 小时额度、周额度和重置时间 |
+| 卡片式额度 | 在账号卡片中显示上游实际提供的 5 小时、周额度窗口和重置时间 |
 | 后台同步 | 自动更新缺失或过期的额度数据，同时保留手动刷新 |
 | 一键切换 | 更新本机 Codex 登录状态并重新启动官方 Codex 客户端 |
 | Token 健康 | 显示过期状态、剩余时间，并支持单账号或批量刷新 |
 | 自动切号 | 可配置额度阈值、候选范围和本地守护进程 |
-| 账号维护 | OAuth 添加、删除、订阅刷新和可用重置额度管理 |
+| 账号维护 | OAuth 添加与重新授权、删除、订阅刷新和可用重置额度管理 |
 | 本地优先 | 不提供项目自建云服务，不上传账号列表或 Token |
 
 本工具不会增加、绕过或修改任何账号额度。自动切号只会在你明确保存的账号之间，
@@ -85,8 +85,8 @@ DPAPI 不能防御已经控制当前 Windows 用户会话的恶意软件或管�
 网络请求和卸载说明见 [隐私说明](docs/privacy.md)。
 
 > [!WARNING]
-> 切换账号会关闭正在运行的 `Codex.exe` 及关联的 `node_repl.exe`，写入新的认证状态后
-> 重新启动 Codex。切换前请等待正在执行的任务完成。
+> 切换账号会关闭官方 Codex 进程树，写入新的认证状态后重新启动 Codex。
+> 切换前请等待正在执行的任务完成。
 
 ## 工作原理
 
@@ -102,13 +102,13 @@ DPAPI 不能防御已经控制当前 Windows 用户会话的恶意软件或管�
 
 ## 从源码运行
 
-需要 Node.js 20 或更高版本。
+需要 Node.js 22 或更高版本；CI 和 Release 使用 Node.js 24 LTS。
 
 ```powershell
 git clone https://github.com/3xiaoshayu/codex-account-manager.git
 cd codex-account-manager
 npm ci
-npm run check
+npm test
 npm start
 ```
 
@@ -157,8 +157,8 @@ ChatGPT 是其各自权利人的商标。
 
 ## 许可证
 
-源代码使用 [MIT License](LICENSE)。富士山背景图片采用单独分发许可，不属于 MIT
-授权范围，见 [ASSET_LICENSE.md](ASSET_LICENSE.md)。第三方组件许可见
+源代码使用 [MIT License](LICENSE)。运行时背景图片采用其各自的第三方许可，见
+[ASSET_LICENSE.md](ASSET_LICENSE.md)。第三方组件许可见
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 README 截图中的邮箱、额度和日期均为虚构演示数据。

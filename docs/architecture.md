@@ -9,11 +9,13 @@ explicit boundary between the renderer and privileged local operations.
 | --- | --- | --- |
 | Electron main | `src/main` | Window lifecycle, IPC handlers, DPAPI setup, updater integration |
 | Preload bridge | `src/preload/preload.js` | Narrow `contextBridge` API exposed to the renderer |
-| Renderer | `src/renderer` | Account cards, quota views, settings, dialogs, and interaction state |
+| Renderer source | `src/renderer-react` | Account cards, quota views, settings, dialogs, and interaction state |
+| Renderer build | `src/renderer-dist` | Generated Vite output loaded by Electron; ignored by Git |
 | Domain engine | `engine` | OAuth, storage, quota, token refresh, switching, and auto-switch policy |
 
-The renderer runs with `contextIsolation: true`, `nodeIntegration: false`, and
-Electron sandboxing enabled. It cannot access Node.js APIs directly.
+The renderer runs with `contextIsolation: true` and `nodeIntegration: false`.
+It cannot access Node.js APIs directly. Electron sandbox hardening is planned
+for a later public-release security pass.
 
 ## Startup flow
 
@@ -31,9 +33,13 @@ The manager stores its own state under `%USERPROFILE%\.codex-switch`:
 ```text
 .codex-switch/
   accounts.json
+  accounts.json.bak
   auto-switch.json
+  codex_oauth_pending.json
+  logs/
   accounts/
     codex_<id>.json
+    codex_<id>.json.bak
 ```
 
 Account files contain metadata plus a `tokens_encrypted` payload protected by
@@ -47,14 +53,19 @@ replacing it during a switch.
 ## Switching flow
 
 1. Confirm that the official Microsoft Store Codex app is installed.
-2. Stop `Codex.exe` and the associated `node_repl.exe` process.
-3. Back up the current Codex `auth.json`.
-4. Remove custom Codex API base URL overrides from `config.toml`.
-5. Write the selected account to `auth.json` through a temporary file and rename.
-6. Update the manager's current-account index and last-used timestamp.
-7. Launch the official Codex app through its AUMID.
+2. Request a graceful close for the official Codex process tree, then force
+   only matching processes that remain after the timeout.
+3. Snapshot `auth.json`, the managed projection, account index, selected
+   account record, and affected configuration.
+4. Remove custom root Codex API base URL overrides from `config.toml`.
+5. Atomically write the selected account authentication, projection, and index.
+6. Launch and verify the official Codex app through its AUMID.
+7. Restore every snapshot and restart the previous state if any step fails.
 
 The same switching path is used by both manual and automatic switching.
+The managed projection contains an authentication fingerprint. A mismatch with
+official `auth.json` pauses automatic authentication writes and switching until
+the user resolves the conflict.
 
 ## Quota and token flow
 
@@ -93,7 +104,8 @@ resources/              Windows application icon
 scripts/                Release and contract verification
 src/main/               Electron main process
 src/preload/            Isolated renderer bridge
-src/renderer/           Current UI and bundled visual assets
+src/renderer-react/     Current React UI source
+src/renderer-dist/      Generated renderer build (not tracked)
 docs/                   Architecture, privacy, release, and support docs
 .github/                CI, release automation, and community templates
 ```
@@ -104,7 +116,7 @@ Run the complete non-destructive check suite:
 
 ```powershell
 npm ci
-npm run check
+npm test
 npm run build:dir
 ```
 

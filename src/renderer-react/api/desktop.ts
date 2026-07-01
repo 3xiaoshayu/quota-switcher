@@ -2,21 +2,27 @@ import {
   AccountQuota,
   DesktopAppInfo,
   DesktopAutoSwitchConfig,
+  DesktopAuthState,
   DesktopCodexStatus,
+  DesktopOAuthStatus,
   DesktopUpdateStatus,
+  StorageDiagnostic,
 } from '../types';
 
 type ApiResponse<T> = { success: true; data: T } | { success: false; error?: string };
 
 interface DesktopQuota {
   hourly_percentage?: number | null;
+  hourly_remaining_percentage?: number | null;
   hourly_reset_time?: string | number | null;
   hourly_window_minutes?: number | null;
   hourly_window_present?: boolean;
   weekly_percentage?: number | null;
+  weekly_remaining_percentage?: number | null;
   weekly_reset_time?: string | number | null;
   weekly_window_minutes?: number | null;
   weekly_window_present?: boolean;
+  weekly_blocks_hourly?: boolean;
   reset_credits_available?: number | null;
   reset_credits_next_expires_at?: string | number | null;
   plan_type?: string | null;
@@ -37,6 +43,8 @@ interface DesktopAccount {
   quota?: DesktopQuota | null;
   quota_error?: { code?: string | null; message?: string | null; timestamp?: string | number | null } | null;
   reset_credits?: { available_count?: number | null; next_expires_at?: string | number | null } | null;
+  reset_credits_error?: { message?: string | null; timestamp?: string | number | null } | null;
+  quota_next_retry_at?: string | number | null;
   token_status?: {
     accessAvailable?: boolean;
     refreshAvailable?: boolean;
@@ -56,6 +64,16 @@ type AutoSwitchResult = {
 type DesktopDaemonStatus = {
   running: boolean;
   syncIntervalMinutes?: number | null;
+  lastRunAt?: string | number | null;
+  lastSuccessAt?: string | number | null;
+  lastError?: string | null;
+  pausedReason?: string | null;
+};
+
+type DesktopOAuthResult = {
+  account: DesktopAccount | null;
+  mismatch?: boolean;
+  targetAccountId?: string | null;
 };
 
 type DesktopSubscriptionRefreshResult = {
@@ -71,9 +89,18 @@ interface DesktopBridge {
   checkForUpdates: () => Promise<ApiResponse<unknown>>;
   installUpdate: () => Promise<ApiResponse<unknown>>;
   openExternal: (url: string) => Promise<ApiResponse<boolean>>;
+  openLogs: () => Promise<ApiResponse<boolean>>;
+  getStorageDiagnostics: () => Promise<ApiResponse<StorageDiagnostic[]>>;
   listAccounts: () => Promise<ApiResponse<DesktopAccount[]>>;
   getCurrentAccount: () => Promise<ApiResponse<DesktopAccount | null>>;
-  addAccount: () => Promise<ApiResponse<DesktopAccount | null>>;
+  addAccount: () => Promise<ApiResponse<DesktopOAuthResult>>;
+  reauthorizeAccount: (id: string) => Promise<ApiResponse<DesktopOAuthResult>>;
+  getOAuthStatus: () => Promise<ApiResponse<DesktopOAuthStatus>>;
+  cancelOAuth: () => Promise<ApiResponse<boolean>>;
+  completeOAuthManually: (callbackUrl: string) => Promise<ApiResponse<boolean>>;
+  getAuthState: () => Promise<ApiResponse<DesktopAuthState>>;
+  adoptOfficialAccount: () => Promise<ApiResponse<DesktopAccount>>;
+  reapplyManagedAccount: (id?: string | null) => Promise<ApiResponse<unknown>>;
   deleteAccount: (id: string) => Promise<ApiResponse<boolean>>;
   switchAccount: (id: string) => Promise<ApiResponse<unknown>>;
   refreshQuota: (id: string) => Promise<ApiResponse<DesktopQuota>>;
@@ -92,6 +119,7 @@ interface DesktopBridge {
   onDaemonError?: (cb: (payload: { message?: string }) => void) => () => void;
   onAutoSwitch?: (cb: (payload: AutoSwitchResult) => void) => () => void;
   onUpdateStatus?: (cb: (payload: DesktopUpdateStatus) => void) => () => void;
+  onAuthConflict?: (cb: (payload: DesktopAuthState) => void) => () => void;
 }
 
 declare global {
@@ -111,6 +139,11 @@ export interface DashboardState {
   appInfo: DesktopAppInfo | null;
   codexStatus: DesktopCodexStatus | null;
   updateStatus: DesktopUpdateStatus | null;
+  authState: DesktopAuthState;
+  storageDiagnostics: StorageDiagnostic[];
+  daemonLastSuccessAt?: string | number | null;
+  daemonLastError?: string | null;
+  daemonPausedReason?: string | null;
 }
 
 export const QUOTA_AUTO_SYNC_STALE_MS = 10 * 60 * 1000;
@@ -157,6 +190,7 @@ function clampSyncIntervalMinutes(value: unknown): number {
 }
 
 function clampPercent(value: unknown): number | null {
+  if (value == null || value === '') return null;
   const number = Number(value);
   if (!Number.isFinite(number)) return null;
   return Math.max(0, Math.min(100, number));
@@ -219,8 +253,15 @@ function statusForUi(
   if (account.requires_reauth) return 'SUSPENDED';
   if (account.token_status?.expired || account.token_status?.accessAvailable === false) return 'SUSPENDED';
   if (account.quota_error) return 'WARNING';
-  const hourly = clampPercent(account.quota?.hourly_percentage);
-  const weekly = clampPercent(account.quota?.weekly_percentage);
+  const hasPresence = account.quota?.hourly_window_present !== undefined || account.quota?.weekly_window_present !== undefined;
+  const hourlyPresent = !hasPresence || account.quota?.hourly_window_present === true;
+  const weeklyPresent = !hasPresence || account.quota?.weekly_window_present === true;
+  const hourly = hourlyPresent
+    ? clampPercent(account.quota?.hourly_remaining_percentage ?? account.quota?.hourly_percentage)
+    : null;
+  const weekly = weeklyPresent
+    ? clampPercent(account.quota?.weekly_remaining_percentage ?? account.quota?.weekly_percentage)
+    : null;
   if (hourly === 0 || weekly === 0) return 'EXPIRED';
   if (hourly !== null && hourly <= Number(config.primary_threshold ?? 20)) return 'LOW_QUOTA';
   if (weekly !== null && weekly <= Number(config.secondary_threshold ?? 30)) return 'WARNING';
@@ -237,8 +278,11 @@ export function mapAccountForUi(
   currentAccount: DesktopAccount | null,
   config: DesktopAutoSwitchConfig,
 ): AccountQuota {
-  const hourlyRemaining = clampPercent(account.quota?.hourly_percentage);
-  const weeklyRemaining = clampPercent(account.quota?.weekly_percentage);
+  const hourlyRemaining = clampPercent(account.quota?.hourly_remaining_percentage ?? account.quota?.hourly_percentage);
+  const weeklyRemaining = clampPercent(account.quota?.weekly_remaining_percentage ?? account.quota?.weekly_percentage);
+  const hasPresence = account.quota?.hourly_window_present !== undefined || account.quota?.weekly_window_present !== undefined;
+  const hourlyPresent = !hasPresence || account.quota?.hourly_window_present === true;
+  const weeklyPresent = !hasPresence || account.quota?.weekly_window_present === true;
   const resetCredits = Number(
     account.reset_credits?.available_count
     ?? account.quota?.reset_credits_available
@@ -252,10 +296,13 @@ export function mapAccountForUi(
     name: displayName(account.email),
     email: account.email,
     status: statusForUi(account, config),
-    fiveHourQuotaUsed: hourlyRemaining ?? 0,
+    fiveHourQuotaRemaining: hourlyPresent ? hourlyRemaining : null,
     fiveHourQuotaTotal: 100,
-    weeklyQuotaUsed: weeklyRemaining ?? 0,
+    weeklyQuotaRemaining: weeklyPresent ? weeklyRemaining : null,
     weeklyQuotaTotal: 100,
+    fiveHourQuotaPresent: hourlyPresent,
+    weeklyQuotaPresent: weeklyPresent,
+    weeklyBlocksFiveHour: !!account.quota?.weekly_blocks_hourly,
     priority: priorityForUi(account),
     plan: planForUi(account.plan_type || account.quota?.plan_type),
     tokenValidity: tokenStatus.expired ? 'Expired' : `${formatDuration(tokenStatus.timeLeft)} left`,
@@ -298,6 +345,8 @@ export const desktopApi = {
       appResponse,
       codexResponse,
       updateResponse,
+      authStateResponse,
+      diagnosticsResponse,
     ] = await Promise.all([
       api.listAccounts(),
       api.getCurrentAccount(),
@@ -306,6 +355,8 @@ export const desktopApi = {
       api.getAppInfo(),
       api.getCodexStatus(),
       api.getUpdateStatus(),
+      api.getAuthState(),
+      api.getStorageDiagnostics(),
     ]);
 
     const config = expectData(configResponse, 'Read auto-switch config') || defaultConfig();
@@ -323,6 +374,11 @@ export const desktopApi = {
       appInfo: expectData(appResponse, 'Read app info') || null,
       codexStatus: expectData(codexResponse, 'Read Codex status') || null,
       updateStatus: expectData(updateResponse, 'Read update status') || null,
+      authState: expectData(authStateResponse, 'Read authentication state'),
+      storageDiagnostics: expectData(diagnosticsResponse, 'Read storage diagnostics') || [],
+      daemonLastSuccessAt: daemon?.lastSuccessAt || null,
+      daemonLastError: daemon?.lastError || null,
+      daemonPausedReason: daemon?.pausedReason || null,
     };
   },
 
@@ -346,6 +402,30 @@ export const desktopApi = {
 
   async addAccount() {
     return expectData(await bridge().addAccount(), 'Add account');
+  },
+
+  async reauthorizeAccount(id: string) {
+    return expectData(await bridge().reauthorizeAccount(id), 'Reauthorize account');
+  },
+
+  async getOAuthStatus() {
+    return expectData(await bridge().getOAuthStatus(), 'Read OAuth status');
+  },
+
+  async cancelOAuth() {
+    return expectData(await bridge().cancelOAuth(), 'Cancel OAuth');
+  },
+
+  async completeOAuthManually(callbackUrl: string) {
+    return expectData(await bridge().completeOAuthManually(callbackUrl), 'Complete OAuth manually');
+  },
+
+  async adoptOfficialAccount() {
+    return expectData(await bridge().adoptOfficialAccount(), 'Adopt official account');
+  },
+
+  async reapplyManagedAccount(id?: string | null) {
+    return expectData(await bridge().reapplyManagedAccount(id), 'Reapply managed account');
   },
 
   async deleteAccount(id: string) {
@@ -396,11 +476,16 @@ export const desktopApi = {
     return expectData(await bridge().openExternal(url), 'Open external URL');
   },
 
+  async openLogs() {
+    return expectData(await bridge().openLogs(), 'Open log folder');
+  },
+
   subscribe(events: {
     onDaemonTick?: () => void;
     onDaemonError?: (message: string) => void;
     onAutoSwitch?: (result: AutoSwitchResult) => void;
     onUpdateStatus?: (status: DesktopUpdateStatus) => void;
+    onAuthConflict?: (state: DesktopAuthState) => void;
   }) {
     const api = getBridge();
     if (!api) return () => {};
@@ -409,6 +494,7 @@ export const desktopApi = {
       api.onDaemonError?.((payload) => events.onDaemonError?.(payload?.message || 'Daemon error')),
       api.onAutoSwitch?.((payload) => events.onAutoSwitch?.(payload)),
       api.onUpdateStatus?.((payload) => events.onUpdateStatus?.(payload)),
+      api.onAuthConflict?.((payload) => events.onAuthConflict?.(payload)),
     ].filter(Boolean) as Array<() => void>;
     return () => cleanups.forEach((cleanup) => cleanup());
   },

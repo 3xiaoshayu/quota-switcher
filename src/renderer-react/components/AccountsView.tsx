@@ -13,7 +13,9 @@ import {
   Trash2, 
   Star,
   X,
-  Mail
+  Mail,
+  KeyRound,
+  Link
 } from 'lucide-react';
 import { AccountQuota } from '../types';
 
@@ -25,6 +27,9 @@ interface AccountsProps {
   onRefreshAccount: (id: string) => void | Promise<void>;
   onAddLog: (msg: string, type: 'success' | 'info' | 'warning' | 'error') => void;
   onReloadAccounts?: () => void | Promise<void>;
+  onReauthorizeAccount?: (id: string) => void | Promise<void>;
+  onCancelOAuth?: () => void | Promise<void>;
+  onCompleteOAuthManually?: (callbackUrl: string) => void | Promise<void>;
   oauthMode?: boolean;
 }
 
@@ -36,6 +41,9 @@ export default function AccountsView({
   onRefreshAccount,
   onAddLog,
   onReloadAccounts,
+  onReauthorizeAccount,
+  onCancelOAuth,
+  onCompleteOAuthManually,
   oauthMode = false,
 }: AccountsProps) {
   const [searchTerm, setSearchTerm] = useState('');
@@ -44,6 +52,8 @@ export default function AccountsView({
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
   const [isReloading, setIsReloading] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
+  const [reauthorizeId, setReauthorizeId] = useState<string | null>(null);
+  const [manualCallbackUrl, setManualCallbackUrl] = useState('');
 
   // New account form state
   const [newEmail, setNewEmail] = useState('');
@@ -108,20 +118,22 @@ export default function AccountsView({
 
     setIsAdding(true);
     try {
-      await onAddAccount({
+      const formAccount: Omit<AccountQuota, 'id'> = {
         name: newName || 'OAuth account',
         email: newEmail || 'oauth@pending.local',
         status: 'ACTIVE',
-        fiveHourQuotaUsed: 0,
+        fiveHourQuotaRemaining: 100,
         fiveHourQuotaTotal: 100,
-        weeklyQuotaUsed: 0,
+        weeklyQuotaRemaining: 100,
         weeklyQuotaTotal: 100,
         priority: newPriority,
         plan: newPlan,
         tokenValidity: 'Pending OAuth',
         resetInFiveHour: 'Waiting',
         resetInWeekly: 'Waiting',
-      });
+      };
+      if (reauthorizeId && onReauthorizeAccount) await onReauthorizeAccount(reauthorizeId);
+      else await onAddAccount(formAccount);
 
       onAddLog(oauthMode ? 'OAuth account flow completed.' : `Created new account: ${newEmail} (${newPlan})`, 'success');
       setNewEmail('');
@@ -129,6 +141,8 @@ export default function AccountsView({
       setNewPlan('Pro Plan');
       setNewPriority('Normal');
       setFormError('');
+      setReauthorizeId(null);
+      setManualCallbackUrl('');
       setShowAddModal(false);
     } catch (error) {
       setFormError(error instanceof Error ? error.message : String(error));
@@ -172,7 +186,11 @@ export default function AccountsView({
             重新读取本地账号
           </motion.button>
           <motion.button
-            onClick={() => setShowAddModal(true)}
+            onClick={() => {
+              setReauthorizeId(null);
+              setFormError('');
+              setShowAddModal(true);
+            }}
             whileHover={{ scale: 1.04 }}
             whileTap={{ scale: 0.96 }}
             transition={{ type: 'spring', stiffness: 400, damping: 20 }}
@@ -254,9 +272,9 @@ export default function AccountsView({
               />
             )}
             需要操作
-            {accounts.filter(acc => acc.status === 'WARNING' || acc.status === 'EXPIRED').length > 0 && (
+            {accounts.filter(acc => acc.status === 'WARNING' || acc.status === 'EXPIRED' || acc.status === 'LOW_QUOTA' || acc.status === 'SUSPENDED').length > 0 && (
               <span className="px-1.5 py-0.5 bg-rose-500 text-white rounded-full text-[9px] font-bold">
-                {accounts.filter(acc => acc.status === 'WARNING' || acc.status === 'EXPIRED').length}
+                {accounts.filter(acc => acc.status === 'WARNING' || acc.status === 'EXPIRED' || acc.status === 'LOW_QUOTA' || acc.status === 'SUSPENDED').length}
               </span>
             )}
           </button>
@@ -267,20 +285,30 @@ export default function AccountsView({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6" id="accounts-cards-grid">
         {filteredAccounts.map((account) => {
           const isCardRefreshing = refreshingId === account.id;
-          const fiveHourPct = Math.round((account.fiveHourQuotaUsed / account.fiveHourQuotaTotal) * 100);
-          const weeklyPct = account.weeklyQuotaTotal > 0 ? Math.round((account.weeklyQuotaUsed / account.weeklyQuotaTotal) * 100) : null;
-          const hasWarningBanner = account.status === 'WARNING' || account.status === 'EXPIRED';
+          const fiveHourPct = account.fiveHourQuotaRemaining == null
+            ? null
+            : Math.round((account.fiveHourQuotaRemaining / account.fiveHourQuotaTotal) * 100);
+          const weeklyPct = account.weeklyQuotaRemaining == null || account.weeklyQuotaTotal <= 0
+            ? null
+            : Math.round((account.weeklyQuotaRemaining / account.weeklyQuotaTotal) * 100);
+          const hasWarningBanner = account.status === 'WARNING' || account.status === 'EXPIRED' || account.status === 'LOW_QUOTA' || account.status === 'SUSPENDED';
 
           // Progress colors
-          const color5h = fiveHourPct > 90 
+          const color5h = fiveHourPct == null
+            ? 'bg-slate-600/40'
+            : fiveHourPct <= 25
             ? 'bg-gradient-to-r from-rose-500/45 via-rose-400/55 to-rose-500/45 shadow-[0_0_8px_rgba(244,63,94,0.1)]' 
-            : fiveHourPct > 75 
-              ? 'bg-gradient-to-r from-amber-500/45 via-yellow-400/55 to-amber-500/45 shadow-[0_0_8px_rgba(251,191,36,0.1)]' 
-              : 'bg-gradient-to-r from-blue-500/45 via-cyan-400/55 to-blue-400/45 shadow-[0_0_8px_rgba(56,189,248,0.15)]';
+            : fiveHourPct >= 70
+              ? 'bg-gradient-to-r from-emerald-500/45 via-green-400/55 to-emerald-500/45 shadow-[0_0_8px_rgba(52,211,153,0.12)]'
+              : 'bg-gradient-to-r from-amber-500/45 via-yellow-400/55 to-amber-500/45 shadow-[0_0_8px_rgba(251,191,36,0.1)]';
           
-          const colorWeekly = weeklyPct && weeklyPct > 90 
+          const colorWeekly = weeklyPct == null
+            ? 'bg-slate-600/40'
+            : weeklyPct <= 25
             ? 'bg-gradient-to-r from-rose-600/45 via-rose-500/55 to-rose-600/45 shadow-[0_0_8px_rgba(225,29,72,0.1)]' 
-            : 'bg-gradient-to-r from-blue-500/45 via-indigo-400/55 to-cyan-500/45 shadow-[0_0_8px_rgba(99,102,241,0.15)]';
+            : weeklyPct !== null && weeklyPct >= 70
+              ? 'bg-gradient-to-r from-emerald-600/45 via-green-500/55 to-emerald-600/45 shadow-[0_0_8px_rgba(16,185,129,0.12)]'
+              : 'bg-gradient-to-r from-amber-600/45 via-yellow-500/55 to-amber-600/45 shadow-[0_0_8px_rgba(217,119,6,0.1)]';
 
           return (
             <motion.div
@@ -334,7 +362,11 @@ export default function AccountsView({
               {hasWarningBanner && (
                 <div className="mb-5 p-3 bg-rose-500/10 border border-rose-500/20 rounded-2xl flex items-center gap-2 text-xs text-rose-300" id={`warning-banner-${account.id}`}>
                   <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-                  <span className="font-medium">Quota nearing limit / 配额接近上限</span>
+                  <span className="font-medium">
+                    {account.warning || (account.weeklyBlocksFiveHour
+                      ? 'Weekly quota is exhausted, so the 5-hour quota is unavailable.'
+                      : 'Quota needs attention.')}
+                  </span>
                 </div>
               )}
 
@@ -352,23 +384,28 @@ export default function AccountsView({
                 </div>
 
                 {/* Sub Quotas Progress Boxes Grid */}
-                <div className="grid grid-cols-2 gap-4 select-none" id={`quotas-boxes-grid-${account.id}`}>
+                <div className={`grid ${fiveHourPct !== null && weeklyPct !== null ? 'grid-cols-2' : 'grid-cols-1'} gap-4 select-none`} id={`quotas-boxes-grid-${account.id}`}>
                   {/* 5H QUOTA */}
+                  {fiveHourPct !== null && (
                   <div className="bg-slate-950/20 border border-white/5 rounded-2xl p-4 text-left" id={`quota-box-5h-${account.id}`}>
                     <span className="text-[10px] font-bold text-slate-500 tracking-wider uppercase font-mono">5H QUOTA</span>
                     <span className={`text-2xl font-bold block mt-1.5 tracking-tight font-mono ${
-                      fiveHourPct > 90 ? 'text-rose-400' : 'text-slate-100'
+                      fiveHourPct <= 25 ? 'text-rose-400' : fiveHourPct >= 70 ? 'text-emerald-400' : 'text-amber-300'
                     }`}>{fiveHourPct}%</span>
                     <div className="h-[3px] bg-slate-950/40 border border-white/[0.03] shadow-[inset_0_1px_1px_rgba(0,0,0,0.5)] rounded-full overflow-hidden mt-3">
                       <div className={`h-full rounded-full ${color5h}`} style={{ width: `${fiveHourPct}%` }} />
                     </div>
                     <span className="text-[10px] text-slate-500 mt-2 block font-medium">Reset in {account.resetInFiveHour}</span>
                   </div>
+                  )}
 
                   {/* WEEKLY QUOTA */}
+                  {weeklyPct !== null && (
                   <div className="bg-slate-950/20 border border-white/5 rounded-2xl p-4 text-left" id={`quota-box-weekly-${account.id}`}>
                     <span className="text-[10px] font-bold text-slate-500 tracking-wider uppercase font-mono">WEEKLY</span>
-                    <span className="text-2xl font-bold text-slate-100 block mt-1.5 tracking-tight font-mono">
+                    <span className={`text-2xl font-bold block mt-1.5 tracking-tight font-mono ${
+                      weeklyPct !== null && weeklyPct <= 25 ? 'text-rose-400' : weeklyPct !== null && weeklyPct >= 70 ? 'text-emerald-400' : 'text-amber-300'
+                    }`}>
                       {weeklyPct !== null ? `${weeklyPct}%` : '--'}
                     </span>
                     <div className="h-[3px] bg-slate-950/40 border border-white/[0.03] shadow-[inset_0_1px_1px_rgba(0,0,0,0.5)] rounded-full overflow-hidden mt-3">
@@ -378,6 +415,12 @@ export default function AccountsView({
                       {weeklyPct !== null ? `Reset in ${account.resetInWeekly}` : 'No history'}
                     </span>
                   </div>
+                  )}
+                  {fiveHourPct === null && weeklyPct === null && (
+                    <div className="bg-slate-950/20 border border-white/5 rounded-2xl p-4 text-left text-xs text-slate-400">
+                      No quota windows were returned for this account.
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -397,6 +440,24 @@ export default function AccountsView({
             <RefreshCw className={`w-3.5 h-3.5 ${isCardRefreshing ? 'animate-spin text-blue-400' : ''}`} />
                   Refresh
                 </motion.button>
+
+                {account.status === 'SUSPENDED' && onReauthorizeAccount && (
+                  <motion.button
+                    onClick={() => {
+                      setReauthorizeId(account.id);
+                      setFormError('');
+                      setShowAddModal(true);
+                    }}
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.95 }}
+                    transition={{ type: 'spring', stiffness: 450, damping: 20 }}
+                    className="flex-1 py-3 px-2 bg-amber-500/10 hover:bg-amber-500/15 border border-amber-500/20 rounded-xl text-amber-300 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                    id={`action-reauthorize-${account.id}`}
+                  >
+                    <KeyRound className="w-3.5 h-3.5" />
+                    Reauthorize
+                  </motion.button>
+                )}
 
                 {/* 2. Switch/Check (Star/Switch) */}
                 {account.isCurrent ? (
@@ -463,7 +524,10 @@ export default function AccountsView({
             >
               <button
                 onClick={() => {
-                  if (!isAdding) setShowAddModal(false);
+                  if (!isAdding) {
+                    setShowAddModal(false);
+                    setReauthorizeId(null);
+                  }
                 }}
                 disabled={isAdding}
                 className="absolute top-5 right-5 p-2 hover:bg-white/10 rounded-xl text-slate-400 hover:text-white transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
@@ -472,7 +536,9 @@ export default function AccountsView({
                 <X className="w-4 h-4" />
               </button>
 
-              <h3 className="text-xl font-bold tracking-tight mb-2 font-sans">添加配置账号</h3>
+              <h3 className="text-xl font-bold tracking-tight mb-2 font-sans">
+                {reauthorizeId ? '重新授权账号' : '添加配置账号'}
+              </h3>
               <p className="text-xs text-slate-400 mb-6 font-sans">
                 {oauthMode ? '将打开 OpenAI OAuth 授权页面，邮箱、套餐与凭证会在授权完成后自动读取。' : '为 Codex 账号管理器配置一个新的接入凭证和配额检测对象。'}
               </p>
@@ -565,16 +631,51 @@ export default function AccountsView({
                   </p>
                 )}
 
+                {isAdding && oauthMode && (
+                  <div className="space-y-3 rounded-2xl border border-white/10 bg-slate-950/30 p-4">
+                    <p className="text-xs text-slate-400">
+                      正在等待浏览器回调。如果浏览器无法自动返回，请粘贴完整的回调网址。
+                    </p>
+                    <div className="flex gap-2">
+                      <input
+                        value={manualCallbackUrl}
+                        onChange={(event) => setManualCallbackUrl(event.target.value)}
+                        placeholder="http://localhost:1455/auth/callback?code=..."
+                        className="min-w-0 flex-1 px-3 py-2 bg-slate-950/50 border border-white/10 rounded-xl text-xs text-slate-200"
+                        id="oauth-manual-callback-input"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFormError('');
+                          Promise.resolve(onCompleteOAuthManually?.(manualCallbackUrl))
+                            .catch(error => setFormError(error instanceof Error ? error.message : String(error)));
+                        }}
+                        disabled={!manualCallbackUrl || !onCompleteOAuthManually}
+                        className="p-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-300 disabled:opacity-40"
+                        title="提交回调网址"
+                        id="oauth-manual-callback-submit"
+                      >
+                        <Link className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex gap-3 pt-4 border-t border-white/5">
                   <button
                     type="button"
                     onClick={() => {
-                      if (!isAdding) setShowAddModal(false);
+                      if (isAdding) {
+                        Promise.resolve(onCancelOAuth?.()).catch(() => {});
+                        return;
+                      }
+                      setShowAddModal(false);
+                      setReauthorizeId(null);
                     }}
-                    disabled={isAdding}
                     className="flex-1 py-3 bg-white/5 hover:bg-white/10 text-white rounded-2xl text-xs font-semibold cursor-pointer transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    取消
+                    {isAdding ? '取消 OAuth' : '取消'}
                   </button>
                   <button
                     type="submit"

@@ -14,7 +14,8 @@
     "audit:ui": "node scripts/audit-ui-contract.js",
     "release:check": "node scripts/verify-release.js",
     "check": "npm run renderer:check && npm run check:syntax && npm run check:docs && npm run audit:ui && npm run release:check",
-    "test": "npm run check",
+    "test:engine": "node --test test/*.test.js",
+    "test": "npm run test:engine && npm run check",
     "build": "npm run build:windows",
     "build:dir": "npm run renderer:build && electron-builder --dir --win --x64",
     "build:windows": "npm run renderer:build && npm run release:check && electron-builder --win nsis zip --x64 --publish never",
@@ -41,7 +42,7 @@
     "local-first"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.2",
@@ -49,7 +50,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.2.0",
-    "electron": "^42.0.0",
+    "electron": "^42.5.2",
     "electron-builder": "^26.0.0",
     "lucide-react": "^0.546.0",
     "motion": "^12.42.2",

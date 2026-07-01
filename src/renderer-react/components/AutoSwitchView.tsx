@@ -363,7 +363,9 @@ export default function AutoSwitchView({
                     <div className="flex flex-col text-left" id={`scope-titles-${account.id}`}>
                       <span className="font-bold text-slate-100 text-sm font-sans">{account.name}</span>
                       <span className="text-[11px] text-slate-400 font-mono mt-0.5">
-                        5H Remaining: {Math.round((account.fiveHourQuotaUsed / account.fiveHourQuotaTotal) * 100)}%
+                        5H Remaining: {account.fiveHourQuotaRemaining == null
+                          ? '--'
+                          : `${Math.round((account.fiveHourQuotaRemaining / account.fiveHourQuotaTotal) * 100)}%`}
                       </span>
                     </div>
                   </div>

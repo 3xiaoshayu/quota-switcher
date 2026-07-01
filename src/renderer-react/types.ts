@@ -3,10 +3,13 @@ export interface AccountQuota {
   name: string;
   email: string;
   status: 'ACTIVE' | 'WARNING' | 'EXPIRED' | 'LOW_QUOTA' | 'READY' | 'SUSPENDED';
-  fiveHourQuotaUsed: number;
+  fiveHourQuotaRemaining: number | null;
   fiveHourQuotaTotal: number;
-  weeklyQuotaUsed: number;
+  weeklyQuotaRemaining: number | null;
   weeklyQuotaTotal: number;
+  fiveHourQuotaPresent?: boolean;
+  weeklyQuotaPresent?: boolean;
+  weeklyBlocksFiveHour?: boolean;
   priority: 'High' | 'Normal' | 'Low' | 'Ultra';
   plan: 'Pro Plan' | 'Standard' | 'Enterprise';
   tokenValidity: string;
@@ -28,6 +31,41 @@ export interface DaemonState {
   status: 'Running' | 'Stopped';
   syncInterval: number;
   lastChecked: string;
+  lastSuccessAt?: string | number | null;
+  lastError?: string | null;
+  pausedReason?: string | null;
+}
+
+export interface DesktopAuthState {
+  status: 'aligned' | 'conflict' | 'unmanaged_official_auth' | 'missing_official_auth' | 'unsupported_official_auth' | 'empty';
+  requiresResolution: boolean;
+  currentAccountId?: string | null;
+  matchedAccountId?: string | null;
+  officialIdentity?: { email?: string | null; accountId?: string | null } | null;
+  message?: string | null;
+}
+
+export interface DesktopOAuthStatus {
+  status: string;
+  pending?: boolean;
+  message?: string | null;
+  targetAccountId?: string | null;
+  expiresAt?: number | null;
+  callbackPort?: number;
+  result?: {
+    accountId?: string;
+    email?: string;
+    mismatch?: boolean;
+    targetAccountId?: string | null;
+  } | null;
+}
+
+export interface StorageDiagnostic {
+  type: string;
+  filePath: string;
+  message: string;
+  recovered: boolean;
+  timestamp: number;
 }
 
 export interface SystemSettings {

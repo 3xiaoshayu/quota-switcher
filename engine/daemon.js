@@ -1,62 +1,135 @@
 const { REFRESH_MINUTES } = require("./config");
-const { needsRefresh, refreshOneTok, refreshAll } = require("./token-refresh");
+const { needsRefresh, refreshOneTok } = require("./token-refresh");
 const { refreshQuota } = require("./quota");
 const { fetchResetCredits } = require("./reset-credits");
 const { loadAutoSwitchCfg, normalizeSyncIntervalMinutes } = require("./config-manager");
 const { autoSwitchTick } = require("./auto-switch");
 const { loadIdx, listAccts, saveAcct, loadAcct } = require("./storage");
 const { writeAuthJson, writeProjection } = require("./switch");
+const { inspectAuthState } = require("./auth-state");
+const { withAccountLock } = require("./operation-locks");
+const { logWarn } = require("./logger");
 
-// 守护工作循环 — 适配 Electron 进程内运行
-// 返回 { accountsUpdated, tokenRefreshes, autoSwitchResult }
+function failure(stage, account, error) {
+  return {
+    stage,
+    accountId: account?.id || null,
+    email: account?.email || null,
+    code: error?.code || null,
+    message: error?.message || String(error),
+  };
+}
+
 async function runDaemonWorker() {
+  const startedAt = Date.now();
+  const failures = [];
+  const tokenRefreshes = [];
   let accountsUpdated = 0;
-  let tokenRefreshes = [];
   let autoSwitchResult = null;
 
-  const accts = listAccts();
-
-  // 1. 刷新所有 token
-  for (const a of accts) {
-    if (needsRefresh(a)) {
-      const r = await refreshOneTok(a);
-      tokenRefreshes.push({ email: a.email, ok: r.ok, revoked: r.revoked, gen: r.gen });
-      accountsUpdated++;
-    }
+  const authState = inspectAuthState();
+  if (authState.requiresResolution) {
+    return {
+      startedAt,
+      completedAt: Date.now(),
+      accountsUpdated,
+      tokenRefreshes,
+      autoSwitchResult,
+      failures,
+      pausedReason: "auth_conflict",
+      authState,
+    };
   }
 
-  // 2. 刷新当前账号配额
-  const idx = loadIdx();
-  if (idx.current_account_id) {
-    const cur = loadAcct(idx.current_account_id);
-    if (cur) {
-      try { await refreshQuota(cur); accountsUpdated++; } catch {}
-
-      // 3. 检查 reset_credits
-      try {
-        const snap = await fetchResetCredits(cur);
-        if (snap.available_count !== cur.reset_credits?.available_count) {
-          cur.reset_credits = snap;
-          saveAcct(cur);
-          accountsUpdated++;
-        }
-      } catch {}
-
-      // 4. 重写 auth.json
-      writeAuthJson(cur);
-      writeProjection(cur);
-    }
-  }
-
-  // 5. 自动切号
-  const cfg = loadAutoSwitchCfg();
-  if (cfg.enabled) {
+  const accounts = listAccts();
+  for (const listed of accounts) {
     try {
-      autoSwitchResult = await autoSwitchTick(cfg);
-    } catch {}
+      await withAccountLock(listed.id, async () => {
+        const account = loadAcct(listed.id);
+        if (!account || !needsRefresh(account)) return;
+        const result = await refreshOneTok(account);
+        tokenRefreshes.push({
+          accountId: account.id,
+          email: account.email,
+          ok: result.ok,
+          revoked: result.revoked,
+          gen: result.gen,
+          error: result.error || null,
+        });
+        if (result.ok) accountsUpdated++;
+        else failures.push(failure("token_refresh", account, new Error(result.error || "Token refresh failed")));
+      });
+    } catch (error) {
+      failures.push(failure("token_refresh", listed, error));
+    }
   }
 
-  return { accountsUpdated, tokenRefreshes, autoSwitchResult };
+  const index = loadIdx();
+  if (index.current_account_id) {
+    await withAccountLock(index.current_account_id, async () => {
+      const current = loadAcct(index.current_account_id);
+      if (!current) {
+        failures.push(failure("current_account", null, new Error("Managed current account could not be read")));
+        return;
+      }
+
+      try {
+        await refreshQuota(current, { force: false });
+        accountsUpdated++;
+      } catch (error) {
+        failures.push(failure("quota_refresh", current, error));
+      }
+
+      try {
+        const snapshot = await fetchResetCredits(current);
+        current.reset_credits = snapshot;
+        current.reset_credits_error = null;
+        saveAcct(current);
+        accountsUpdated++;
+      } catch (error) {
+        current.reset_credits_error = { message: error.message || String(error), timestamp: Math.floor(Date.now() / 1000) };
+        saveAcct(current);
+        failures.push(failure("reset_credits", current, error));
+      }
+
+      const latestIndex = loadIdx();
+      const latestAuthState = inspectAuthState();
+      if (latestIndex.current_account_id === current.id && !latestAuthState.requiresResolution) {
+        try {
+          const authValue = writeAuthJson(current);
+          writeProjection(current, authValue);
+        } catch (error) {
+          failures.push(failure("auth_projection", current, error));
+        }
+      }
+    });
+  }
+
+  const config = loadAutoSwitchCfg();
+  if (config.enabled) {
+    try {
+      autoSwitchResult = await autoSwitchTick(config);
+      if (autoSwitchResult?.reason === "current_quota_refresh_failed") {
+        failures.push(failure("auto_switch", null, new Error(autoSwitchResult.error || autoSwitchResult.reason)));
+      }
+    } catch (error) {
+      failures.push(failure("auto_switch", null, error));
+    }
+  }
+
+  if (failures.length > 0) {
+    logWarn(`Daemon worker completed with ${failures.length} failure(s)`);
+  }
+  return {
+    startedAt,
+    completedAt: Date.now(),
+    accountsUpdated,
+    tokenRefreshes,
+    autoSwitchResult,
+    failures,
+    pausedReason: null,
+    authState,
+  };
 }
 
 function getTickIntervalMinutes() {

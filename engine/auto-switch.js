@@ -47,9 +47,16 @@ function resolveMonitoredIds(cfg, accts) {
 }
 
 async function autoSwitchTick(cfg) {
-  const { listAccts, loadIdx } = require("./storage");
+  const { listAccts, loadIdx, loadAcct } = require("./storage");
   const { refreshQuota } = require("./quota");
   const { doSwitch } = require("./switch");
+  const { withAccountLock, withAccountLocks } = require("./operation-locks");
+  const { inspectAuthState } = require("./auth-state");
+
+  const authState = inspectAuthState();
+  if (authState.requiresResolution) {
+    return { switched: false, reason: "auth_conflict", authState };
+  }
 
   const accts = listAccts();
   if (accts.length === 0) return { switched: false, reason: "no_accounts" };
@@ -61,10 +68,24 @@ async function autoSwitchTick(cfg) {
   const curId = idx.current_account_id;
   if (!curId || !monitoredIds.includes(curId)) return { switched: false, reason: "current_not_monitored" };
 
-  const cur = accts.find((a) => a.id === curId);
+  let cur = accts.find((a) => a.id === curId);
   if (!cur) return { switched: false, reason: "current_not_found" };
 
-  try { await refreshQuota(cur); } catch {}
+  try {
+    await withAccountLock(cur.id, async () => {
+      const fresh = loadAcct(cur.id);
+      if (!fresh) { cur = null; return; }
+      await refreshQuota(fresh, { force: false });
+      cur = loadAcct(fresh.id) || fresh;
+    });
+  } catch (error) {
+    return {
+      switched: false,
+      reason: "current_quota_refresh_failed",
+      error: error.message || String(error),
+    };
+  }
+  if (!cur) return { switched: false, reason: "current_not_found" };
   const metrics = extractQuotaMetrics(cur);
   if (metrics.length === 0) return { switched: false, reason: "no_quota_data" };
 
@@ -73,13 +94,22 @@ async function autoSwitchTick(cfg) {
   if (!shouldSwitch) return { switched: false, reason: "quota_sufficient", metrics };
 
   const candidates = [];
-  for (const a of accts) {
-    if (a.id === curId) continue;
-    if (!monitoredIds.includes(a.id)) continue;
-    if (!a.quota || (ts() - (a.usage_updated_at || 0) > 600)) {
-      try { await refreshQuota(a); } catch { continue; }
+  for (const listed of accts) {
+    if (listed.id === curId) continue;
+    if (!monitoredIds.includes(listed.id)) continue;
+    let candidate = loadAcct(listed.id) || listed;
+    if (!candidate.quota || (ts() - (candidate.usage_updated_at || 0) > 600)) {
+      try {
+        await withAccountLock(candidate.id, async () => {
+          const fresh = loadAcct(candidate.id);
+          if (!fresh) { candidate = null; return; }
+          await refreshQuota(fresh, { force: false });
+          candidate = loadAcct(fresh.id) || fresh;
+        });
+      } catch { continue; }
     }
-    const cand = buildSwitchCandidate(a, primaryTh, secondaryTh);
+    if (!candidate) continue;
+    const cand = buildSwitchCandidate(candidate, primaryTh, secondaryTh);
     if (cand) candidates.push(cand);
   }
 
@@ -88,8 +118,17 @@ async function autoSwitchTick(cfg) {
   const best = pickBestCandidate(candidates);
   if (!best) return { switched: false, reason: "no_best_candidate" };
 
-  const result = doSwitch(best);
-  return { switched: true, from: cur, to: best, metrics };
+  return withAccountLocks(["__switch__", curId, best.id], async () => {
+    const latestIdx = loadIdx();
+    if (latestIdx.current_account_id !== curId) {
+      return { switched: false, reason: "current_changed", metrics };
+    }
+    const freshBest = loadAcct(best.id);
+    const freshCur = loadAcct(curId) || cur;
+    if (!freshBest) return { switched: false, reason: "candidate_not_found", metrics };
+    const result = doSwitch(freshBest);
+    return { switched: true, from: freshCur, to: result.account, metrics };
+  });
 }
 
 module.exports = {

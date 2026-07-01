@@ -7,6 +7,21 @@ release is published.
 
 ## [Unreleased]
 
+- Detect official Codex authentication changes and require an explicit adopt or
+  reapply decision before managed credentials can be written again.
+- Make account switching transactional with exact process targeting, atomic
+  writes, launch verification, and rollback on failure.
+- Recover damaged account indexes and JSON records from backups while
+  preserving undecryptable DPAPI records for diagnosis.
+- Preserve missing quota windows as unknown, clamp percentages, clear stale
+  reset-credit balances, and stop automatic switching after refresh failures.
+- Persist pending OAuth sessions across restarts, support cancellation and
+  manual callback completion, and prevent reauthorization identity mismatches
+  from overwriting an existing account.
+- Add redacted three-day diagnostic logs, structured daemon status, and
+  reliability behavior tests for storage, OAuth, switching, quota, and auth
+  conflict handling.
+
 ## [0.1.0-beta.7] - 2026-07-01
 
 - Add a second token-exchange network path and a single transient retry for

@@ -33,6 +33,10 @@ The OAuth callback listens on local port `1455`.
 - Close software already using port `1455`.
 - Check whether firewall or security software blocks local loopback traffic.
 - Retry **Add account** after the previous login attempt has ended.
+- If automatic return fails, paste the complete callback URL into the manual
+  callback field in the add-account dialog.
+- Pending OAuth authorization is restored after an app restart for up to five
+  minutes.
 
 If the modal reports `Client network socket disconnected before secure TLS
 connection was established`, or an error starting with `授权已返回，但交换
@@ -62,8 +66,9 @@ responses may not expose both windows.
 ## Token refresh fails
 
 If a refresh token has expired, been revoked, or already been rotated
-elsewhere, the account must be authenticated again. Remove and add the affected
-account only after confirming that another usable account exists.
+elsewhere, use **Reauthorize account** from the affected account card. If the
+new login belongs to a different identity, it is saved as a separate account
+instead of overwriting the original record.
 
 Never paste a refresh token, `auth.json`, or account file into a GitHub issue.
 
@@ -77,6 +82,19 @@ Never paste a refresh token, `auth.json`, or account file into a GitHub issue.
 
 Switching intentionally restarts the Codex application. A session that was
 already running may be interrupted.
+
+## Official Codex login changed
+
+The manager pauses authentication writes and automatic switching when the
+official Codex login differs from its managed current account. Choose
+**Adopt official account** to import and use the official login, or
+**Reapply managed account** to restore the manager-selected identity.
+
+## Account files appear missing
+
+Open **Settings > Logs** and inspect the latest diagnostic file. Malformed JSON
+is restored from `.bak` when possible. DPAPI decryption failures are left in
+place so the original encrypted account file is not destroyed.
 
 ## A custom API base URL disappeared
 

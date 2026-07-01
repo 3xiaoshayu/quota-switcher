@@ -1,11 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 const api = {
-  // 窗口控制
-  closeWindow: () => ipcRenderer.invoke('window:close'),
-  minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
-  toggleMaximize: () => ipcRenderer.invoke('window:maximize'),
-
   // 应用与发布
   getAppInfo: () => ipcRenderer.invoke('app:info'),
   getCodexStatus: () => ipcRenderer.invoke('codex:status'),
@@ -13,6 +8,8 @@ const api = {
   checkForUpdates: () => ipcRenderer.invoke('update:check'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
   openExternal: (url) => ipcRenderer.invoke('app:openExternal', url),
+  openLogs: () => ipcRenderer.invoke('app:openLogs'),
+  getStorageDiagnostics: () => ipcRenderer.invoke('storage:diagnostics'),
 
   // 账号管理
   listAccounts: () => ipcRenderer.invoke('account:list'),
@@ -21,6 +18,13 @@ const api = {
   deleteAccount: (id) => ipcRenderer.invoke('account:delete', id),
   switchAccount: (id) => ipcRenderer.invoke('account:switch', id),
   getCurrentAccount: () => ipcRenderer.invoke('account:current'),
+  getAuthState: () => ipcRenderer.invoke('account:authState'),
+  adoptOfficialAccount: () => ipcRenderer.invoke('account:adoptOfficial'),
+  reapplyManagedAccount: (id) => ipcRenderer.invoke('account:reapplyManaged', id),
+  reauthorizeAccount: (id) => ipcRenderer.invoke('account:reauthorize', id),
+  getOAuthStatus: () => ipcRenderer.invoke('oauth:status'),
+  cancelOAuth: () => ipcRenderer.invoke('oauth:cancel'),
+  completeOAuthManually: (callbackUrl) => ipcRenderer.invoke('oauth:completeManual', callbackUrl),
 
   // 配额
   refreshQuota: (id) => ipcRenderer.invoke('quota:refresh', id),
@@ -65,6 +69,11 @@ const api = {
     const handler = (e, d) => cb(d);
     ipcRenderer.on('update:status', handler);
     return () => ipcRenderer.removeListener('update:status', handler);
+  },
+  onAuthConflict: (cb) => {
+    const handler = (_event, payload) => cb(payload);
+    ipcRenderer.on('auth:conflict', handler);
+    return () => ipcRenderer.removeListener('auth:conflict', handler);
   },
 };
 

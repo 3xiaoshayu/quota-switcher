@@ -1,5 +1,7 @@
 const { CFG_FILE, DATA_DIR, REFRESH_MINUTES } = require("./config");
 const { ensureDir } = require("./storage");
+const { writeJsonAtomic, restoreBackup, quarantineFile } = require("./atomic-file");
+const { logWarn } = require("./logger");
 
 const DEFAULT_AUTO_SWITCH_CFG = {
   enabled: false,
@@ -27,14 +29,21 @@ function normalizeAutoSwitchCfg(cfg) {
 function loadAutoSwitchCfg() {
   try {
     return normalizeAutoSwitchCfg(JSON.parse(require("node:fs").readFileSync(CFG_FILE, "utf8")));
-  } catch {
+  } catch (error) {
+    try {
+      if (restoreBackup(CFG_FILE)) {
+        logWarn(`Auto-switch configuration was restored from backup: ${error.message}`);
+        return normalizeAutoSwitchCfg(JSON.parse(require("node:fs").readFileSync(CFG_FILE, "utf8")));
+      }
+      if (require("node:fs").existsSync(CFG_FILE)) quarantineFile(CFG_FILE, "invalid-json");
+    } catch {}
     return normalizeAutoSwitchCfg();
   }
 }
 
 function saveAutoSwitchCfg(cfg) {
   ensureDir(DATA_DIR);
-  require("node:fs").writeFileSync(CFG_FILE, JSON.stringify(normalizeAutoSwitchCfg(cfg), null, 2), "utf8");
+  writeJsonAtomic(CFG_FILE, normalizeAutoSwitchCfg(cfg));
 }
 
 module.exports = { loadAutoSwitchCfg, saveAutoSwitchCfg, DEFAULT_AUTO_SWITCH_CFG, normalizeSyncIntervalMinutes };

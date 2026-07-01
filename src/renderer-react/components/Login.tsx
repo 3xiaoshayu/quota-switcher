@@ -153,7 +153,7 @@ export default function Login({ onLogin, userEmail, appVersion = '0.1.0-beta.7' 
         {/* Quick login grid */}
         <div className="grid grid-cols-2 gap-3" id="quick-login-grid">
           <button
-            onClick={() => handleQuickLogin(userEmail || 'hamadeeufrosina@gmail.com')}
+            onClick={() => handleQuickLogin(userEmail || 'user@example.com')}
             className="py-2.5 px-3 backdrop-blur-md bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-xs text-slate-200 transition-all cursor-pointer text-center truncate flex items-center justify-center gap-1.5"
             id="quick-login-user-btn"
           >
