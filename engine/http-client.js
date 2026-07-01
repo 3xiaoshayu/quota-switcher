@@ -6,6 +6,15 @@ const { REFRESH_TIMEOUT } = require("./config");
 
 let sharedProxyAgent = null;
 
+function toHeaderObject(headers) {
+  const out = {};
+  if (!headers || typeof headers.forEach !== "function") return out;
+  headers.forEach((value, key) => {
+    out[key] = value;
+  });
+  return out;
+}
+
 function normalizeProxyRule(rule) {
   if (!rule) return "";
   const first = String(rule)
@@ -56,16 +65,44 @@ function getProxyAgent() {
   return sharedProxyAgent;
 }
 
-async function httpJson(url, opts = {}) {
-  const agent = getProxyAgent();
+async function electronHttpJson(url, opts, headers, timeout) {
+  let fetchFn = null;
+  try {
+    const electron = require("electron");
+    fetchFn = electron?.net?.fetch;
+  } catch {
+    return null;
+  }
+  if (typeof fetchFn !== "function") return null;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetchFn(url, {
+      method: opts.method || "GET",
+      headers,
+      body: opts.body ? (typeof opts.body === "string" ? opts.body : JSON.stringify(opts.body)) : undefined,
+      signal: controller.signal,
+    });
+    const body = await response.text();
+    return {
+      status: response.status,
+      headers: toHeaderObject(response.headers),
+      body,
+    };
+  } catch (error) {
+    if (error && error.name === "AbortError") throw new Error("请求超时");
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function nodeHttpJson(url, opts, headers, timeout) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const mod = u.protocol === "https:" ? https : http;
-    const headers = Object.assign(
-      { "Content-Type": "application/json", "Accept": "application/json" },
-      opts.headers || {}
-    );
-    const timeout = opts.timeout || REFRESH_TIMEOUT;
+    const agent = getProxyAgent();
     const req = mod.request(url, { method: opts.method || "GET", headers, timeout, agent }, (res) => {
       const chunks = [];
       res.on("data", (c) => chunks.push(c));
@@ -79,6 +116,19 @@ async function httpJson(url, opts = {}) {
     if (opts.body) req.write(typeof opts.body === "string" ? opts.body : JSON.stringify(opts.body));
     req.end();
   });
+}
+
+async function httpJson(url, opts = {}) {
+  const headers = Object.assign(
+    { "Content-Type": "application/json", "Accept": "application/json" },
+    opts.headers || {}
+  );
+  const timeout = opts.timeout || REFRESH_TIMEOUT;
+
+  const electronResult = await electronHttpJson(url, opts, headers, timeout);
+  if (electronResult) return electronResult;
+
+  return nodeHttpJson(url, opts, headers, timeout);
 }
 
 function buildCodexHeaders(acct) {
