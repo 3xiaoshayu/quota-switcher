@@ -84,6 +84,31 @@ test("quota parsing preserves window absence, clamps percentages, and applies we
   assert.equal(blocked.weekly_blocks_hourly, true);
 });
 
+test("quota authorization retries once after repairing an invalidated access token", async t => {
+  freshEngine(t);
+  const { fetchQuotaWithTokenRepair, isQuotaAuthError } = require("../engine/quota");
+  const account = { tokens: { access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }) } };
+  let fetchCount = 0;
+  let refreshCount = 0;
+  const quota = await fetchQuotaWithTokenRepair(account, {
+    fetchQuota: async () => {
+      fetchCount += 1;
+      if (fetchCount === 1) throw new Error("HTTP 401 token_invalidated");
+      return { hourly_remaining_percentage: 75 };
+    },
+    refreshOneTok: async (_account, options) => {
+      refreshCount += 1;
+      assert.equal(options.force, true);
+      return { ok: true };
+    },
+  });
+
+  assert.equal(isQuotaAuthError(new Error("HTTP 401 token_revoked")), true);
+  assert.equal(fetchCount, 2);
+  assert.equal(refreshCount, 1);
+  assert.equal(quota.hourly_remaining_percentage, 75);
+});
+
 test("reset credit parsing retains an explicit zero balance", t => {
   freshEngine(t);
   const { parseResetCreditsPayload } = require("../engine/reset-credits");
@@ -169,6 +194,34 @@ test("auth state detects drift, migrates legacy projections, and adopts official
   assert.ok(migrated.auth_fingerprint);
 });
 
+test("auth state accepts and synchronizes token rotation for the same official identity", t => {
+  const { engine } = freshEngine(t);
+  const account = addAccount(engine, "same@example.com", "acct-same", "first-token");
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const originalAuth = engine.writeAuthJson(account);
+  engine.writeProjection(account, originalAuth);
+
+  const rotatedTokens = tokens("same@example.com", "acct-same", "rotated-token");
+  const rotatedAuth = {
+    ...originalAuth,
+    tokens: {
+      ...rotatedTokens,
+      account_id: "acct-same",
+    },
+  };
+  const config = require("../engine/config");
+  fs.writeFileSync(path.join(config.CODEX_DIR, "auth.json"), JSON.stringify(rotatedAuth), "utf8");
+
+  const state = engine.inspectAuthState();
+  const synchronized = engine.loadAcct(account.id);
+  assert.equal(state.status, "aligned");
+  assert.equal(state.requiresResolution, false);
+  assert.equal(synchronized.tokens.access_token, rotatedTokens.access_token);
+  assert.equal(engine.inspectAuthState().status, "aligned");
+});
+
 test("auto-switch refuses to use stale quota after current refresh failure", async t => {
   const { engine } = freshEngine(t);
   const account = addAccount(engine, "current@example.com", "acct-current", "current");
@@ -223,7 +276,7 @@ test("daemon pauses before network work when official authentication conflicts",
   assert.deepEqual(result.tokenRefreshes, []);
 });
 
-test("switch transaction commits on success and restores state when launch fails", t => {
+test("switch transaction commits on success and restores state when launch fails", async t => {
   const { engine } = freshEngine(t);
   const first = addAccount(engine, "one@example.com", "acct-one", "one");
   const second = addAccount(engine, "two@example.com", "acct-two", "two");
@@ -242,7 +295,7 @@ test("switch transaction commits on success and restores state when launch fails
     launch: () => { running = true; },
     sleep() {},
   });
-  engine.doSwitch(second);
+  await engine.doSwitch(second);
   assert.equal(engine.loadIdx().current_account_id, second.id);
   assert.equal(engine.inspectAuthState().status, "aligned");
 
@@ -254,9 +307,35 @@ test("switch transaction commits on success and restores state when launch fails
     launch: () => { throw new Error("launch failed"); },
     sleep() {},
   });
-  assert.throws(() => engine.doSwitch(first), /launch failed/);
+  await assert.rejects(engine.doSwitch(first), /launch failed/);
   assert.equal(engine.loadIdx().current_account_id, second.id);
   assert.equal(engine.inspectAuthState().status, "aligned");
+});
+
+test("official Codex launcher does not treat the explorer activation exit code as failure", t => {
+  const { engine } = freshEngine(t);
+  let command = null;
+  let options = null;
+  let unrefCalled = false;
+  const childProcess = {
+    spawn(file, args, spawnOptions) {
+      command = [file, ...args];
+      options = spawnOptions;
+      return {
+        once() {},
+        unref() { unrefCalled = true; },
+      };
+    },
+  };
+
+  assert.equal(engine.launchOfficialCodex(childProcess), true);
+  assert.deepEqual(command, [
+    "explorer.exe",
+    "shell:AppsFolder\\OpenAI.Codex_2p2nqsd0c76g0!App",
+  ]);
+  assert.equal(options.detached, true);
+  assert.equal(options.stdio, "ignore");
+  assert.equal(unrefCalled, true);
 });
 
 test("OAuth pending state is encrypted, recoverable, cancellable, and target mismatch is saved separately", async t => {

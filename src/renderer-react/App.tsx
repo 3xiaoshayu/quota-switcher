@@ -124,15 +124,27 @@ export default function App() {
   const lastQuotaAutoSyncAt = useRef(0);
   const accountsRef = useRef<AccountQuota[]>(accounts);
   const accountOperationIds = useRef<Set<string>>(new Set());
+  const autoSwitchConfigRef = useRef<DesktopAutoSwitchConfig>(autoSwitchConfig);
+  const configSaveQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const configSaveRevision = useRef(0);
   
   // Auto-switch scope checkmarks list (Premium_Member_01, Team_Admin_Shared, Internal_Dev_Account checked initially)
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>(
     desktopBridgeAvailable ? [] : ['5', '6', '8'],
   );
+  const selectedAccountIdsRef = useRef<string[]>(selectedAccountIds);
 
   useEffect(() => {
     accountsRef.current = accounts;
   }, [accounts]);
+
+  useEffect(() => {
+    autoSwitchConfigRef.current = autoSwitchConfig;
+  }, [autoSwitchConfig]);
+
+  useEffect(() => {
+    selectedAccountIdsRef.current = selectedAccountIds;
+  }, [selectedAccountIds]);
 
   // UI Interactive triggers
   const [isRefreshingAll, setIsRefreshingAll] = useState(false);
@@ -177,6 +189,7 @@ export default function App() {
   const applyDashboardState = useCallback((snapshot: Awaited<ReturnType<typeof desktopApi.loadDashboardState>>) => {
     setAccounts(snapshot.accounts);
     setAutoSwitchConfig(snapshot.config);
+    autoSwitchConfigRef.current = snapshot.config;
     setAppInfo(snapshot.appInfo);
     setCodexStatus(snapshot.codexStatus);
     setUpdateStatus(snapshot.updateStatus);
@@ -185,7 +198,7 @@ export default function App() {
     setDaemonState({
       status: snapshot.daemonRunning ? 'Running' : 'Stopped',
       syncInterval: snapshot.daemonSyncInterval,
-      lastChecked: formatDateTime(Date.now()),
+      lastChecked: snapshot.daemonLastRunAt ? formatDateTime(snapshot.daemonLastRunAt) : 'Not checked yet',
       lastSuccessAt: snapshot.daemonLastSuccessAt,
       lastError: snapshot.daemonLastError,
       pausedReason: snapshot.daemonPausedReason,
@@ -195,6 +208,9 @@ export default function App() {
         ? snapshot.config.selected_account_ids || []
         : snapshot.accounts.map((account) => account.id),
     );
+    selectedAccountIdsRef.current = snapshot.config.account_scope_mode === 'selected'
+      ? snapshot.config.selected_account_ids || []
+      : snapshot.accounts.map((account) => account.id);
     if (snapshot.currentAccount?.email) {
       setUserEmail(snapshot.currentAccount.email);
       localStorage.setItem('codex_auth_email', snapshot.currentAccount.email);
@@ -228,7 +244,7 @@ export default function App() {
     quotaAutoSyncPromise.current = (async () => {
       for (const account of staleAccounts) {
         try {
-          await desktopApi.refreshQuota(account.id);
+          await desktopApi.refreshQuota(account.id, false);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           addLogEntry(`${account.email}: ${message}`, 'warning');
@@ -513,7 +529,7 @@ export default function App() {
     const syncInterval = Math.min(60, Math.max(1, Math.round(Number(val) || 10)));
     if (desktopBridgeAvailable) {
       const nextConfig = {
-        ...autoSwitchConfig,
+        ...autoSwitchConfigRef.current,
         sync_interval_minutes: syncInterval,
       };
       setDaemonState(prev => ({
@@ -658,26 +674,22 @@ export default function App() {
   const handleToggleAccountSelection = (id: string) => {
     const selected = accounts.find(a => a.id === id);
     if (desktopBridgeAvailable) {
-      const nextSelected = selectedAccountIds.includes(id)
-        ? selectedAccountIds.filter(item => item !== id)
-        : [...selectedAccountIds, id];
+      const currentSelected = selectedAccountIdsRef.current;
+      const nextSelected = currentSelected.includes(id)
+        ? currentSelected.filter(item => item !== id)
+        : [...currentSelected, id];
       const nextConfig: DesktopAutoSwitchConfig = {
-        ...autoSwitchConfig,
+        ...autoSwitchConfigRef.current,
         account_scope_mode: 'selected',
         selected_account_ids: nextSelected,
       };
+      selectedAccountIdsRef.current = nextSelected;
       setSelectedAccountIds(nextSelected);
-      setAutoSwitchConfig(nextConfig);
-      setSettings(prev => ({ ...prev, globalSwitch: nextConfig.enabled }));
-      desktopApi.saveAutoSwitchConfig(nextConfig)
-        .then(() => {
-          addLogEntry(`${selected?.email || id} ${nextSelected.includes(id) ? 'added to' : 'removed from'} auto-switch scope.`, 'info');
-        })
-        .catch((error) => {
-          const message = error instanceof Error ? error.message : String(error);
-          addToast(message, 'error');
-          addLogEntry(message, 'error');
-          loadDashboardState(false);
+      void saveAutoSwitchConfig(nextConfig)
+        .then((saved) => {
+          if (saved) {
+            addLogEntry(`${selected?.email || id} ${nextSelected.includes(id) ? 'added to' : 'removed from'} auto-switch scope.`, 'info');
+          }
         });
       return;
     }
@@ -694,24 +706,36 @@ export default function App() {
   };
 
   const saveAutoSwitchConfig = async (nextConfig: DesktopAutoSwitchConfig) => {
+    const revision = ++configSaveRevision.current;
+    autoSwitchConfigRef.current = nextConfig;
     setAutoSwitchConfig(nextConfig);
     setSettings(settingsFromDesktopState(nextConfig, appInfo, codexStatus, updateStatus || null));
+    const saveOperation = configSaveQueue.current
+      .catch(() => {})
+      .then(() => desktopApi.saveAutoSwitchConfig(nextConfig));
+    configSaveQueue.current = saveOperation.catch(() => {});
     try {
-      await desktopApi.saveAutoSwitchConfig(nextConfig);
-      await loadDashboardState(false);
+      await saveOperation;
+      if (revision === configSaveRevision.current) {
+        await loadDashboardState(false);
+      }
+      return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       addToast(message, 'error');
       addLogEntry(message, 'error');
-      await loadDashboardState(false);
+      if (revision === configSaveRevision.current) {
+        await loadDashboardState(false);
+      }
+      return false;
     }
   };
 
-  const handleToggleGlobalSwitch = () => {
+  const handleToggleGlobalSwitch = async () => {
     if (!desktopBridgeAvailable) {
       setSettings(prev => {
         const updated = !prev.globalSwitch;
-        addToast(`鍏ㄥ眬鍒囧彿宸?{updated ? '婵€娲? : '绂佺敤'}`, updated ? 'success' : 'warning');
+        addToast(`全局切号已${updated ? '启用' : '禁用'}`, updated ? 'success' : 'warning');
         addLogEntry(`Global automated switching pool state modified to: ${updated ? 'ON' : 'OFF'}`, 'info');
         return { ...prev, globalSwitch: updated };
       });
@@ -719,10 +743,10 @@ export default function App() {
     }
 
     const nextConfig = {
-      ...autoSwitchConfig,
-      enabled: !autoSwitchConfig.enabled,
+      ...autoSwitchConfigRef.current,
+      enabled: !autoSwitchConfigRef.current.enabled,
     };
-    void saveAutoSwitchConfig(nextConfig);
+    await saveAutoSwitchConfig(nextConfig);
   };
 
   const handleUpdateThreshold = (type: '5h' | 'weekly', val: number) => {
@@ -735,7 +759,7 @@ export default function App() {
     }
 
     const nextConfig = {
-      ...autoSwitchConfig,
+      ...autoSwitchConfigRef.current,
       [type === '5h' ? 'primary_threshold' : 'secondary_threshold']: val,
     };
     setSettings(prev => ({
@@ -762,6 +786,11 @@ export default function App() {
 
   const handleCheckUpdates = async () => {
     if (!desktopBridgeAvailable) return;
+    if (!appInfo?.updateEnabled) {
+      await handleOpenExternal(`${appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}/releases`);
+      addToast('Opened GitHub Releases', 'info');
+      return;
+    }
     await desktopApi.checkForUpdates();
     const snapshot = await loadDashboardState(false);
     if (snapshot?.updateStatus) {
@@ -810,7 +839,7 @@ export default function App() {
   const handleScopeModeChange = async (mode: 'all' | 'selected') => {
     if (!desktopBridgeAvailable) return;
     const nextConfig = {
-      ...autoSwitchConfig,
+      ...autoSwitchConfigRef.current,
       account_scope_mode: mode,
     };
     await saveAutoSwitchConfig(nextConfig);
@@ -954,6 +983,7 @@ export default function App() {
                   onCheckUpdates={desktopBridgeAvailable ? handleCheckUpdates : undefined}
                   onInstallUpdate={desktopBridgeAvailable ? handleInstallUpdate : undefined}
                   canInstallUpdate={updateStatus?.status === 'downloaded'}
+                  updateEnabled={!!appInfo?.updateEnabled}
                   accountCount={accounts.length}
                   repositoryUrl={appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}
                   onOpenLogs={desktopBridgeAvailable ? async () => { await desktopApi.openLogs(); } : undefined}
@@ -1160,18 +1190,19 @@ export default function App() {
 
               <div className="space-y-4 max-h-48 overflow-y-auto pr-2 mb-6 text-xs text-slate-300 leading-relaxed font-sans" id="changelog-list">
                 <div>
-                  <h4 className="font-bold text-white mb-1">🎯 核心新特性 (New Features)</h4>
+                  <h4 className="font-bold text-white mb-1">可靠性修复 (Reliability)</h4>
                   <ul className="list-disc pl-4 space-y-1 text-slate-400 text-[11px]">
-                    <li>全面支持多账号安全凭证的高保真 Glassmorphism 视图结构。</li>
-                    <li>新增 5h / Weekly 双循环配额同步和自动化阈值轮转控制台。</li>
-                    <li>极速本地 Microsoft Store 客户端沙盒环境校验。</li>
+                    <li>检测官方 Codex 登录变化，并在写入凭证前要求明确处理冲突。</li>
+                    <li>切号事务支持原子写入、启动验证和失败回滚。</li>
+                    <li>损坏的账号索引与数据文件可从备份恢复。</li>
                   </ul>
                 </div>
                 <div>
-                  <h4 className="font-bold text-white mb-1">🔧 性能调优 (Improvements)</h4>
+                  <h4 className="font-bold text-white mb-1">状态与恢复 (Recovery)</h4>
                   <ul className="list-disc pl-4 space-y-1 text-slate-400 text-[11px]">
-                    <li>极大降低了高并发轮转过程中的背景 CPU 开销。</li>
-                    <li>对边缘节点的同步延时降低至毫秒级别。</li>
+                    <li>缺失配额窗口保持未知，不再显示虚构的零值。</li>
+                    <li>OAuth 会话可在重启后恢复，并支持取消和手动回调。</li>
+                    <li>新增脱敏日志与结构化守护进程状态。</li>
                   </ul>
                 </div>
               </div>

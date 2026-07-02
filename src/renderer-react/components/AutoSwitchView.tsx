@@ -14,7 +14,7 @@ interface AutoSwitchProps {
   logs: LogEntry[];
   settings: SystemSettings;
   daemonState: DaemonState;
-  onToggleGlobalSwitch: () => void;
+  onToggleGlobalSwitch: () => void | Promise<void>;
   onUpdateThreshold: (type: '5h' | 'weekly', val: number) => void;
   onAddLog: (msg: string, type: 'success' | 'info' | 'warning' | 'error') => void;
   onToggleAccountSelection: (id: string) => void;
@@ -40,6 +40,7 @@ export default function AutoSwitchView({
 }: AutoSwitchProps) {
   const [activeScopeTab, setActiveScopeTab] = useState<'all' | 'specific'>(scopeMode === 'all' ? 'all' : 'specific');
   const [isCheckingNow, setIsCheckingNow] = useState(false);
+  const [isTogglingGlobal, setIsTogglingGlobal] = useState(false);
 
   useEffect(() => {
     setActiveScopeTab(scopeMode === 'all' ? 'all' : 'specific');
@@ -72,6 +73,18 @@ export default function AutoSwitchView({
       setIsCheckingNow(false);
       onAddLog('Manual quota scanning complete. All selected accounts checked.', 'success');
     }, 1500);
+  };
+
+  const handleToggleGlobal = async () => {
+    if (isTogglingGlobal) return;
+    setIsTogglingGlobal(true);
+    try {
+      await onToggleGlobalSwitch();
+    } catch (error) {
+      onAddLog(error instanceof Error ? error.message : String(error), 'error');
+    } finally {
+      setIsTogglingGlobal(false);
+    }
   };
 
   const getScopeStatusBadge = (status: AccountQuota['status']) => {
@@ -171,7 +184,9 @@ export default function AutoSwitchView({
               </div>
               {/* Custom IOS style Toggle */}
               <motion.button
-                onClick={onToggleGlobalSwitch}
+                onClick={handleToggleGlobal}
+                disabled={isTogglingGlobal}
+                aria-busy={isTogglingGlobal}
                 whileTap={{ scale: 0.92 }}
                 className={`w-11 h-6 rounded-full p-0.5 transition-colors cursor-pointer outline-none relative ${
                   settings.globalSwitch ? 'bg-blue-500' : 'bg-slate-800'

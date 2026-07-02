@@ -4,11 +4,26 @@ const { httpJson, buildCodexHeaders } = require("./http-client");
 const { loadIdx, saveIdx, saveAcct } = require("./storage");
 const { logWarn } = require("./logger");
 
+const TOKEN_REPAIR_CODES = new Set([
+  "invalid_grant",
+  "invalid_token",
+  "token_revoked",
+  "token_invalidated",
+  "refresh_token_expired",
+  "refresh_token_invalidated",
+  "refresh_token_reused",
+]);
+
 function extractCodeFromError(err) {
   const message = String(err?.message || err || "");
   return message.match(/HTTP\s+\d+\s+([a-z0-9_]+)/i)?.[1] ||
     message.match(/\b(error_code|code)=([a-z0-9_]+)/i)?.[2] ||
     null;
+}
+
+function isQuotaAuthError(error) {
+  const code = String(error?.code || extractCodeFromError(error) || "").toLowerCase();
+  return TOKEN_REPAIR_CODES.has(code) || /\bHTTP\s+401\b/i.test(String(error?.message || error || ""));
 }
 
 async function ensureAccessTokenForQuota(acct) {
@@ -18,6 +33,25 @@ async function ensureAccessTokenForQuota(acct) {
   const result = await refreshOneTok(acct);
   if (!result?.ok) {
     throw new Error("Token 已过期且刷新失败: " + (result?.error || "未知错误"));
+  }
+}
+
+async function fetchQuotaWithTokenRepair(acct, dependencies = {}) {
+  const fetchTask = dependencies.fetchQuota || fetchQuota;
+  const refreshTask = dependencies.refreshOneTok || require("./token-refresh").refreshOneTok;
+  await ensureAccessTokenForQuota(acct);
+  try {
+    return await fetchTask(acct);
+  } catch (error) {
+    if (!isQuotaAuthError(error)) throw error;
+    const refreshResult = await refreshTask(acct, { force: true });
+    if (!refreshResult?.ok) {
+      const repairError = new Error(`Quota authorization could not be repaired: ${refreshResult?.error || error.message || error}`);
+      repairError.code = extractCodeFromError(error) || "quota_auth_repair_failed";
+      repairError.cause = error;
+      throw repairError;
+    }
+    return fetchTask(acct);
   }
 }
 
@@ -92,8 +126,7 @@ async function refreshQuota(acct, options = {}) {
     throw retryError;
   }
   try {
-    await ensureAccessTokenForQuota(acct);
-    const q = await fetchQuota(acct);
+    const q = await fetchQuotaWithTokenRepair(acct);
     acct.quota = q;
     acct.quota_error = null;
     acct.usage_updated_at = now;
@@ -151,4 +184,12 @@ function extractQuotaMetrics(acct) {
   return metrics;
 }
 
-module.exports = { fetchQuota, refreshQuota, extractQuotaMetrics, quotaRetryDelaySeconds, parseQuotaPayload };
+module.exports = {
+  fetchQuota,
+  fetchQuotaWithTokenRepair,
+  isQuotaAuthError,
+  refreshQuota,
+  extractQuotaMetrics,
+  quotaRetryDelaySeconds,
+  parseQuotaPayload,
+};

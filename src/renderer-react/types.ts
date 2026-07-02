@@ -18,6 +18,7 @@ export interface AccountQuota {
   warning?: string | null;
   isCurrent?: boolean;
   quotaUpdatedAt?: string | number | null;
+  quotaNextRetryAt?: string | number | null;
   subscriptionActiveUntil?: string | number | null;
   resetCreditsAvailable?: number;
   resetCreditsNextExpiresAt?: string | number | null;

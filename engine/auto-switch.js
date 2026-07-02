@@ -126,7 +126,7 @@ async function autoSwitchTick(cfg) {
     const freshBest = loadAcct(best.id);
     const freshCur = loadAcct(curId) || cur;
     if (!freshBest) return { switched: false, reason: "candidate_not_found", metrics };
-    const result = doSwitch(freshBest);
+    const result = await doSwitch(freshBest);
     return { switched: true, from: freshCur, to: result.account, metrics };
   });
 }

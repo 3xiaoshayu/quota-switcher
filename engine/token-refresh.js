@@ -67,7 +67,10 @@ async function refreshOneTok(acct, options = {}) {
   if (!force && !needsRefresh(acct) && !hasTokenRepairSignal(acct)) {
     return { ok: true, skipped: true, gen: acct.token_generation || 0, timeLeft: tokenTimeLeft(acct) };
   }
-  if (!acct.tokens.refresh_token) return { ok: false, error: "缺少 refresh_token", revoked: false };
+  if (!acct.tokens.refresh_token) {
+    markRequiresReauth(acct, "missing_refresh_token", "This account has no refresh token.");
+    return { ok: false, error: "缺少 refresh_token", revoked: true };
+  }
   const currentIndex = loadIdx();
   const authWasAligned = currentIndex.current_account_id === acct.id
     && !require("./auth-state").inspectAuthState().requiresResolution;

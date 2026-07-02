@@ -144,9 +144,9 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         try { return ok(publicAccount(eng, eng.adoptOfficialAuth())); }
         catch (error) { return fail(error.message); }
     });
-    ipcMain.handle("account:reapplyManaged", (event, id) => {
+    ipcMain.handle("account:reapplyManaged", async (event, id) => {
         try {
-            const result = eng.reapplyManagedAuth(id || null);
+            const result = await eng.reapplyManagedAuth(id || null);
             return ok({ ...result, account: publicAccount(eng, result.account) });
         } catch (error) { return fail(error.message); }
     });
@@ -202,16 +202,16 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             return await eng.withAccountLocks(["__switch__", id], async () => {
                 const account = loadAcctById(eng, id);
                 if (!account) return fail("Account does not exist");
-                const result = eng.doSwitch(account);
+                const result = await eng.doSwitch(account);
                 return ok({ ...result, account: publicAccount(eng, result.account) });
             });
         } catch (error) { return fail(error.message); }
     });
 
-    ipcMain.handle("quota:refresh", async (event, id) => {
+    ipcMain.handle("quota:refresh", async (event, id, force = true) => {
         try {
             return await withFreshAccount(eng, id, async account => {
-                const quota = await eng.refreshQuota(account, { force: true });
+                const quota = await eng.refreshQuota(account, { force: force !== false });
                 return ok(publicQuota(quota));
             });
         } catch (error) { return fail(error.message); }

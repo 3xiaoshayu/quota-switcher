@@ -3,7 +3,7 @@ const path = require("node:path");
 const { CODEX_DIR } = require("./config");
 const { sha256hex, jwtPayload, extractChatgptAccountId } = require("./crypto-utils");
 const { writeJsonAtomic } = require("./atomic-file");
-const { loadIdx, saveIdx, loadAcct, listAccts } = require("./storage");
+const { loadIdx, saveIdx, loadAcct, saveAcct, listAccts } = require("./storage");
 const { logInfo, logWarn } = require("./logger");
 
 const AUTH_PATH = path.join(CODEX_DIR, "auth.json");
@@ -93,6 +93,44 @@ function findMatchingAccount(official, accounts) {
     || null;
 }
 
+function identityMatchesAccount(identity, account) {
+  if (!identity || !account) return false;
+  const officialAccountId = String(identity.accountId || "");
+  const managedAccountId = String(account.account_id || account.tokens?.account_id || "");
+  if (officialAccountId && managedAccountId) return officialAccountId === managedAccountId;
+
+  const officialEmail = String(identity.email || "").trim().toLowerCase();
+  const managedEmail = String(account.email || "").trim().toLowerCase();
+  return !!officialEmail && officialEmail === managedEmail;
+}
+
+function syncCurrentAccountFromOfficial(current, official) {
+  current.tokens = {
+    id_token: official.tokens.id_token || current.tokens?.id_token || "",
+    access_token: official.tokens.access_token || current.tokens?.access_token || "",
+    refresh_token: official.tokens.refresh_token || current.tokens?.refresh_token || null,
+    account_id: official.tokens.account_id || current.account_id || current.tokens?.account_id || null,
+  };
+  current.account_id = official.tokens.account_id || current.account_id || null;
+  if (official.identity?.email) current.email = official.identity.email;
+  current.token_generation = Number(current.token_generation || 0) + 1;
+  current.token_updated_at = Math.floor(Date.now() / 1000);
+  current.requires_reauth = false;
+  current.reauth_reason = null;
+  current.quota_next_retry_at = null;
+  saveAcct(current);
+
+  const index = loadIdx();
+  const summary = index.accounts.find((item) => item.id === current.id);
+  if (summary) {
+    summary.email = current.email;
+    saveIdx(index);
+  }
+  writeManagedProjection(current, official.value);
+  logInfo("Synchronized a rotated official Codex token for the managed current account");
+  return current;
+}
+
 function inspectAuthState(options = {}) {
   const migrateProjection = options.migrateProjection !== false;
   const index = loadIdx();
@@ -129,12 +167,25 @@ function inspectAuthState(options = {}) {
     && projection?.auth_fingerprint === official.fingerprint;
   const accountAligned = !!current
     && authFingerprint(accountAuthValue(current)) === official.fingerprint;
+  const sameIdentity = !!current && identityMatchesAccount(official.identity, current);
 
   if (projectionAligned || accountAligned) {
     if (migrateProjection && !projectionAligned) {
       writeManagedProjection(current, official.value);
       logInfo("Migrated the managed Codex authentication projection");
     }
+    return {
+      status: "aligned",
+      requiresResolution: false,
+      currentAccountId: current.id,
+      matchedAccountId: current.id,
+      officialIdentity: publicOfficialIdentity(official),
+      message: null,
+    };
+  }
+
+  if (sameIdentity) {
+    if (migrateProjection) syncCurrentAccountFromOfficial(current, official);
     return {
       status: "aligned",
       requiresResolution: false,
@@ -199,6 +250,7 @@ module.exports = {
   readOfficialAuth,
   readManagedProjection,
   writeManagedProjection,
+  identityMatchesAccount,
   inspectAuthState,
   adoptOfficialAuth,
   reapplyManagedAuth,

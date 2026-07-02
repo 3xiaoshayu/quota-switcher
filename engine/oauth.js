@@ -51,9 +51,19 @@ function getOAuthStatus() {
 }
 
 function openBrowser(url) {
-  cp.execFile("explorer.exe", [url], { windowsHide: true }, (error) => {
-    if (error) logWarn(`Could not open OAuth browser: ${error.message}`);
-  });
+  try {
+    const child = cp.spawn("explorer.exe", [url], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.once("error", (error) => {
+      logWarn(`Could not open OAuth browser: ${error.message}`);
+    });
+    child.unref();
+  } catch (error) {
+    logWarn(`Could not open OAuth browser: ${error.message}`);
+  }
 }
 
 function persistPending(pending) {

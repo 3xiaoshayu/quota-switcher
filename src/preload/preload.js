@@ -27,7 +27,7 @@ const api = {
   completeOAuthManually: (callbackUrl) => ipcRenderer.invoke('oauth:completeManual', callbackUrl),
 
   // 配额
-  refreshQuota: (id) => ipcRenderer.invoke('quota:refresh', id),
+  refreshQuota: (id, force = true) => ipcRenderer.invoke('quota:refresh', id, force),
   refreshAllQuotas: () => ipcRenderer.invoke('quota:refreshAll'),
 
   // Token

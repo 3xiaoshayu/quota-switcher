@@ -9,6 +9,19 @@ release is published.
 
 No unreleased changes.
 
+## [0.1.0-beta.9] - 2026-07-02
+
+- Prevent Microsoft Store activation exit codes from causing false switch
+  rollbacks, and move switch waiting and process control off blocking sleeps.
+- Treat official token rotation for the same identity as a safe synchronization
+  instead of an external-account conflict.
+- Repair invalidated quota access tokens once before retrying usage requests,
+  while preserving retry backoff for automatic UI synchronization.
+- Serialize auto-switch configuration writes and add busy-state guards to
+  destructive or long-running account controls.
+- Correct quota-window labels, account-plan summaries, daemon timestamps,
+  attention counts, and beta update behavior in the renderer.
+
 ## [0.1.0-beta.8] - 2026-07-01
 
 - Detect official Codex authentication changes and require an explicit adopt or

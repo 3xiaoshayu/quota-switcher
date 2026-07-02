@@ -103,7 +103,7 @@ interface DesktopBridge {
   reapplyManagedAccount: (id?: string | null) => Promise<ApiResponse<unknown>>;
   deleteAccount: (id: string) => Promise<ApiResponse<boolean>>;
   switchAccount: (id: string) => Promise<ApiResponse<unknown>>;
-  refreshQuota: (id: string) => Promise<ApiResponse<DesktopQuota>>;
+  refreshQuota: (id: string, force?: boolean) => Promise<ApiResponse<DesktopQuota>>;
   refreshAllQuotas: () => Promise<ApiResponse<Array<{ id: string; email: string; quota?: DesktopQuota; error?: string }>>>;
   refreshToken: (id: string) => Promise<ApiResponse<{ ok?: boolean; skipped?: boolean; error?: string }>>;
   refreshAllTokens: (force?: boolean) => Promise<ApiResponse<unknown>>;
@@ -142,6 +142,7 @@ export interface DashboardState {
   authState: DesktopAuthState;
   storageDiagnostics: StorageDiagnostic[];
   daemonLastSuccessAt?: string | number | null;
+  daemonLastRunAt?: string | number | null;
   daemonLastError?: string | null;
   daemonPausedReason?: string | null;
 }
@@ -311,6 +312,7 @@ export function mapAccountForUi(
     warning: account.reauth_reason || quotaError,
     isCurrent: !!currentAccount && currentAccount.id === account.id,
     quotaUpdatedAt: account.usage_updated_at,
+    quotaNextRetryAt: account.quota_next_retry_at,
     subscriptionActiveUntil: account.subscription_active_until,
     resetCreditsAvailable: resetCredits,
     resetCreditsNextExpiresAt: account.reset_credits?.next_expires_at || account.quota?.reset_credits_next_expires_at || null,
@@ -324,6 +326,8 @@ export function mapAccountForUi(
 export function needsQuotaAutoSync(account: AccountQuota): boolean {
   if (account.tokenExpired || account.tokenAccessAvailable === false) return false;
   if (account.status === 'SUSPENDED') return false;
+  const retryAt = toDate(account.quotaNextRetryAt);
+  if (retryAt && retryAt.getTime() > Date.now()) return false;
   if (!account.quotaUpdatedAt || account.quotaError) return true;
   const date = toDate(account.quotaUpdatedAt);
   if (!date) return true;
@@ -377,13 +381,14 @@ export const desktopApi = {
       authState: expectData(authStateResponse, 'Read authentication state'),
       storageDiagnostics: expectData(diagnosticsResponse, 'Read storage diagnostics') || [],
       daemonLastSuccessAt: daemon?.lastSuccessAt || null,
+      daemonLastRunAt: daemon?.lastRunAt || null,
       daemonLastError: daemon?.lastError || null,
       daemonPausedReason: daemon?.pausedReason || null,
     };
   },
 
-  async refreshQuota(id: string) {
-    return expectData(await bridge().refreshQuota(id), 'Refresh quota');
+  async refreshQuota(id: string, force = true) {
+    return expectData(await bridge().refreshQuota(id, force), 'Refresh quota');
   },
 
   async refreshAllQuotas() {

@@ -8,7 +8,7 @@ interface LoginProps {
   appVersion?: string;
 }
 
-export default function Login({ onLogin, userEmail, appVersion = '0.1.0-beta.7' }: LoginProps) {
+export default function Login({ onLogin, userEmail, appVersion = '0.1.0-beta.9' }: LoginProps) {
   const [email, setEmail] = useState(userEmail || 'admin@codex.ai');
   const [password] = useState('Windows DPAPI protected');
   const [error, setError] = useState('');

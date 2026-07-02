@@ -37,20 +37,31 @@ export default function QuotasView({
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
   const [refreshingCardId, setRefreshingCardId] = useState<string | null>(null);
   const [refreshingSubscriptionId, setRefreshingSubscriptionId] = useState<string | null>(null);
+  const [refreshingTokenId, setRefreshingTokenId] = useState<string | null>(null);
+  const [resettingId, setResettingId] = useState<string | null>(null);
 
   const gridAccounts = accounts;
 
   // Calculate dynamic stats
   const totalAccounts = accounts.length;
-  const actionRequiredCount = accounts.filter(acc => acc.status === 'EXPIRED' || acc.status === 'WARNING' || acc.status === 'SUSPENDED').length;
+  const actionRequiredCount = accounts.filter(
+    acc => acc.status === 'EXPIRED' || acc.status === 'WARNING' || acc.status === 'SUSPENDED' || acc.status === 'LOW_QUOTA',
+  ).length;
   
   // Calculate average quota remaining
-  const visibleFiveHourQuotas = accounts
-    .filter(account => account.fiveHourQuotaRemaining != null)
-    .map(account => ((account.fiveHourQuotaRemaining || 0) / account.fiveHourQuotaTotal) * 100);
+  const visibleQuotaPercentages = accounts.flatMap((account) => {
+    const percentages: number[] = [];
+    if (account.fiveHourQuotaRemaining != null) {
+      percentages.push((account.fiveHourQuotaRemaining / account.fiveHourQuotaTotal) * 100);
+    }
+    if (account.weeklyQuotaRemaining != null) {
+      percentages.push((account.weeklyQuotaRemaining / account.weeklyQuotaTotal) * 100);
+    }
+    return percentages;
+  });
   const avgRemaining = Math.round(
-    visibleFiveHourQuotas.length
-      ? visibleFiveHourQuotas.reduce((sum, percentage) => sum + percentage, 0) / visibleFiveHourQuotas.length
+    visibleQuotaPercentages.length
+      ? visibleQuotaPercentages.reduce((sum, percentage) => sum + percentage, 0) / visibleQuotaPercentages.length
       : 0,
   );
 
@@ -74,6 +85,26 @@ export default function QuotasView({
       await onRefreshSubscription(id);
     } finally {
       setRefreshingSubscriptionId(null);
+    }
+  };
+
+  const handleTokenRefresh = async (id: string) => {
+    if (!onRefreshToken || refreshingTokenId) return;
+    setRefreshingTokenId(id);
+    try {
+      await onRefreshToken(id);
+    } finally {
+      setRefreshingTokenId(null);
+    }
+  };
+
+  const handleReset = async (id: string) => {
+    if (resettingId) return;
+    setResettingId(id);
+    try {
+      await onResetAccount(id);
+    } finally {
+      setResettingId(null);
     }
   };
 
@@ -245,6 +276,8 @@ export default function QuotasView({
             ? null
             : Math.min((account.weeklyQuotaRemaining / account.weeklyQuotaTotal) * 100, 100);
           const isExceeded = account.status === 'EXPIRED';
+          const fiveHourExceeded = fiveHourPercentage === 0;
+          const weeklyExceeded = weeklyPercentage === 0;
           const hasResetCredits = Number(account.resetCreditsAvailable || 0) > 0;
 
           // Progress color follows remaining quota: low red, medium amber, high green.
@@ -296,7 +329,7 @@ export default function QuotasView({
                   <div className="flex items-center justify-between text-xs font-semibold" id={`quota-5h-labels-${account.id}`}>
                     <span className="text-slate-400">5h Quota</span>
                     <span className="text-slate-300 font-mono">
-                      {isExceeded ? 'EXCEEDED' : `${Math.round(fiveHourPercentage)}% remaining`}
+                      {fiveHourExceeded ? 'EXCEEDED' : `${Math.round(fiveHourPercentage)}% remaining`}
                     </span>
                   </div>
                   <div className="h-1 bg-slate-950/40 border border-white/[0.03] shadow-[inset_0_1px_1px_rgba(0,0,0,0.5)] rounded-full overflow-hidden relative" id={`quota-5h-bar-bg-${account.id}`}>
@@ -316,7 +349,7 @@ export default function QuotasView({
                   <div className="flex items-center justify-between text-xs font-semibold" id={`quota-weekly-labels-${account.id}`}>
                     <span className="text-slate-400">Weekly Quota</span>
                     <span className="text-slate-300 font-mono">
-                      {isExceeded ? 'EXCEEDED' : `${Math.round(weeklyPercentage)}% remaining`}
+                      {weeklyExceeded ? 'EXCEEDED' : `${Math.round(weeklyPercentage)}% remaining`}
                     </span>
                   </div>
                   <div className="h-1 bg-slate-950/40 border border-white/[0.03] shadow-[inset_0_1px_1px_rgba(0,0,0,0.5)] rounded-full overflow-hidden relative" id={`quota-weekly-bar-bg-${account.id}`}>
@@ -340,15 +373,17 @@ export default function QuotasView({
               <div className="flex items-center gap-3 mt-6 pt-4 border-t border-white/5" id={`quota-actions-row-${account.id}`}>
                 {isExceeded && hasResetCredits ? (
                   <motion.button
-                    onClick={() => onResetAccount(account.id)}
+                    onClick={() => void handleReset(account.id)}
+                    disabled={resettingId !== null}
+                    aria-busy={resettingId === account.id}
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.96 }}
                     transition={{ type: 'spring', stiffness: 400, damping: 20 }}
                     className="flex-1 py-3 bg-rose-500/10 hover:bg-rose-500/15 border border-rose-500/25 text-rose-300 hover:text-rose-200 text-xs font-bold rounded-2xl flex items-center justify-center gap-2 cursor-pointer transition-all"
                     id={`quota-btn-reset-${account.id}`}
                   >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    Reset Account
+                    <RotateCcw className={`w-3.5 h-3.5 ${resettingId === account.id ? 'animate-spin' : ''}`} />
+                    {resettingId === account.id ? 'Resetting...' : 'Reset Account'}
                   </motion.button>
                 ) : (
                   <motion.button
@@ -398,6 +433,8 @@ export default function QuotasView({
                               handleCardRefresh(account.id);
                             }}
                             disabled={isCardRefreshing}
+                            aria-busy={isCardRefreshing}
+                            id={`quota-menu-sync-${account.id}`}
                             className="w-full px-3 py-2 hover:bg-white/5 rounded-xl text-left text-xs flex items-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           >
                             <RefreshCw className={`w-3.5 h-3.5 text-blue-400 ${isCardRefreshing ? 'animate-spin' : ''}`} />
@@ -405,13 +442,15 @@ export default function QuotasView({
                           </button>
                           {onRefreshSubscription && (
                             <button
-                              onClick={() => {
-                                setActiveMenuId(null);
-                                handleSubscriptionRefresh(account.id);
-                              }}
-                              disabled={isSubscriptionRefreshing}
-                              className="w-full px-3 py-2 hover:bg-white/5 rounded-xl text-left text-xs flex items-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                            >
+                            onClick={() => {
+                              setActiveMenuId(null);
+                              handleSubscriptionRefresh(account.id);
+                            }}
+                            disabled={isSubscriptionRefreshing}
+                            aria-busy={isSubscriptionRefreshing}
+                            id={`quota-menu-refresh-subscription-${account.id}`}
+                            className="w-full px-3 py-2 hover:bg-white/5 rounded-xl text-left text-xs flex items-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
                               <Sparkles className={`w-3.5 h-3.5 text-cyan-400 ${isSubscriptionRefreshing ? 'animate-pulse' : ''}`} />
                               刷新订阅/套餐
                             </button>
@@ -420,8 +459,11 @@ export default function QuotasView({
                             <button
                               onClick={() => {
                                 setActiveMenuId(null);
-                                onResetAccount(account.id);
+                                void handleReset(account.id);
                               }}
+                              disabled={resettingId !== null}
+                              aria-busy={resettingId === account.id}
+                              id={`quota-menu-reset-credit-${account.id}`}
                               className="w-full px-3 py-2 hover:bg-white/5 rounded-xl text-left text-xs flex items-center gap-2 cursor-pointer"
                             >
                               <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
@@ -432,13 +474,15 @@ export default function QuotasView({
                           <button
                             onClick={() => {
                               setActiveMenuId(null);
-                              onRefreshToken?.(account.id);
+                              void handleTokenRefresh(account.id);
                             }}
-                            disabled={!onRefreshToken}
+                            disabled={!onRefreshToken || refreshingTokenId !== null}
+                            aria-busy={refreshingTokenId === account.id}
+                            id={`quota-menu-refresh-token-${account.id}`}
                             className="w-full px-3 py-2 hover:bg-white/5 rounded-xl text-left text-xs text-rose-400 hover:text-rose-300 flex items-center gap-2 cursor-pointer"
                           >
-                            <Activity className="w-3.5 h-3.5" />
-                            刷新 Token
+                            <Activity className={`w-3.5 h-3.5 ${refreshingTokenId === account.id ? 'animate-spin' : ''}`} />
+                            {refreshingTokenId === account.id ? '刷新中...' : '刷新 Token'}
                           </button>
                         </motion.div>
                       </>

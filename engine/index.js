@@ -2,12 +2,12 @@ const { b64url, sha256hex, codeChallenge, ts, tsIso, buildId, jwtPayload, jwtExp
 const { parseTsStr } = require("./time-utils");
 const { httpJson, buildCodexHeaders, extractErrorCode, isTokenRevoked } = require("./http-client");
 const { setSecretCodec, protectData, unprotectData, ensureDir, loadIdx, saveIdx, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct, getStorageDiagnostics, rebuildIndex } = require("./storage");
-const { writeAuthJson, writeProjection, clearApiBaseUrl, killCodex, startCodex, doSwitch, setSwitchRuntimeForTests } = require("./switch");
+const { writeAuthJson, writeProjection, clearApiBaseUrl, killCodex, startCodex, doSwitch, launchOfficialCodex, setSwitchRuntimeForTests } = require("./switch");
 const { oauthLoginFlow, restorePendingOAuth, cancelOAuth, completeOAuthManually, getOAuthStatus, upsert } = require("./oauth");
-const { inspectAuthState, adoptOfficialAuth, reapplyManagedAuth, authFingerprint } = require("./auth-state");
+const { inspectAuthState, adoptOfficialAuth, reapplyManagedAuth, authFingerprint, identityMatchesAccount } = require("./auth-state");
 const { initLogger, logInfo, logWarn, logError, getLogDir, sanitizeMessage } = require("./logger");
 const { refreshOneTok, needsRefresh, refreshAll } = require("./token-refresh");
-const { fetchQuota, refreshQuota, extractQuotaMetrics } = require("./quota");
+const { fetchQuota, fetchQuotaWithTokenRepair, isQuotaAuthError, refreshQuota, extractQuotaMetrics } = require("./quota");
 const { fetchResetCredits, consumeResetCredit } = require("./reset-credits");
 const { fetchSubscriptionStatus, refreshSubscription } = require("./subscription");
 const { loadAutoSwitchCfg, saveAutoSwitchCfg, DEFAULT_AUTO_SWITCH_CFG } = require("./config-manager");
@@ -26,17 +26,17 @@ module.exports = {
   // storage
   setSecretCodec, protectData, unprotectData, ensureDir, loadIdx, saveIdx, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct, getStorageDiagnostics, rebuildIndex,
   // switch
-  writeAuthJson, writeProjection, clearApiBaseUrl, killCodex, startCodex, doSwitch, setSwitchRuntimeForTests,
+  writeAuthJson, writeProjection, clearApiBaseUrl, killCodex, startCodex, doSwitch, launchOfficialCodex, setSwitchRuntimeForTests,
   // oauth
   oauthLoginFlow, restorePendingOAuth, cancelOAuth, completeOAuthManually, getOAuthStatus, upsert,
   // auth state
-  inspectAuthState, adoptOfficialAuth, reapplyManagedAuth, authFingerprint,
+  inspectAuthState, adoptOfficialAuth, reapplyManagedAuth, authFingerprint, identityMatchesAccount,
   // logger
   initLogger, logInfo, logWarn, logError, getLogDir, sanitizeMessage,
   // token-refresh
   refreshOneTok, needsRefresh, refreshAll,
   // quota
-  fetchQuota, refreshQuota, extractQuotaMetrics,
+  fetchQuota, fetchQuotaWithTokenRepair, isQuotaAuthError, refreshQuota, extractQuotaMetrics,
   // reset-credits
   fetchResetCredits, consumeResetCredit,
   // subscription

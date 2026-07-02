@@ -54,6 +54,8 @@ export default function AccountsView({
   const [isAdding, setIsAdding] = useState(false);
   const [reauthorizeId, setReauthorizeId] = useState<string | null>(null);
   const [manualCallbackUrl, setManualCallbackUrl] = useState('');
+  const [switchingId, setSwitchingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // New account form state
   const [newEmail, setNewEmail] = useState('');
@@ -89,6 +91,30 @@ export default function AccountsView({
     }
   };
 
+  const handleSwitchAccount = async (id: string) => {
+    if (switchingId) return;
+    setSwitchingId(id);
+    try {
+      await onSwitchCurrentAccount(id);
+    } catch (error) {
+      onAddLog(error instanceof Error ? error.message : String(error), 'error');
+    } finally {
+      setSwitchingId(null);
+    }
+  };
+
+  const handleDeleteAccount = async (id: string) => {
+    if (deletingId || switchingId) return;
+    setDeletingId(id);
+    try {
+      await onDeleteAccount(id);
+    } catch (error) {
+      onAddLog(error instanceof Error ? error.message : String(error), 'error');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   // Filter accounts
   const filteredAccounts = accounts.filter(acc => {
     // Search filter
@@ -100,7 +126,9 @@ export default function AccountsView({
 
     // Tabs filter
     if (filterTab === 'current') return acc.isCurrent;
-    if (filterTab === 'warning') return acc.status === 'WARNING' || acc.status === 'EXPIRED' || acc.status === 'SUSPENDED';
+    if (filterTab === 'warning') {
+      return acc.status === 'WARNING' || acc.status === 'EXPIRED' || acc.status === 'SUSPENDED' || acc.status === 'LOW_QUOTA';
+    }
     
     return true;
   });
@@ -151,6 +179,8 @@ export default function AccountsView({
     }
   };
 
+  const currentPlan = accounts.find(account => account.isCurrent)?.plan || 'Unknown';
+
   return (
     <div className="flex-1 p-8 overflow-y-auto select-none" id="accounts-view-container">
       {/* Title block with stats & action triggers */}
@@ -167,7 +197,7 @@ export default function AccountsView({
             <span className="text-slate-400">|</span>
             <span className="flex items-center gap-1.5 text-amber-300 font-bold">
               <Award className="w-3.5 h-3.5 text-amber-400" />
-              当前套餐: 企业旗舰版
+              当前套餐: {currentPlan}
             </span>
           </div>
         </div>
@@ -471,17 +501,17 @@ export default function AccountsView({
                   </motion.button>
                 ) : (
                   <motion.button
-                    onClick={() => {
-                      onSwitchCurrentAccount(account.id);
-                    }}
+                    onClick={() => void handleSwitchAccount(account.id)}
+                    disabled={switchingId !== null || deletingId === account.id}
+                    aria-busy={switchingId === account.id}
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.95 }}
                     transition={{ type: 'spring', stiffness: 450, damping: 20 }}
                     className="flex-1 py-3 px-2 bg-white/5 hover:bg-blue-500/15 hover:text-blue-300 hover:border-blue-500/35 border border-transparent rounded-xl text-slate-300 transition-all text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
                     id={`action-switch-${account.id}`}
                   >
-                    <ArrowLeftRight className="w-3.5 h-3.5" />
-                    Switch
+                    <ArrowLeftRight className={`w-3.5 h-3.5 ${switchingId === account.id ? 'animate-pulse' : ''}`} />
+                    {switchingId === account.id ? 'Switching...' : 'Switch'}
                   </motion.button>
                 )}
 
@@ -492,8 +522,10 @@ export default function AccountsView({
                       onAddLog('Cannot delete the active current account.', 'error');
                       return;
                     }
-                    onDeleteAccount(account.id);
+                    void handleDeleteAccount(account.id);
                   }}
+                  disabled={account.isCurrent || deletingId !== null || switchingId !== null}
+                  aria-busy={deletingId === account.id}
                   whileHover={account.isCurrent ? {} : { scale: 1.05, backgroundColor: 'rgba(239, 68, 68, 0.1)' }}
                   whileTap={account.isCurrent ? {} : { scale: 0.95 }}
                   transition={{ type: 'spring', stiffness: 450, damping: 15 }}
@@ -505,7 +537,7 @@ export default function AccountsView({
                   title="删除此账号"
                   id={`action-delete-${account.id}`}
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
+                  <Trash2 className={`w-3.5 h-3.5 ${deletingId === account.id ? 'animate-pulse' : ''}`} />
                 </motion.button>
               </div>
             </motion.div>
@@ -515,12 +547,17 @@ export default function AccountsView({
 
       {/* Add Account Modal Overlay */}
       {showAddModal && (
-          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div
+            className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4"
+            id="add-account-modal-overlay"
+          >
             <motion.div
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               className="backdrop-blur-2xl bg-slate-900/90 border border-white/10 rounded-3xl p-8 w-full max-w-lg shadow-2xl relative text-white select-none"
               id="add-account-modal"
+              role="dialog"
+              aria-modal="true"
             >
               <button
                 onClick={() => {

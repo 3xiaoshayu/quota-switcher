@@ -21,7 +21,7 @@ import { SystemSettings, DaemonState } from '../types';
 interface SettingsProps {
   settings: SystemSettings;
   daemonState: DaemonState;
-  onToggleDaemon: () => void;
+  onToggleDaemon: () => void | Promise<void>;
   onUpdateSyncInterval: (interval: number) => void;
   onAddLog: (msg: string, type: 'success' | 'info' | 'warning' | 'error') => void;
   onBatchVerifyTokens?: () => Promise<void>;
@@ -29,6 +29,7 @@ interface SettingsProps {
   onCheckUpdates?: () => Promise<void>;
   onInstallUpdate?: () => Promise<void>;
   canInstallUpdate?: boolean;
+  updateEnabled?: boolean;
   accountCount?: number;
   repositoryUrl?: string;
   onOpenLogs?: () => Promise<void>;
@@ -45,6 +46,7 @@ export default function SettingsView({
   onCheckUpdates,
   onInstallUpdate,
   canInstallUpdate = false,
+  updateEnabled = false,
   accountCount = 128,
   repositoryUrl = 'https://github.com',
   onOpenLogs,
@@ -54,6 +56,19 @@ export default function SettingsView({
   const [tokenVerifyProgress, setTokenVerifyProgress] = useState(0);
   const [isDetectingClient, setIsDetectingClient] = useState(false);
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
+  const [isTogglingDaemon, setIsTogglingDaemon] = useState(false);
+
+  const handleToggleDaemon = async () => {
+    if (isTogglingDaemon) return;
+    setIsTogglingDaemon(true);
+    try {
+      await onToggleDaemon();
+    } catch (error) {
+      onAddLog(error instanceof Error ? error.message : String(error), 'error');
+    } finally {
+      setIsTogglingDaemon(false);
+    }
+  };
 
   // Batch verify tokens simulation
   const handleBatchVerify = () => {
@@ -176,9 +191,9 @@ export default function SettingsView({
 
               {/* Toggle service trigger */}
               <motion.button
-                onClick={() => {
-                  onToggleDaemon();
-                }}
+                onClick={handleToggleDaemon}
+                disabled={isTogglingDaemon}
+                aria-busy={isTogglingDaemon}
                 whileHover={{ scale: 1.04 }}
                 whileTap={{ scale: 0.95 }}
                 transition={{ type: 'spring', stiffness: 450, damping: 20 }}
@@ -191,13 +206,13 @@ export default function SettingsView({
               >
                 {daemonState.status === 'Running' ? (
                   <>
-                    <Square className="w-3 h-3 fill-rose-300" />
-                    Stop Service
+                    <Square className={`w-3 h-3 fill-rose-300 ${isTogglingDaemon ? 'animate-pulse' : ''}`} />
+                    {isTogglingDaemon ? 'Stopping...' : 'Stop Service'}
                   </>
                 ) : (
                   <>
-                    <Play className="w-3 h-3 fill-emerald-300" />
-                    Start Service
+                    <Play className={`w-3 h-3 fill-emerald-300 ${isTogglingDaemon ? 'animate-pulse' : ''}`} />
+                    {isTogglingDaemon ? 'Starting...' : 'Start Service'}
                   </>
                 )}
               </motion.button>
@@ -309,7 +324,7 @@ export default function SettingsView({
             <div className="flex items-end justify-between" id="tokens-body">
               <div className="flex flex-col text-left" id="tokens-stat-box">
                 <span className="text-3xl font-extrabold text-white tracking-tight font-mono">{accountCount}</span>
-                <span className="text-[10px] text-slate-400 uppercase tracking-widest font-mono font-bold mt-1">Total Active Accounts</span>
+                <span className="text-[10px] text-slate-400 uppercase tracking-widest font-mono font-bold mt-1">Total Managed Accounts</span>
               </div>
 
               <motion.button
@@ -365,7 +380,7 @@ export default function SettingsView({
                   id="btn-check-for-updates"
                 >
                   <Activity className={`w-3.5 h-3.5 text-blue-400 ${isCheckingUpdates ? 'animate-spin' : ''}`} />
-                  {isCheckingUpdates ? 'Checking...' : 'Check for Updates'}
+                  {isCheckingUpdates ? 'Checking...' : (updateEnabled ? 'Check for Updates' : 'Open Releases')}
                 </motion.button>
                 {canInstallUpdate && (
                   <motion.button

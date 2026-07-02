@@ -10,10 +10,24 @@ const { assertOfficialCodexInstalled } = require("./codex-installation");
 const { logInfo, logWarn, logError } = require("./logger");
 
 function sleep(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function defaultListProcesses() {
+function execFileAsync(file, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    cp.execFile(file, args, options, (error, stdout, stderr) => {
+      if (error) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+async function defaultListProcesses() {
   const script = [
     "$items = Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('Codex.exe','node_repl.exe') }",
     "$codex = @($items | Where-Object { $_.Name -eq 'Codex.exe' -and (($_.ExecutablePath -like '*WindowsApps*OpenAI.Codex*') -or ($_.CommandLine -like '*OpenAI.Codex*')) })",
@@ -23,11 +37,12 @@ function defaultListProcesses() {
     "@($items | Where-Object { $ids.Contains([int]$_.ProcessId) } | Select-Object Name,ProcessId,ParentProcessId,ExecutablePath) | ConvertTo-Json -Compress",
   ].join("; ");
   try {
-    const output = cp.execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
       encoding: "utf8",
       windowsHide: true,
       timeout: 10000,
-    }).trim();
+    });
+    const output = String(stdout || "").trim();
     if (!output) return [];
     const parsed = JSON.parse(output);
     return (Array.isArray(parsed) ? parsed : [parsed]).map((item) => ({
@@ -45,9 +60,9 @@ function defaultListProcesses() {
 const defaultRuntime = {
   assertInstalled: assertOfficialCodexInstalled,
   listProcesses: defaultListProcesses,
-  gracefulClose(pid) {
+  async gracefulClose(pid) {
     try {
-      cp.execFileSync("taskkill.exe", ["/PID", String(pid)], {
+      await execFileAsync("taskkill.exe", ["/PID", String(pid)], {
         stdio: "ignore",
         windowsHide: true,
         timeout: 5000,
@@ -57,9 +72,9 @@ const defaultRuntime = {
       return false;
     }
   },
-  forceClose(pid) {
+  async forceClose(pid) {
     try {
-      cp.execFileSync("taskkill.exe", ["/F", "/PID", String(pid)], {
+      await execFileAsync("taskkill.exe", ["/F", "/PID", String(pid)], {
         stdio: "ignore",
         windowsHide: true,
         timeout: 5000,
@@ -70,16 +85,29 @@ const defaultRuntime = {
     }
   },
   launch() {
-    cp.execFileSync("explorer.exe", [`shell:AppsFolder\\${CODEX_AUMID}`], {
-      stdio: "ignore",
-      windowsHide: true,
-      timeout: 10000,
-    });
+    launchOfficialCodex();
   },
   sleep,
 };
 
 let runtime = defaultRuntime;
+
+function launchOfficialCodex(childProcess = cp) {
+  const child = childProcess.spawn(
+    "explorer.exe",
+    [`shell:AppsFolder\\${CODEX_AUMID}`],
+    {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    },
+  );
+  child.once?.("error", (error) => {
+    logWarn(`Could not launch official Codex: ${error.message}`);
+  });
+  child.unref?.();
+  return true;
+}
 
 function setSwitchRuntimeForTests(nextRuntime = null) {
   runtime = nextRuntime ? { ...defaultRuntime, ...nextRuntime } : defaultRuntime;
@@ -124,24 +152,24 @@ function clearApiBaseUrl() {
   return true;
 }
 
-function waitForProcessesToExit(pids, timeoutMs) {
+async function waitForProcessesToExit(pids, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let remaining = new Set(pids);
   while (remaining.size > 0 && Date.now() < deadline) {
-    const running = new Set(runtime.listProcesses().map((item) => item.pid));
+    const running = new Set((await runtime.listProcesses()).map((item) => item.pid));
     remaining = new Set([...remaining].filter((pid) => running.has(pid)));
-    if (remaining.size > 0) runtime.sleep(200);
+    if (remaining.size > 0) await runtime.sleep(200);
   }
   return [...remaining];
 }
 
-function killCodex() {
-  const processes = runtime.listProcesses();
+async function killCodex() {
+  const processes = await runtime.listProcesses();
   const pids = [...new Set(processes.map((item) => item.pid))];
-  for (const pid of pids) runtime.gracefulClose(pid);
-  const remaining = waitForProcessesToExit(pids, 2500);
-  for (const pid of remaining) runtime.forceClose(pid);
-  const forceRemaining = waitForProcessesToExit(remaining, 5000);
+  await Promise.all(pids.map((pid) => runtime.gracefulClose(pid)));
+  const remaining = await waitForProcessesToExit(pids, 2500);
+  await Promise.all(remaining.map((pid) => runtime.forceClose(pid)));
+  const forceRemaining = await waitForProcessesToExit(remaining, 5000);
   if (forceRemaining.length > 0) {
     throw new Error(`Official Codex processes did not exit: ${forceRemaining.join(", ")}`);
   }
@@ -149,16 +177,17 @@ function killCodex() {
   return pids;
 }
 
-function startCodex(options = {}) {
-  runtime.launch();
+async function startCodex(options = {}) {
+  await runtime.launch();
   if (options.verify === false) return true;
   const deadline = Date.now() + (options.timeoutMs || 10000);
   while (Date.now() < deadline) {
-    if (runtime.listProcesses().some((item) => String(item.name).toLowerCase() === "codex.exe")) {
+    const processes = await runtime.listProcesses();
+    if (processes.some((item) => String(item.name).toLowerCase() === "codex.exe")) {
       logInfo("Official Codex process started");
       return true;
     }
-    runtime.sleep(250);
+    await runtime.sleep(250);
   }
   throw new Error("Official Codex did not start within the expected time");
 }
@@ -178,7 +207,7 @@ function restoreFile(filePath, content) {
   fs.renameSync(tempPath, filePath);
 }
 
-function doSwitch(account, options = {}) {
+async function doSwitch(account, options = {}) {
   if (!account?.id || !account.tokens?.access_token) throw new Error("The target account is incomplete");
   const current = currentAcct();
   if (!options.force && current?.id === account.id) {
@@ -201,7 +230,7 @@ function doSwitch(account, options = {}) {
   ]);
 
   try {
-    killCodex();
+    await killCodex();
     clearApiBaseUrl();
     const authValue = writeAuthJson(account);
     writeProjection(account, authValue);
@@ -212,7 +241,7 @@ function doSwitch(account, options = {}) {
 
     account.last_used = ts();
     saveAcct(account);
-    startCodex();
+    await startCodex();
     logInfo("Codex account switch transaction completed");
     return { already: false, account };
   } catch (error) {
@@ -222,7 +251,7 @@ function doSwitch(account, options = {}) {
         logError(`Rollback failed for ${filePath}: ${restoreError.message}`);
       }
     }
-    try { startCodex({ timeoutMs: 10000 }); } catch (restartError) {
+    try { await startCodex({ timeoutMs: 10000 }); } catch (restartError) {
       logError(`Could not restart Codex after rollback: ${restartError.message}`);
     }
     throw error;
@@ -237,5 +266,6 @@ module.exports = {
   killCodex,
   startCodex,
   doSwitch,
+  launchOfficialCodex,
   setSwitchRuntimeForTests,
 };
