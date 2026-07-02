@@ -13,7 +13,7 @@ win:
     - target: zip
       arch: [x64]
   icon: resources/icon.ico
-  artifactName: "${productName}-${version}-${arch}.${ext}"
+  artifactName: "Codex-Account-Manager-${version}-${arch}.${ext}"
 
 nsis:
   oneClick: false
@@ -21,7 +21,7 @@ nsis:
   perMachine: false
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  artifactName: "${productName}-Setup-${version}-${arch}.${ext}"
+  artifactName: "Codex-Account-Manager-Setup-${version}-${arch}.${ext}"
 
 publish:
   provider: github
