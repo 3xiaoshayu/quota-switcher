@@ -187,6 +187,38 @@ test("reset credit retry reuses the pending redemption request id", async t => {
   assert.equal(account.reset_credit_pending_redeem_id, null);
 });
 
+test("reset credit keeps its request id after an ambiguous HTTP response", async t => {
+  const { engine } = freshEngine(t);
+  const account = addAccount(engine, "ambiguous-reset@example.com", "acct-ambiguous-reset", "ambiguous-reset");
+  account.reset_credits = { available_count: 1, credits: [], next_expires_at: null };
+  const requestIds = [];
+  const { consumeResetCredit } = require("../engine/reset-credits");
+
+  await assert.rejects(
+    consumeResetCredit(account, {
+      httpJson: async (_url, options) => {
+        requestIds.push(JSON.parse(options.body).redeem_request_id);
+        return { status: 409, headers: {}, body: JSON.stringify({ error: { code: "conflict" } }) };
+      },
+      saveAcct: () => {},
+    }),
+    error => error.code === "reset_consume_status_unknown",
+  );
+  assert.equal(account.reset_credit_pending_redeem_id, requestIds[0]);
+
+  const result = await consumeResetCredit(account, {
+    httpJson: async (_url, options) => {
+      requestIds.push(JSON.parse(options.body).redeem_request_id);
+      return { status: 200, headers: {}, body: "{}" };
+    },
+    fetchResetCredits: async () => ({ available_count: 0, credits: [], next_expires_at: null }),
+    saveAcct: () => {},
+  });
+  assert.equal(requestIds[1], requestIds[0]);
+  assert.equal(result.consumed, true);
+  assert.equal(account.reset_credit_pending_redeem_id, null);
+});
+
 test("token refresh IPC does not convert an engine failure into success", () => {
   const { tokenRefreshResponse } = require("../src/main/ipc-handlers");
   assert.deepEqual(

@@ -73,11 +73,18 @@ async function consumeResetCredit(acct, dependencies = {}) {
   }
   if (resp.status >= 400) {
     const code = extractErrorCode(resp.body);
-    if (resp.status < 500) {
-      acct.reset_credit_pending_redeem_id = null;
+    const detail = "HTTP " + resp.status + (code ? " " + code : "") + " " + resp.body.slice(0, 200);
+    const statusUnknown = resp.status === 408 || resp.status === 409 || resp.status >= 500;
+    if (statusUnknown) {
+      acct.reset_credits_error = { message: detail, timestamp: ts() };
       persist(acct);
+      const unknown = new Error(`Reset credit request status is unknown: ${detail}. Retrying will reuse the same request id.`);
+      unknown.code = "reset_consume_status_unknown";
+      throw unknown;
     }
-    throw new Error("HTTP " + resp.status + (code ? " " + code : "") + " " + resp.body.slice(0, 200));
+    acct.reset_credit_pending_redeem_id = null;
+    persist(acct);
+    throw new Error(detail);
   }
 
   acct.reset_credit_pending_redeem_id = null;
