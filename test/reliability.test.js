@@ -554,6 +554,75 @@ test("daemon pauses before network work when official authentication conflicts",
   assert.deepEqual(result.tokenRefreshes, []);
 });
 
+test("daemon restart during in-flight work schedules an immediate replacement run", async t => {
+  const handlers = new Map();
+  const electron = {
+    ipcMain: {
+      handle(channel, listener) {
+        handlers.set(channel, listener);
+      },
+    },
+    BrowserWindow: {
+      getAllWindows() {
+        return [];
+      },
+    },
+    app: {
+      getVersion() {
+        return "0.1.0-beta.9";
+      },
+      isPackaged: false,
+    },
+    shell: {
+      async openExternal() {},
+      async openPath() {
+        return "";
+      },
+    },
+  };
+  const releases = [];
+  let runCount = 0;
+  const engine = {
+    getTickIntervalMs() {
+      return 60 * 60 * 1000;
+    },
+    getTickIntervalMinutes() {
+      return 60;
+    },
+    runDaemonWorker(options) {
+      runCount += 1;
+      return new Promise(resolve => {
+        releases.push(() => resolve({
+          completedAt: Date.now(),
+          pausedReason: options.isCancelled() ? "stopped" : null,
+          failures: [],
+          autoSwitchResult: null,
+        }));
+      });
+    },
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  const daemon = registerIpcHandlers(engine, { electron });
+  t.after(() => daemon.stopDaemon());
+
+  daemon.startDaemon();
+  assert.equal(runCount, 1);
+  daemon.stopDaemon();
+  daemon.startDaemon();
+  assert.equal(runCount, 1);
+
+  releases.shift()();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(runCount, 2);
+
+  daemon.stopDaemon();
+  releases.shift()();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(runCount, 2);
+  assert.equal(handlers.has("daemon:start"), true);
+  assert.equal(handlers.has("daemon:stop"), true);
+});
+
 test("switch transaction commits on success and restores state when launch fails", async t => {
   const { engine } = freshEngine(t);
   const first = addAccount(engine, "one@example.com", "acct-one", "one");

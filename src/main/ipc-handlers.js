@@ -90,7 +90,7 @@ async function withFreshAccount(eng, id, task) {
 }
 
 function registerIpcHandlers(engineInstance = null, services = {}) {
-    const { ipcMain, BrowserWindow, app, shell } = require("electron");
+    const { ipcMain, BrowserWindow, app, shell } = services.electron || require("electron");
     if (engineInstance) engine = engineInstance;
     const eng = engineInstance || getEngine();
     const updateService = services.updateService || null;
@@ -304,6 +304,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
 
     let daemonTimer = null;
     let daemonInFlight = false;
+    let daemonRunRequested = false;
     let daemonGeneration = 0;
     const daemonRuntimeState = {
         lastRunAt: null,
@@ -320,7 +321,10 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     };
 
     const runDaemon = async () => {
-        if (daemonInFlight) return;
+        if (daemonInFlight) {
+            if (daemonTimer !== null) daemonRunRequested = true;
+            return;
+        }
         const runGeneration = daemonGeneration;
         const isCancelled = () => runGeneration !== daemonGeneration || daemonTimer === null;
         daemonInFlight = true;
@@ -367,11 +371,17 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             BrowserWindow.getAllWindows().forEach(window => window.webContents.send("daemon:error", { message: error.message }));
         } finally {
             daemonInFlight = false;
+            if (daemonRunRequested && daemonTimer !== null) {
+                daemonRunRequested = false;
+                queueMicrotask(() => {
+                    if (daemonTimer !== null) void runDaemon();
+                });
+            }
         }
     };
 
     const startDaemonTimer = () => {
-        daemonTimer = setInterval(runDaemon, eng.getTickIntervalMs());
+        daemonTimer = setInterval(() => void runDaemon(), eng.getTickIntervalMs());
     };
     const restartDaemonTimer = () => {
         if (!daemonTimer) return;
@@ -391,6 +401,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         if (!daemonTimer) return ok("Not running");
         clearInterval(daemonTimer);
         daemonTimer = null;
+        daemonRunRequested = false;
         bumpDaemonGeneration();
         daemonRuntimeState.pausedReason = "stopped";
         daemonRuntimeState.lastError = null;
