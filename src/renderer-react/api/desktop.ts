@@ -240,6 +240,17 @@ function defaultAuthState(): DesktopAuthState {
   };
 }
 
+function unverifiedAuthState(message?: string): DesktopAuthState {
+  return {
+    status: 'unknown',
+    requiresResolution: true,
+    currentAccountId: null,
+    matchedAccountId: null,
+    officialIdentity: null,
+    message: message || 'Authentication state could not be verified. Background sync is paused until this check succeeds.',
+  };
+}
+
 function defaultOAuthStatus(): DesktopOAuthStatus {
   return { status: 'idle', pending: false, message: null };
 }
@@ -429,6 +440,9 @@ export const desktopApi = {
     const rawAccounts = expectData(accountsResponse, 'Read accounts') || [];
     const currentAccount = optionalData(currentResponse, null);
     const daemon = optionalData(daemonResponse, defaultDaemonStatus()) || defaultDaemonStatus();
+    const authState = authStateResponse.success === true
+      ? authStateResponse.data
+      : unverifiedAuthState(authStateResponse.error);
 
     return {
       accounts: rawAccounts.map((account) => mapAccountForUi(account, currentAccount, config)),
@@ -440,7 +454,7 @@ export const desktopApi = {
       appInfo: optionalData(appResponse, null),
       codexStatus: optionalData(codexResponse, null),
       updateStatus: optionalData(updateResponse, null),
-      authState: optionalData(authStateResponse, defaultAuthState()) || defaultAuthState(),
+      authState: authState || defaultAuthState(),
       oauthStatus: optionalData(oauthStatusResponse, defaultOAuthStatus()) || defaultOAuthStatus(),
       storageDiagnostics: optionalData(diagnosticsResponse, []) || [],
       daemonLastSuccessAt: daemon?.lastSuccessAt || null,

@@ -38,7 +38,7 @@ export interface DaemonState {
 }
 
 export interface DesktopAuthState {
-  status: 'aligned' | 'conflict' | 'unmanaged_official_auth' | 'missing_official_auth' | 'unsupported_official_auth' | 'empty';
+  status: 'aligned' | 'conflict' | 'unmanaged_official_auth' | 'missing_official_auth' | 'unsupported_official_auth' | 'empty' | 'unknown';
   requiresResolution: boolean;
   currentAccountId?: string | null;
   matchedAccountId?: string | null;

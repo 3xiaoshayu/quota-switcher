@@ -105,3 +105,15 @@ test("dashboard state still fails when the core account list is unavailable", as
     /account database unavailable/,
   );
 });
+
+test("dashboard state pauses background sync when authentication cannot be verified", async () => {
+  const desktopApi = loadDesktopApiWithBridge(bridge({
+    getAuthState: () => fail("auth state unavailable"),
+  }));
+
+  const snapshot = await desktopApi.loadDashboardState();
+  assert.equal(snapshot.accounts.length, 1);
+  assert.equal(snapshot.authState.status, "unknown");
+  assert.equal(snapshot.authState.requiresResolution, true);
+  assert.match(snapshot.authState.message, /auth state unavailable/i);
+});

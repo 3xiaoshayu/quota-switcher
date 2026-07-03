@@ -1106,7 +1106,7 @@ export default function App() {
           >
             <ShieldAlert className="mb-4 h-10 w-10 text-amber-400" />
             <h3 id="auth-conflict-title" className="text-lg font-bold text-white">
-              Official Codex login changed
+              {authState.status === 'unknown' ? 'Authentication status unavailable' : 'Official Codex login changed'}
             </h3>
             <p className="mt-2 text-xs leading-relaxed text-slate-300">
               {authState.message || 'The official Codex login no longer matches the account managed by this app.'}
@@ -1120,6 +1120,16 @@ export default function App() {
               Automatic switching and authentication writes are paused until this is resolved.
             </p>
             <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {authState.status === 'unknown' && (
+                <button
+                  onClick={() => void loadDashboardState(false)}
+                  disabled={isResolvingAuth}
+                  className="rounded-2xl border border-blue-500/25 bg-blue-500/10 px-4 py-3 text-xs font-bold text-blue-300 hover:bg-blue-500/15 disabled:opacity-50"
+                  id="auth-conflict-reload"
+                >
+                  Reload status
+                </button>
+              )}
               {(authState.status === 'conflict' || authState.status === 'unmanaged_official_auth') && (
                 <button
                   onClick={() => void handleResolveAuthConflict('adopt')}
