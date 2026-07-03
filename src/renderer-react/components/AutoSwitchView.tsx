@@ -7,7 +7,7 @@ import {
   Clock, 
   Users
 } from 'lucide-react';
-import { AccountQuota, LogEntry, SystemSettings, DaemonState } from '../types';
+import { AccountQuota, AutoSwitchRunResult, LogEntry, SystemSettings, DaemonState } from '../types';
 
 interface AutoSwitchProps {
   accounts: AccountQuota[];
@@ -22,7 +22,46 @@ interface AutoSwitchProps {
   selectedAccountIds: string[];
   scopeMode?: 'all' | 'selected';
   onScopeModeChange?: (mode: 'all' | 'selected') => void | Promise<void>;
-  onRunCheckNow?: () => Promise<void>;
+  onRunCheckNow?: () => Promise<AutoSwitchRunResult | void>;
+}
+
+function manualCheckLog(result: AutoSwitchRunResult | void): {
+  message: string;
+  type: 'success' | 'info' | 'warning' | 'error';
+} {
+  if (!result) return { message: 'Manual quota check completed.', type: 'success' };
+  if (result.switched) {
+    return {
+      message: `Manual check switched to ${result.to?.email || 'another account'}.`,
+      type: 'success',
+    };
+  }
+
+  switch (result.reason) {
+    case 'quota_sufficient':
+      return { message: 'Manual check complete. Current quota is sufficient.', type: 'success' };
+    case 'no_monitored':
+      return { message: 'Manual check skipped: select at least one account or use All Accounts.', type: 'warning' };
+    case 'current_not_monitored':
+      return { message: 'Manual check skipped: the current account is outside the selected scope.', type: 'warning' };
+    case 'no_candidates':
+      return { message: 'Manual check complete: no eligible replacement account is available.', type: 'warning' };
+    case 'no_accounts':
+      return { message: 'Manual check skipped: no managed accounts are available.', type: 'warning' };
+    case 'no_quota_data':
+      return { message: 'Manual check could not find quota data for the current account.', type: 'warning' };
+    case 'auth_conflict':
+      return { message: 'Manual check paused until the official Codex login conflict is resolved.', type: 'error' };
+    case 'current_quota_refresh_failed':
+      return { message: `Manual check failed: ${result.error || 'current quota refresh failed'}.`, type: 'error' };
+    case 'cancelled':
+      return { message: 'Manual check was cancelled.', type: 'warning' };
+    default:
+      return {
+        message: `Manual check completed${result.reason ? `: ${result.reason}` : '.'}`,
+        type: 'info',
+      };
+  }
 }
 
 export default function AutoSwitchView({
@@ -62,8 +101,9 @@ export default function AutoSwitchView({
     onAddLog('Initiating manual quota scanning protocol...', 'info');
     if (onRunCheckNow) {
       try {
-        await onRunCheckNow();
-        onAddLog('Manual quota scanning complete. All selected accounts checked.', 'success');
+        const result = await onRunCheckNow();
+        const log = manualCheckLog(result);
+        onAddLog(log.message, log.type);
       } catch (error) {
         onAddLog(error instanceof Error ? error.message : String(error), 'error');
       } finally {

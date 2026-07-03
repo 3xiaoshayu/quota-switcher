@@ -868,6 +868,75 @@ test("config saves reload only a changed daemon interval without triggering work
   assert.equal(clearedIntervals.length, 1);
 });
 
+test("manual auto-switch checks update daemon status metadata", async () => {
+  const handlers = new Map();
+  const electron = {
+    ipcMain: {
+      handle(channel, listener) {
+        handlers.set(channel, listener);
+      },
+    },
+    BrowserWindow: { getAllWindows: () => [] },
+    app: {
+      getVersion: () => "0.1.0-beta.9",
+      isPackaged: false,
+    },
+    shell: {
+      async openExternal() {},
+      async openPath() { return ""; },
+    },
+  };
+  let nextResult = { switched: false, reason: "quota_sufficient" };
+  const engine = {
+    getTickIntervalMs: () => 10 * 60000,
+    getTickIntervalMinutes: () => 10,
+    loadAutoSwitchCfg: () => ({
+      enabled: false,
+      primary_threshold: 20,
+      secondary_threshold: 30,
+      account_scope_mode: "selected",
+      selected_account_ids: [],
+      sync_interval_minutes: 10,
+    }),
+    async autoSwitchTick() {
+      return nextResult;
+    },
+  };
+
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, { electron });
+
+  const before = await handlers.get("daemon:status")({});
+  assert.equal(before.data.lastRunAt, null);
+
+  const firstResult = await handlers.get("autoswitch:tick")({});
+  assert.equal(firstResult.success, true);
+  assert.equal(firstResult.data.reason, "quota_sufficient");
+  const afterSuccess = await handlers.get("daemon:status")({});
+  assert.equal(typeof afterSuccess.data.lastRunAt, "number");
+  assert.equal(afterSuccess.data.lastSuccessAt, afterSuccess.data.lastRunAt);
+  assert.equal(afterSuccess.data.lastError, null);
+
+  nextResult = { switched: false, reason: "no_monitored" };
+  const skippedResult = await handlers.get("autoswitch:tick")({});
+  assert.equal(skippedResult.success, true);
+  const afterSkip = await handlers.get("daemon:status")({});
+  assert.equal(typeof afterSkip.data.lastRunAt, "number");
+  assert.equal(afterSkip.data.lastSuccessAt, afterSuccess.data.lastSuccessAt);
+  assert.equal(afterSkip.data.lastError, null);
+
+  nextResult = {
+    switched: false,
+    reason: "current_quota_refresh_failed",
+    error: "network unavailable",
+  };
+  const failedResult = await handlers.get("autoswitch:tick")({});
+  assert.equal(failedResult.success, true);
+  const afterFailure = await handlers.get("daemon:status")({});
+  assert.equal(afterFailure.data.lastError, "network unavailable");
+  assert.equal(afterFailure.data.lastSuccessAt, afterSkip.data.lastSuccessAt);
+});
+
 test("switch transaction commits on success and restores state when launch fails", async t => {
   const { engine } = freshEngine(t);
   const first = addAccount(engine, "one@example.com", "acct-one", "one");

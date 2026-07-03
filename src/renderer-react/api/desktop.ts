@@ -1,5 +1,6 @@
 import {
   AccountQuota,
+  AutoSwitchRunResult,
   DesktopAppInfo,
   DesktopAutoSwitchConfig,
   DesktopAuthState,
@@ -53,13 +54,6 @@ interface DesktopAccount {
     timeLeft?: number | null;
   };
 }
-
-type AutoSwitchResult = {
-  switched?: boolean;
-  reason?: string;
-  from?: DesktopAccount | null;
-  to?: DesktopAccount | null;
-};
 
 type DesktopDaemonStatus = {
   running: boolean;
@@ -133,13 +127,13 @@ interface DesktopBridge {
   refreshSubscription: (id: string, force?: boolean) => Promise<ApiResponse<DesktopSubscriptionRefreshResult>>;
   getAutoSwitchConfig: () => Promise<ApiResponse<DesktopAutoSwitchConfig>>;
   saveAutoSwitchConfig: (cfg: DesktopAutoSwitchConfig) => Promise<ApiResponse<boolean>>;
-  runAutoSwitchTick: () => Promise<ApiResponse<AutoSwitchResult>>;
+  runAutoSwitchTick: () => Promise<ApiResponse<AutoSwitchRunResult>>;
   startDaemon: () => Promise<ApiResponse<string>>;
   stopDaemon: () => Promise<ApiResponse<string>>;
   getDaemonStatus: () => Promise<ApiResponse<DesktopDaemonStatus>>;
   onDaemonTick?: (cb: (payload: unknown) => void) => () => void;
   onDaemonError?: (cb: (payload: { message?: string }) => void) => () => void;
-  onAutoSwitch?: (cb: (payload: AutoSwitchResult) => void) => () => void;
+  onAutoSwitch?: (cb: (payload: AutoSwitchRunResult) => void) => () => void;
   onUpdateStatus?: (cb: (payload: DesktopUpdateStatus) => void) => () => void;
   onAuthConflict?: (cb: (payload: DesktopAuthState) => void) => () => void;
 }
@@ -380,7 +374,9 @@ export function mapAccountForUi(
     tokenValidity: tokenStatus.expired ? 'Expired' : `${formatDuration(tokenStatus.timeLeft)} left`,
     resetInFiveHour: formatReset(account.quota?.hourly_reset_time),
     resetInWeekly: formatReset(account.quota?.weekly_reset_time),
-    warning: account.reauth_reason || quotaError,
+    warning: account.requires_reauth
+      ? 'Account requires reauthorization before tokens can be refreshed.'
+      : account.reauth_reason || quotaError,
     isCurrent: !!currentAccount && currentAccount.id === account.id,
     quotaUpdatedAt: account.usage_updated_at,
     quotaNextRetryAt: account.quota_next_retry_at,
@@ -565,7 +561,7 @@ export const desktopApi = {
   subscribe(events: {
     onDaemonTick?: () => void;
     onDaemonError?: (message: string) => void;
-    onAutoSwitch?: (result: AutoSwitchResult) => void;
+    onAutoSwitch?: (result: AutoSwitchRunResult) => void;
     onUpdateStatus?: (status: DesktopUpdateStatus) => void;
     onAuthConflict?: (state: DesktopAuthState) => void;
   }) {

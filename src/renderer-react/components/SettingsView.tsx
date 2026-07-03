@@ -55,7 +55,6 @@ export default function SettingsView({
 }: SettingsProps) {
   const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
   const [isVerifyingTokens, setIsVerifyingTokens] = useState(false);
-  const [tokenVerifyProgress, setTokenVerifyProgress] = useState(0);
   const [isDetectingClient, setIsDetectingClient] = useState(false);
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
   const [isTogglingDaemon, setIsTogglingDaemon] = useState(false);
@@ -72,46 +71,24 @@ export default function SettingsView({
     }
   };
 
-  // Batch verify tokens simulation
-  const handleBatchVerify = () => {
-    if (onBatchVerifyTokens) {
-      setIsVerifyingTokens(true);
-      setTokenVerifyProgress(15);
-      onAddLog('Initiating batch token integrity validation scan...', 'info');
-      onBatchVerifyTokens()
-        .then(() => {
-          setTokenVerifyProgress(100);
-          onAddLog('Batch Token Validation successful. Active tokens verified.', 'success');
-        })
-        .catch((error) => {
-          onAddLog(error instanceof Error ? error.message : String(error), 'error');
-        })
-        .finally(() => {
-          setTimeout(() => {
-            setIsVerifyingTokens(false);
-            setTokenVerifyProgress(0);
-          }, 500);
-        });
-      return;
-    }
-
+  const handleBatchVerify = async () => {
+    if (isVerifyingTokens) return;
     setIsVerifyingTokens(true);
-    setTokenVerifyProgress(0);
     onAddLog('Initiating batch token integrity validation scan...', 'info');
-
-    const interval = setInterval(() => {
-      setTokenVerifyProgress((prev) => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          setTimeout(() => {
-            setIsVerifyingTokens(false);
-            onAddLog(`Batch Token Validation successful. ${accountCount} active tokens verified.`, 'success');
-          }, 400);
-          return 100;
-        }
-        return prev + 10;
-      });
-    }, 15000 / 100); // quick loader
+    try {
+      if (onBatchVerifyTokens) await onBatchVerifyTokens();
+      else await new Promise((resolve) => setTimeout(resolve, 1500));
+      onAddLog(
+        onBatchVerifyTokens
+          ? 'Batch Token Validation successful. Active tokens verified.'
+          : `Batch Token Validation successful. ${accountCount} active tokens verified.`,
+        'success',
+      );
+    } catch (error) {
+      onAddLog(error instanceof Error ? error.message : String(error), 'error');
+    } finally {
+      setIsVerifyingTokens(false);
+    }
   };
 
   const handleDetectClient = () => {
@@ -340,7 +317,7 @@ export default function SettingsView({
                 id="btn-batch-login-check"
               >
                 <ShieldCheck className="w-3.5 h-3.5 text-cyan-300" />
-                {isVerifyingTokens ? `Checking... ${tokenVerifyProgress}%` : 'Batch Login Check'}
+                {isVerifyingTokens ? 'Checking...' : 'Batch Login Check'}
               </motion.button>
             </div>
           </div>

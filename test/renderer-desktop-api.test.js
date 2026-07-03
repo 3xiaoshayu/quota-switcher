@@ -117,3 +117,32 @@ test("dashboard state pauses background sync when authentication cannot be verif
   assert.equal(snapshot.authState.requiresResolution, true);
   assert.match(snapshot.authState.message, /auth state unavailable/i);
 });
+
+test("dashboard state replaces internal reauthorization details with actionable copy", async () => {
+  const desktopApi = loadDesktopApiWithBridge(bridge({
+    listAccounts: () => ok([{
+      id: "revoked",
+      email: "revoked@example.com",
+      plan_type: "plus",
+      requires_reauth: true,
+      reauth_reason: "refresh_token needs re-authorization",
+      quota_error: {
+        code: "refresh_token_invalidated",
+        message: "{\"error\":\"refresh_token_invalidated\"}",
+      },
+      token_status: {
+        accessAvailable: true,
+        refreshAvailable: true,
+        expired: false,
+        timeLeft: 3600,
+      },
+    }]),
+  }));
+
+  const snapshot = await desktopApi.loadDashboardState();
+  assert.equal(snapshot.accounts[0].status, "SUSPENDED");
+  assert.equal(
+    snapshot.accounts[0].warning,
+    "Account requires reauthorization before tokens can be refreshed.",
+  );
+});

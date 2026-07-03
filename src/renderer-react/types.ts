@@ -95,6 +95,14 @@ export interface DesktopAutoSwitchConfig {
   sync_interval_minutes?: number;
 }
 
+export interface AutoSwitchRunResult {
+  switched?: boolean;
+  reason?: string;
+  error?: string | null;
+  from?: { email?: string | null } | null;
+  to?: { email?: string | null } | null;
+}
+
 export interface DesktopAppInfo {
   name: string;
   version: string;

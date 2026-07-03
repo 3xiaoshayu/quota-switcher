@@ -424,8 +424,24 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         } catch (error) { return fail(error.message); }
     });
     handle("autoswitch:tick", async () => {
-        try { return ok(publicAutoSwitchResult(eng, await eng.autoSwitchTick(eng.loadAutoSwitchCfg()))); }
-        catch (error) { return fail(error.message); }
+        try {
+            const result = publicAutoSwitchResult(eng, await eng.autoSwitchTick(eng.loadAutoSwitchCfg()));
+            const completedAt = Date.now();
+            const failedReason = result?.reason === "current_quota_refresh_failed" || result?.reason === "auth_conflict";
+            const completedSuccessfully = !!result?.switched ||
+                result?.reason === "quota_sufficient" ||
+                result?.reason === "no_candidates";
+            daemonRuntimeState.lastRunAt = completedAt;
+            daemonRuntimeState.lastError = failedReason
+                ? result.error || result.reason
+                : null;
+            if (completedSuccessfully) daemonRuntimeState.lastSuccessAt = completedAt;
+            return ok(result);
+        } catch (error) {
+            daemonRuntimeState.lastRunAt = Date.now();
+            daemonRuntimeState.lastError = error.message;
+            return fail(error.message);
+        }
     });
     handle("daemon:start", startDaemon);
     handle("daemon:stop", stopDaemon);

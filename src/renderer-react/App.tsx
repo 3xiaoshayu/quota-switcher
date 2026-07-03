@@ -900,6 +900,7 @@ export default function App() {
     } else {
       addToast(result?.reason || 'No switch required', 'info');
     }
+    return result;
   };
 
   const handleScopeModeChange = async (mode: 'all' | 'selected') => {
