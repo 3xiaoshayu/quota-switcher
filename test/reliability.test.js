@@ -330,12 +330,15 @@ test("storage restores valid backups and preserves DPAPI failures", t => {
     encrypt: codec.encrypt,
     decrypt: () => { throw new Error("DPAPI unavailable"); },
   });
+  const indexBeforeCredentialFailure = fs.readFileSync(config.IDX_PATH, "utf8");
   const protectedBeforeFailure = fs.readFileSync(accountPath, "utf8");
   fs.writeFileSync(`${accountPath}.bak`, JSON.stringify({
     ...account,
     tokens: tokens("backup@example.com", "acct-backup", "backup"),
   }), "utf8");
   assert.equal(engine.loadAcct(account.id), null);
+  assert.equal(engine.listAccts().length, 0);
+  assert.equal(fs.readFileSync(config.IDX_PATH, "utf8"), indexBeforeCredentialFailure);
   assert.equal(fs.existsSync(accountPath), true);
   assert.equal(fs.readFileSync(accountPath, "utf8"), protectedBeforeFailure);
   assert.ok(engine.getStorageDiagnostics().some(item => item.type === "account_credentials"));
@@ -497,6 +500,36 @@ test("token refresh rechecks official auth before writing refreshed credentials"
   const conflict = engine.inspectAuthState({ migrateProjection: false });
   assert.equal(conflict.status, "conflict");
   assert.equal(conflict.matchedAccountId, external.id);
+});
+
+test("token refresh skips revoked accounts until reauthorization", async t => {
+  const { engine } = freshEngine(t);
+  const account = addAccount(engine, "revoked-token@example.com", "acct-revoked-token", "revoked-token");
+  account.requires_reauth = true;
+  account.reauth_reason = "refresh_token needs re-authorization";
+  account.quota_error = {
+    code: "refresh_token_invalidated",
+    message: "Account requires reauthorization before tokens can be refreshed.",
+    timestamp: engine.ts(),
+  };
+  engine.saveAcct(account);
+
+  let refreshCalled = false;
+  const { refreshOneTok } = require("../engine/token-refresh");
+  const result = await refreshOneTok(account, {
+    force: true,
+    httpJson: async () => {
+      refreshCalled = true;
+      throw new Error("refresh endpoint should not be called");
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.skipped, true);
+  assert.equal(result.reauthRequired, true);
+  assert.equal(result.code, "refresh_token_invalidated");
+  assert.equal(refreshCalled, false);
+  assert.equal(engine.loadAcct(account.id).quota_error.code, "refresh_token_invalidated");
 });
 
 test("auto-switch refuses to use stale quota after current refresh failure", async t => {

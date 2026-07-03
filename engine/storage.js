@@ -202,6 +202,7 @@ function loadAccountPath(filePath, options = {}) {
         recordDiagnostic("account_json", filePath, parseError.message, false);
       }
     }
+    if (typeof options.onUnreadable === "function") options.onUnreadable(filePath, parseError);
     return null;
   }
 
@@ -210,6 +211,7 @@ function loadAccountPath(filePath, options = {}) {
   } catch (error) {
     if (error instanceof AccountCredentialError && error.kind === "decrypt") {
       recordDiagnostic("account_credentials", filePath, error.message, false);
+      if (typeof options.onCredentialFailure === "function") options.onCredentialFailure(filePath, error);
       return null;
     }
     if (allowRestore && fs.existsSync(`${filePath}.bak`)) {
@@ -222,24 +224,50 @@ function loadAccountPath(filePath, options = {}) {
     }
     const type = error instanceof AccountCredentialError ? "account_credentials" : "account_data";
     recordDiagnostic(type, filePath, error.message, false);
+    if (typeof options.onUnreadable === "function") options.onUnreadable(filePath, error);
     return null;
   }
 }
 
-function scanAccounts() {
+function scanAccounts(options = {}) {
   ensureDir(ACCTS_DIR);
+  const stats = options.stats || null;
+  if (stats) {
+    stats.fileCount = 0;
+    stats.credentialFailures = 0;
+    stats.unreadable = 0;
+  }
   const accounts = [];
   for (const name of fs.readdirSync(ACCTS_DIR)) {
     if (!name.startsWith("codex_") || !name.endsWith(".json")) continue;
-    const account = loadAccountPath(path.join(ACCTS_DIR, name));
+    if (stats) stats.fileCount += 1;
+    const account = loadAccountPath(path.join(ACCTS_DIR, name), {
+      allowRestore: options.allowRestore,
+      onCredentialFailure: () => {
+        if (stats) stats.credentialFailures += 1;
+      },
+      onUnreadable: () => {
+        if (stats) stats.unreadable += 1;
+      },
+    });
     if (account) accounts.push(account);
   }
   accounts.sort((left, right) => (right.last_used || 0) - (left.last_used || 0));
   return accounts;
 }
 
-function rebuildIndex(reason, preferredCurrentId = null) {
-  const accounts = scanAccounts();
+function rebuildIndex(reason, preferredCurrentId = null, options = {}) {
+  const stats = {};
+  const accounts = scanAccounts({ stats });
+  if (stats.credentialFailures > 0 && options.preserveOnCredentialFailure !== false) {
+    recordDiagnostic(
+      "account_index",
+      IDX_PATH,
+      `Index rebuild skipped: ${stats.credentialFailures} account file(s) could not be decrypted`,
+      false,
+    );
+    return options.fallbackIndex ? normalizeIndex(options.fallbackIndex) : emptyIndex();
+  }
   const ids = new Set(accounts.map((account) => account.id));
   const index = {
     version: "2.0",
@@ -254,7 +282,9 @@ function rebuildIndex(reason, preferredCurrentId = null) {
 function loadIdx() {
   ensureDir(DATA_DIR);
   if (!fs.existsSync(IDX_PATH)) {
-    return fs.existsSync(ACCTS_DIR) ? rebuildIndex("index missing") : emptyIndex();
+    return fs.existsSync(ACCTS_DIR)
+      ? rebuildIndex("index missing", null, { fallbackIndex: emptyIndex() })
+      : emptyIndex();
   }
 
   try {
@@ -262,7 +292,7 @@ function loadIdx() {
     const index = normalizeIndex(result.value);
     if (index.accounts.length === 0 && fs.existsSync(ACCTS_DIR)) {
       const accountFiles = fs.readdirSync(ACCTS_DIR).some((name) => name.startsWith("codex_") && name.endsWith(".json"));
-      if (accountFiles) return rebuildIndex("index contained no accounts", index.current_account_id);
+      if (accountFiles) return rebuildIndex("index contained no accounts", index.current_account_id, { fallbackIndex: index });
     }
     return index;
   } catch (error) {
@@ -270,7 +300,7 @@ function loadIdx() {
       try { quarantineFile(IDX_PATH, "invalid-json"); } catch {}
     }
     recordDiagnostic("account_index", IDX_PATH, error.message, false);
-    return rebuildIndex("index unreadable");
+    return rebuildIndex("index unreadable", null, { fallbackIndex: emptyIndex() });
   }
 }
 
@@ -341,8 +371,13 @@ function deleteAcct(id, options = {}) {
 }
 
 function listAccts() {
-  const accounts = scanAccounts();
+  const stats = {};
+  const accounts = scanAccounts({ stats });
   const index = loadIdx();
+  if (stats.credentialFailures > 0) {
+    logWarn(`Account index synchronization skipped: ${stats.credentialFailures} account file(s) could not be decrypted`);
+    return accounts;
+  }
   const summaries = accounts.map(accountSummary);
   const indexedIds = index.accounts.map((account) => account.id).sort().join("|");
   const scannedIds = summaries.map((account) => account.id).sort().join("|");

@@ -279,6 +279,7 @@ export default function QuotasView({
           const fiveHourExceeded = fiveHourPercentage === 0;
           const weeklyExceeded = weeklyPercentage === 0;
           const hasResetCredits = Number(account.resetCreditsAvailable || 0) > 0;
+          const tokenRefreshUnavailable = account.status === 'SUSPENDED' || account.tokenRefreshAvailable === false;
 
           // Progress color follows remaining quota: low red, medium amber, high green.
           const barColor5h = fiveHourPercentage == null
@@ -476,13 +477,14 @@ export default function QuotasView({
                               setActiveMenuId(null);
                               void handleTokenRefresh(account.id);
                             }}
-                            disabled={!onRefreshToken || refreshingTokenId !== null}
+                            disabled={!onRefreshToken || refreshingTokenId !== null || tokenRefreshUnavailable}
                             aria-busy={refreshingTokenId === account.id}
                             id={`quota-menu-refresh-token-${account.id}`}
-                            className="w-full px-3 py-2 hover:bg-white/5 rounded-xl text-left text-xs text-rose-400 hover:text-rose-300 flex items-center gap-2 cursor-pointer"
+                            title={tokenRefreshUnavailable ? 'Reauthorize this account before refreshing tokens' : 'Refresh token'}
+                            className="w-full px-3 py-2 hover:bg-white/5 rounded-xl text-left text-xs text-rose-400 hover:text-rose-300 flex items-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           >
                             <Activity className={`w-3.5 h-3.5 ${refreshingTokenId === account.id ? 'animate-spin' : ''}`} />
-                            {refreshingTokenId === account.id ? '刷新中...' : '刷新 Token'}
+                            {refreshingTokenId === account.id ? '刷新中...' : tokenRefreshUnavailable ? '需要重新授权' : '刷新 Token'}
                           </button>
                         </motion.div>
                       </>

@@ -46,8 +46,14 @@ function isReauthErrorCode(code) {
   return REAUTH_ERROR_CODES.has(String(code || "").toLowerCase());
 }
 
+function reauthRequiredError(code) {
+  if (code === "missing_refresh_token") return "Account has no refresh token and must be reauthorized.";
+  return "Account requires reauthorization before tokens can be refreshed.";
+}
+
 function markRequiresReauth(acct, code, detail) {
-  acct.quota_error = { code: code || "token_refresh_failed", message: detail || null, timestamp: ts() };
+  const errorCode = code || "token_refresh_failed";
+  acct.quota_error = { code: errorCode, message: reauthRequiredError(errorCode) || detail || null, timestamp: ts() };
   acct.requires_reauth = true;
   acct.reauth_reason = "refresh_token needs re-authorization";
   saveAcct(acct);
@@ -67,12 +73,16 @@ async function refreshOneTok(acct, options = {}) {
   const optionBag = typeof options === "boolean" ? { force: options } : (options || {});
   const force = !!optionBag.force;
   const request = optionBag.httpJson || httpJson;
+  if (acct.requires_reauth) {
+    const code = acct.quota_error?.code || "reauthorization_required";
+    return { ok: false, skipped: true, revoked: true, reauthRequired: true, code, error: reauthRequiredError(code) };
+  }
   if (!force && !needsRefresh(acct) && !hasTokenRepairSignal(acct)) {
     return { ok: true, skipped: true, gen: acct.token_generation || 0, timeLeft: tokenTimeLeft(acct) };
   }
   if (!acct.tokens.refresh_token) {
     markRequiresReauth(acct, "missing_refresh_token", "This account has no refresh token.");
-    return { ok: false, error: "缺少 refresh_token", revoked: true };
+    return { ok: false, error: "缺少 refresh_token", revoked: true, reauthRequired: true, code: "missing_refresh_token" };
   }
   const body = JSON.stringify({
     client_id: CLIENT_ID, grant_type: "refresh_token",
@@ -87,7 +97,7 @@ async function refreshOneTok(acct, options = {}) {
       const code = extractErrorCode(resp.body);
       const revoked = isReauthErrorCode(code);
       if (revoked) markRequiresReauth(acct, code, resp.body.slice(0, 300));
-      return { ok: false, error: tokenRefreshError(resp.status, code), revoked, detail: resp.body.slice(0, 300) };
+      return { ok: false, error: tokenRefreshError(resp.status, code), revoked, code, detail: resp.body.slice(0, 300) };
     }
     const data = JSON.parse(resp.body);
     const idTok = data.id_token || acct.tokens.id_token;
@@ -137,14 +147,23 @@ async function refreshAll(force) {
       }
       const wasRepair = hasTokenRepairSignal(a);
       const r = await refreshOneTok(a, { force });
-      results.push({ email: a.email, ok: r.ok, skipped: false, gen: r.gen, error: r.error });
+      results.push({
+        email: a.email,
+        ok: r.ok,
+        skipped: !!r.skipped,
+        gen: r.gen,
+        error: r.error,
+        reauthRequired: !!r.reauthRequired,
+      });
 
       if (r.ok) {
         if (wasRepair) revived++;
         else okN++;
+      } else if (r.reauthRequired) {
+        dead++;
       } else if (r.revoked) {
         dead++;
-        markRequiresReauth(a, "token_revoked", r.detail);
+        markRequiresReauth(a, r.code || "token_revoked", r.detail);
       }
     });
     await new Promise((resolve) => setTimeout(resolve, 500));
