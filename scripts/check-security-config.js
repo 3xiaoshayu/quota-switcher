@@ -13,6 +13,8 @@ function requirePattern(source, pattern, message) {
 requirePattern(mainSource, /contextIsolation\s*:\s*true/, "Electron contextIsolation must stay enabled.");
 requirePattern(mainSource, /nodeIntegration\s*:\s*false/, "Electron nodeIntegration must stay disabled.");
 requirePattern(mainSource, /sandbox\s*:\s*true/, "Electron renderer sandbox must stay enabled.");
+requirePattern(mainSource, /requestSingleInstanceLock\(\)/, "The application must prevent concurrent manager instances.");
+requirePattern(mainSource, /app\.on\(["']second-instance["']/, "A second launch must focus the existing window.");
 requirePattern(mainSource, /setWindowOpenHandler/, "New renderer windows must be intercepted.");
 requirePattern(mainSource, /webContents\.on\(["']will-navigate["']\s*,\s*guardNavigation\)/, "Renderer navigation must use guardNavigation.");
 requirePattern(mainSource, /webContents\.on\(["']will-redirect["']\s*,\s*guardNavigation\)/, "Renderer redirects must use guardNavigation.");

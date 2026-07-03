@@ -3,7 +3,17 @@ const path = require("path");
 const { registerIpcHandlers } = require("./ipc-handlers");
 const { createUpdateService } = require("./updater");
 
-app.whenReady().then(() => {
+let mainWindow = null;
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+
+function focusMainWindow() {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+}
+
+function startApplication() {
     const eng = require("../../engine");
     if (!safeStorage.isEncryptionAvailable()) {
         dialog.showErrorBox(
@@ -39,6 +49,10 @@ app.whenReady().then(() => {
             contextIsolation: true, nodeIntegration: false, sandbox: true,
         },
     });
+    mainWindow = win;
+    win.on("closed", () => {
+        if (mainWindow === win) mainWindow = null;
+    });
     win.setMenuBarVisibility(false);
 
     const openExternalUrl = (url) => {
@@ -73,6 +87,13 @@ app.whenReady().then(() => {
     } catch (error) {
         console.error("Failed to start daemon:", error);
     }
-});
+}
+
+if (!hasSingleInstanceLock) {
+    app.quit();
+} else {
+    app.on("second-instance", focusMainWindow);
+    app.whenReady().then(startApplication);
+}
 
 app.on("window-all-closed", () => app.quit());
