@@ -651,11 +651,19 @@ test("official Codex launcher does not treat the explorer activation exit code a
 test("OAuth pending state is encrypted, recoverable, cancellable, and target mismatch is saved separately", async t => {
   const { engine, codec } = freshEngine(t);
   const original = addAccount(engine, "original@example.com", "acct-original", "original");
+  const renamed = engine.upsert(tokens("renamed@example.com", "acct-original", "renamed"), {
+    targetAccountId: original.id,
+  });
+  assert.equal(renamed.mismatch, false);
+  assert.equal(renamed.account.id, original.id);
+  assert.equal(engine.loadAcct(original.id).email, "renamed@example.com");
+  assert.equal(engine.listAccts().length, 1);
+
   const result = engine.upsert(tokens("different@example.com", "acct-different", "different"), {
     targetAccountId: original.id,
   });
   assert.equal(result.mismatch, true);
-  assert.equal(engine.loadAcct(original.id).email, "original@example.com");
+  assert.equal(engine.loadAcct(original.id).email, "renamed@example.com");
   assert.equal(engine.loadAcct(result.account.id).email, "different@example.com");
 
   const pendingPromise = engine.oauthLoginFlow({ openBrowser: false });

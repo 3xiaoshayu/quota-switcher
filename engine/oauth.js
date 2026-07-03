@@ -218,10 +218,21 @@ function accountFromTokens(tokens, existing = null) {
   };
 }
 
+function sameAccountIdentity(left, right) {
+  const leftAccountId = String(left?.account_id || left?.tokens?.account_id || "");
+  const rightAccountId = String(right?.account_id || right?.tokens?.account_id || "");
+  if (leftAccountId && rightAccountId) return leftAccountId === rightAccountId;
+
+  const leftEmail = String(left?.email || "").trim().toLowerCase();
+  const rightEmail = String(right?.email || "").trim().toLowerCase();
+  return !!leftEmail && leftEmail === rightEmail;
+}
+
 function upsert(tokens, options = {}) {
   const preview = accountFromTokens(tokens);
   const targetAccountId = options.targetAccountId || null;
-  const mismatch = !!targetAccountId && preview.id !== targetAccountId;
+  const targetAccount = targetAccountId ? loadAcct(targetAccountId) : null;
+  const mismatch = !!targetAccountId && (!targetAccount || !sameAccountIdentity(preview, targetAccount));
   const saveId = mismatch ? preview.id : (targetAccountId || preview.id);
   const existing = loadAcct(saveId);
   const account = accountFromTokens(tokens, existing);
