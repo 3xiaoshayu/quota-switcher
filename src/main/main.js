@@ -33,7 +33,6 @@ function startApplication() {
     eng.restorePendingOAuth();
 
     const updateService = createUpdateService({ app, BrowserWindow });
-    const daemon = registerIpcHandlers(eng, { updateService });
     const win = new BrowserWindow({
         width: 1440, height: 900,
         minWidth: 1280, minHeight: 720,
@@ -54,6 +53,10 @@ function startApplication() {
         if (mainWindow === win) mainWindow = null;
     });
     win.setMenuBarVisibility(false);
+    const daemon = registerIpcHandlers(eng, {
+        updateService,
+        trustedWebContentsId: win.webContents.id,
+    });
 
     const openExternalUrl = (url) => {
         if (!/^https?:\/\//i.test(String(url || ""))) return;

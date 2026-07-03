@@ -90,8 +90,25 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     if (engineInstance) engine = engineInstance;
     const eng = engineInstance || getEngine();
     const updateService = services.updateService || null;
+    const trustedWebContentsId = Number.isInteger(services.trustedWebContentsId)
+        ? services.trustedWebContentsId
+        : null;
+    const isTrustedSender = (event) => {
+        if (trustedWebContentsId == null) return true;
+        return event?.sender?.id === trustedWebContentsId;
+    };
+    const handle = (channel, listener) => {
+        ipcMain.handle(channel, async (event, ...args) => {
+            if (!isTrustedSender(event)) return fail("Untrusted IPC sender");
+            try {
+                return await listener(event, ...args);
+            } catch (error) {
+                return fail(error?.message || error);
+            }
+        });
+    };
 
-    ipcMain.handle("app:info", () => ok(updateService?.getAppInfo?.() || {
+    handle("app:info", () => ok(updateService?.getAppInfo?.() || {
         name: "Codex Account Manager",
         version: app.getVersion(),
         releaseChannel: String(app.getVersion()).includes("-") ? "beta" : "stable",
@@ -99,21 +116,21 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         updateEnabled: false,
         repository: "https://github.com/3xiaoshayu/codex-account-manager",
     }));
-    ipcMain.handle("update:status", () => ok(updateService?.getStatus?.() || {
+    handle("update:status", () => ok(updateService?.getStatus?.() || {
         status: "disabled",
         enabled: false,
         channel: String(app.getVersion()).includes("-") ? "beta" : "stable",
         message: "Update service is not initialized",
     }));
-    ipcMain.handle("update:check", async () => {
+    handle("update:check", async () => {
         try { return ok(updateService ? await updateService.checkForUpdates() : null); }
         catch (error) { return fail(error.message); }
     });
-    ipcMain.handle("update:install", () => {
+    handle("update:install", () => {
         try { return ok(updateService ? updateService.installUpdate() : null); }
         catch (error) { return fail(error.message); }
     });
-    ipcMain.handle("app:openExternal", async (event, url) => {
+    handle("app:openExternal", async (event, url) => {
         try {
             const target = String(url || "");
             if (!/^https?:\/\//i.test(target)) return fail("Unsupported external URL");
@@ -121,41 +138,41 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             return ok(true);
         } catch (error) { return fail(error.message); }
     });
-    ipcMain.handle("app:openLogs", async () => {
+    handle("app:openLogs", async () => {
         try {
             const error = await shell.openPath(eng.getLogDir());
             return error ? fail(error) : ok(true);
         } catch (openError) { return fail(openError.message); }
     });
-    ipcMain.handle("storage:diagnostics", () => ok(eng.getStorageDiagnostics()));
+    handle("storage:diagnostics", () => ok(eng.getStorageDiagnostics()));
 
-    ipcMain.handle("codex:status", () => {
+    handle("codex:status", () => {
         try { return ok(eng.getCodexInstallationStatus()); }
         catch (error) { return fail(error.message); }
     });
 
-    ipcMain.handle("account:list", () => ok(eng.listAccts().map(account => publicAccount(eng, account))));
-    ipcMain.handle("account:current", () => ok(publicAccount(eng, eng.currentAcct())));
-    ipcMain.handle("account:get", (event, id) => {
+    handle("account:list", () => ok(eng.listAccts().map(account => publicAccount(eng, account))));
+    handle("account:current", () => ok(publicAccount(eng, eng.currentAcct())));
+    handle("account:get", (event, id) => {
         const account = eng.loadAcct(id);
         return account ? ok(publicAccount(eng, account)) : fail("Account does not exist");
     });
-    ipcMain.handle("account:authState", () => {
+    handle("account:authState", () => {
         try { return ok(eng.inspectAuthState()); }
         catch (error) { return fail(error.message); }
     });
-    ipcMain.handle("account:adoptOfficial", () => {
+    handle("account:adoptOfficial", () => {
         try { return ok(publicAccount(eng, eng.adoptOfficialAuth())); }
         catch (error) { return fail(error.message); }
     });
-    ipcMain.handle("account:reapplyManaged", async (event, id) => {
+    handle("account:reapplyManaged", async (event, id) => {
         try {
             const result = await eng.reapplyManagedAuth(id || null);
             return ok({ ...result, account: publicAccount(eng, result.account) });
         } catch (error) { return fail(error.message); }
     });
 
-    ipcMain.handle("account:add", async () => {
+    handle("account:add", async () => {
         try {
             const result = await eng.oauthLoginFlow();
             return ok({
@@ -165,7 +182,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             });
         } catch (error) { return fail(error.message); }
     });
-    ipcMain.handle("account:reauthorize", async (event, id) => {
+    handle("account:reauthorize", async (event, id) => {
         try {
             const target = loadAcctById(eng, id);
             if (!target) return fail("Account does not exist");
@@ -177,17 +194,17 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             });
         } catch (error) { return fail(error.message); }
     });
-    ipcMain.handle("oauth:status", () => ok(eng.getOAuthStatus()));
-    ipcMain.handle("oauth:cancel", () => {
+    handle("oauth:status", () => ok(eng.getOAuthStatus()));
+    handle("oauth:cancel", () => {
         try { return ok(eng.cancelOAuth()); }
         catch (error) { return fail(error.message); }
     });
-    ipcMain.handle("oauth:completeManual", (event, callbackUrl) => {
+    handle("oauth:completeManual", (event, callbackUrl) => {
         try { return ok(eng.completeOAuthManually(callbackUrl)); }
         catch (error) { return fail(error.message); }
     });
 
-    ipcMain.handle("account:delete", async (event, id) => {
+    handle("account:delete", async (event, id) => {
         try {
             return await withFreshAccount(eng, id, async account => {
                 const index = eng.loadIdx();
@@ -201,7 +218,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             });
         } catch (error) { return fail(error.message); }
     });
-    ipcMain.handle("account:switch", async (event, id) => {
+    handle("account:switch", async (event, id) => {
         try {
             return await eng.withAccountLocks(["__switch__", id], async () => {
                 const account = loadAcctById(eng, id);
@@ -212,7 +229,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         } catch (error) { return fail(error.message); }
     });
 
-    ipcMain.handle("quota:refresh", async (event, id, force = true) => {
+    handle("quota:refresh", async (event, id, force = true) => {
         try {
             return await withFreshAccount(eng, id, async account => {
                 const quota = await eng.refreshQuota(account, { force: force !== false });
@@ -220,7 +237,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             });
         } catch (error) { return fail(error.message); }
     });
-    ipcMain.handle("quota:refreshAll", async () => {
+    handle("quota:refreshAll", async () => {
         const results = [];
         for (const listed of eng.listAccts()) {
             try {
@@ -237,7 +254,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         return ok(results);
     });
 
-    ipcMain.handle("token:refresh", async (event, id) => {
+    handle("token:refresh", async (event, id) => {
         try {
             return await withFreshAccount(eng, id, async account => {
                 const result = await eng.refreshOneTok(account);
@@ -246,11 +263,11 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         }
         catch (error) { return fail(error.message); }
     });
-    ipcMain.handle("token:refreshAll", async (event, force) => {
+    handle("token:refreshAll", async (event, force) => {
         try { return ok(await eng.refreshAll(!!force)); }
         catch (error) { return fail(error.message); }
     });
-    ipcMain.handle("token:status", (event, id) => {
+    handle("token:status", (event, id) => {
         const account = loadAcctById(eng, id);
         if (!account?.tokens?.access_token) return ok({ expired: true, refreshAvailable: false });
         const expiryDate = eng.jwtExp(account.tokens.access_token);
@@ -261,14 +278,14 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             timeLeft: expiryDate ? expiryDate - eng.ts() : null,
         });
     });
-    ipcMain.handle("reset:consume", async (event, id) => {
+    handle("reset:consume", async (event, id) => {
         try {
             return await withFreshAccount(eng, id, async account => {
                 return ok(await eng.consumeResetCredit(account));
             });
         } catch (error) { return fail(error.message); }
     });
-    ipcMain.handle("subscription:refresh", async (event, id, force) => {
+    handle("subscription:refresh", async (event, id, force) => {
         try {
             return await withFreshAccount(eng, id, async account => {
                 const changed = await eng.refreshSubscription(account, !!force);
@@ -376,21 +393,21 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         return ok("Stopped");
     };
 
-    ipcMain.handle("autoswitch:config:get", () => ok(eng.loadAutoSwitchCfg()));
-    ipcMain.handle("autoswitch:config:save", (event, config) => {
+    handle("autoswitch:config:get", () => ok(eng.loadAutoSwitchCfg()));
+    handle("autoswitch:config:save", (event, config) => {
         try {
             eng.saveAutoSwitchCfg(config);
             restartDaemonTimer();
             return ok(true);
         } catch (error) { return fail(error.message); }
     });
-    ipcMain.handle("autoswitch:tick", async () => {
+    handle("autoswitch:tick", async () => {
         try { return ok(publicAutoSwitchResult(eng, await eng.autoSwitchTick(eng.loadAutoSwitchCfg()))); }
         catch (error) { return fail(error.message); }
     });
-    ipcMain.handle("daemon:start", startDaemon);
-    ipcMain.handle("daemon:stop", stopDaemon);
-    ipcMain.handle("daemon:status", () => ok({
+    handle("daemon:start", startDaemon);
+    handle("daemon:stop", stopDaemon);
+    handle("daemon:status", () => ok({
         running: daemonTimer !== null,
         syncIntervalMinutes: daemonIntervalMinutes(),
         ...daemonRuntimeState,
