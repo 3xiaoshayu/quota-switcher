@@ -53,17 +53,20 @@ function markRequiresReauth(acct, code, detail) {
   saveAcct(acct);
 }
 
-function syncCurrentAuthIfNeeded(acct, authWasAligned = false) {
+function syncCurrentAuthIfNeeded(acct) {
   const idx = loadIdx();
   if (idx.current_account_id !== acct.id) return;
   const { inspectAuthState } = require("./auth-state");
-  if (!authWasAligned && inspectAuthState().requiresResolution) return;
-  writeAuthJson(acct);
-  writeProjection(acct);
+  const authState = inspectAuthState({ migrateProjection: false });
+  if (authState.status !== "aligned" || authState.currentAccountId !== acct.id) return;
+  const authValue = writeAuthJson(acct);
+  writeProjection(acct, authValue);
 }
 
 async function refreshOneTok(acct, options = {}) {
-  const force = typeof options === "boolean" ? options : !!options.force;
+  const optionBag = typeof options === "boolean" ? { force: options } : (options || {});
+  const force = !!optionBag.force;
+  const request = optionBag.httpJson || httpJson;
   if (!force && !needsRefresh(acct) && !hasTokenRepairSignal(acct)) {
     return { ok: true, skipped: true, gen: acct.token_generation || 0, timeLeft: tokenTimeLeft(acct) };
   }
@@ -71,15 +74,12 @@ async function refreshOneTok(acct, options = {}) {
     markRequiresReauth(acct, "missing_refresh_token", "This account has no refresh token.");
     return { ok: false, error: "缺少 refresh_token", revoked: true };
   }
-  const currentIndex = loadIdx();
-  const authWasAligned = currentIndex.current_account_id === acct.id
-    && !require("./auth-state").inspectAuthState().requiresResolution;
   const body = JSON.stringify({
     client_id: CLIENT_ID, grant_type: "refresh_token",
     refresh_token: acct.tokens.refresh_token,
   });
   try {
-    const resp = await httpJson(TOKEN_URL, {
+    const resp = await request(TOKEN_URL, {
       method: "POST", body,
       headers: { "Content-Type": "application/json" },
     });
@@ -107,7 +107,7 @@ async function refreshOneTok(acct, options = {}) {
     acct.requires_reauth = false;
     acct.reauth_reason = null;
     saveAcct(acct);
-    syncCurrentAuthIfNeeded(acct, authWasAligned);
+    syncCurrentAuthIfNeeded(acct);
     return { ok: true, skipped: false, gen: acct.token_generation };
   } catch (err) {
     return { ok: false, error: err.message, revoked: false };

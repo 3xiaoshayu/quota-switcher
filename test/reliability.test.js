@@ -394,6 +394,50 @@ test("auth state accepts and synchronizes token rotation for the same official i
   assert.equal(engine.inspectAuthState().status, "aligned");
 });
 
+test("token refresh rechecks official auth before writing refreshed credentials", async t => {
+  const { engine } = freshEngine(t);
+  const current = addAccount(engine, "race-current@example.com", "acct-race-current", "race-current");
+  const external = addAccount(engine, "race-external@example.com", "acct-race-external", "race-external");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const originalAuth = engine.writeAuthJson(current);
+  engine.writeProjection(current, originalAuth);
+  assert.equal(engine.inspectAuthState().status, "aligned");
+
+  const config = require("../engine/config");
+  const { buildAuthJson } = require("../engine/switch");
+  const { refreshOneTok } = require("../engine/token-refresh");
+  const authPath = path.join(config.CODEX_DIR, "auth.json");
+  const projectionPath = path.join(config.CODEX_DIR, "codex_auth_projection.json");
+  const externalAuth = buildAuthJson(external);
+  const refreshed = tokens("race-current@example.com", "acct-race-current", "race-current-refreshed");
+
+  const result = await refreshOneTok(current, {
+    force: true,
+    httpJson: async () => {
+      fs.writeFileSync(authPath, JSON.stringify(externalAuth), "utf8");
+      return {
+        status: 200,
+        headers: {},
+        body: JSON.stringify({
+          id_token: refreshed.id_token,
+          access_token: refreshed.access_token,
+          refresh_token: refreshed.refresh_token,
+        }),
+      };
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(engine.loadAcct(current.id).tokens.access_token, refreshed.access_token);
+  assert.equal(JSON.parse(fs.readFileSync(authPath, "utf8")).tokens.access_token, external.tokens.access_token);
+  assert.equal(JSON.parse(fs.readFileSync(projectionPath, "utf8")).auth_fingerprint, engine.authFingerprint(originalAuth));
+  const conflict = engine.inspectAuthState({ migrateProjection: false });
+  assert.equal(conflict.status, "conflict");
+  assert.equal(conflict.matchedAccountId, external.id);
+});
+
 test("auto-switch refuses to use stale quota after current refresh failure", async t => {
   const { engine } = freshEngine(t);
   const account = addAccount(engine, "current@example.com", "acct-current", "current");
