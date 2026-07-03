@@ -20,14 +20,27 @@ function failure(stage, account, error) {
   };
 }
 
-async function runDaemonWorker() {
+async function runDaemonWorker(options = {}) {
   const startedAt = Date.now();
   const failures = [];
   const tokenRefreshes = [];
   let accountsUpdated = 0;
   let autoSwitchResult = null;
+  let authState = null;
+  const isCancelled = typeof options.isCancelled === "function" ? options.isCancelled : () => false;
+  const stopped = () => ({
+    startedAt,
+    completedAt: Date.now(),
+    accountsUpdated,
+    tokenRefreshes,
+    autoSwitchResult,
+    failures,
+    pausedReason: "stopped",
+    authState,
+  });
 
-  const authState = inspectAuthState();
+  if (isCancelled()) return stopped();
+  authState = inspectAuthState();
   if (authState.requiresResolution) {
     return {
       startedAt,
@@ -43,11 +56,15 @@ async function runDaemonWorker() {
 
   const accounts = listAccts();
   for (const listed of accounts) {
+    if (isCancelled()) return stopped();
     try {
       await withAccountLock(listed.id, async () => {
+        if (isCancelled()) return;
         const account = loadAcct(listed.id);
         if (!account || !needsRefresh(account)) return;
+        if (isCancelled()) return;
         const result = await refreshOneTok(account);
+        if (isCancelled()) return;
         tokenRefreshes.push({
           accountId: account.id,
           email: account.email,
@@ -62,11 +79,14 @@ async function runDaemonWorker() {
     } catch (error) {
       failures.push(failure("token_refresh", listed, error));
     }
+    if (isCancelled()) return stopped();
   }
 
+  if (isCancelled()) return stopped();
   const index = loadIdx();
   if (index.current_account_id) {
     await withAccountLock(index.current_account_id, async () => {
+      if (isCancelled()) return;
       const current = loadAcct(index.current_account_id);
       if (!current) {
         failures.push(failure("current_account", null, new Error("Managed current account could not be read")));
@@ -74,6 +94,7 @@ async function runDaemonWorker() {
       }
 
       try {
+        if (isCancelled()) return;
         await refreshQuota(current, { force: false });
         accountsUpdated++;
       } catch (error) {
@@ -81,7 +102,9 @@ async function runDaemonWorker() {
       }
 
       try {
+        if (isCancelled()) return;
         const snapshot = await fetchResetCredits(current);
+        if (isCancelled()) return;
         current.reset_credits = snapshot;
         current.reset_credits_error = null;
         saveAcct(current);
@@ -92,11 +115,14 @@ async function runDaemonWorker() {
         failures.push(failure("reset_credits", current, error));
       }
 
+      if (isCancelled()) return;
       const latestIndex = loadIdx();
       const latestAuthState = inspectAuthState();
       if (latestIndex.current_account_id === current.id && !latestAuthState.requiresResolution) {
         try {
+          if (isCancelled()) return;
           const authValue = writeAuthJson(current);
+          if (isCancelled()) return;
           writeProjection(current, authValue);
         } catch (error) {
           failures.push(failure("auth_projection", current, error));
@@ -105,10 +131,12 @@ async function runDaemonWorker() {
     });
   }
 
+  if (isCancelled()) return stopped();
   const config = loadAutoSwitchCfg();
   if (config.enabled) {
     try {
-      autoSwitchResult = await autoSwitchTick(config);
+      autoSwitchResult = await autoSwitchTick(config, { isCancelled });
+      if (isCancelled() || autoSwitchResult?.reason === "cancelled") return stopped();
       if (autoSwitchResult?.reason === "current_quota_refresh_failed") {
         failures.push(failure("auto_switch", null, new Error(autoSwitchResult.error || autoSwitchResult.reason)));
       }

@@ -46,18 +46,23 @@ function resolveMonitoredIds(cfg, accts) {
   return selected.filter((id) => existing.has(id));
 }
 
-async function autoSwitchTick(cfg) {
+async function autoSwitchTick(cfg, options = {}) {
   const { listAccts, loadIdx, loadAcct } = require("./storage");
   const { refreshQuota } = require("./quota");
   const { doSwitch } = require("./switch");
   const { withAccountLock, withAccountLocks } = require("./operation-locks");
   const { inspectAuthState } = require("./auth-state");
+  const isCancelled = typeof options.isCancelled === "function" ? options.isCancelled : () => false;
 
+  const cancelled = () => ({ switched: false, reason: "cancelled" });
+
+  if (isCancelled()) return cancelled();
   const authState = inspectAuthState();
   if (authState.requiresResolution) {
     return { switched: false, reason: "auth_conflict", authState };
   }
 
+  if (isCancelled()) return cancelled();
   const accts = listAccts();
   if (accts.length === 0) return { switched: false, reason: "no_accounts" };
 
@@ -71,11 +76,15 @@ async function autoSwitchTick(cfg) {
   let cur = accts.find((a) => a.id === curId);
   if (!cur) return { switched: false, reason: "current_not_found" };
 
+  if (isCancelled()) return cancelled();
   try {
     await withAccountLock(cur.id, async () => {
+      if (isCancelled()) return;
       const fresh = loadAcct(cur.id);
       if (!fresh) { cur = null; return; }
+      if (isCancelled()) return;
       await refreshQuota(fresh, { force: false });
+      if (isCancelled()) return;
       cur = loadAcct(fresh.id) || fresh;
     });
   } catch (error) {
@@ -85,6 +94,7 @@ async function autoSwitchTick(cfg) {
       error: error.message || String(error),
     };
   }
+  if (isCancelled()) return cancelled();
   if (!cur) return { switched: false, reason: "current_not_found" };
   const metrics = extractQuotaMetrics(cur);
   if (metrics.length === 0) return { switched: false, reason: "no_quota_data" };
@@ -95,19 +105,24 @@ async function autoSwitchTick(cfg) {
 
   const candidates = [];
   for (const listed of accts) {
+    if (isCancelled()) return cancelled();
     if (listed.id === curId) continue;
     if (!monitoredIds.includes(listed.id)) continue;
     let candidate = loadAcct(listed.id) || listed;
     if (!candidate.quota || (ts() - (candidate.usage_updated_at || 0) > 600)) {
       try {
         await withAccountLock(candidate.id, async () => {
+          if (isCancelled()) return;
           const fresh = loadAcct(candidate.id);
           if (!fresh) { candidate = null; return; }
+          if (isCancelled()) return;
           await refreshQuota(fresh, { force: false });
+          if (isCancelled()) return;
           candidate = loadAcct(fresh.id) || fresh;
         });
       } catch { continue; }
     }
+    if (isCancelled()) return cancelled();
     if (!candidate) continue;
     const cand = buildSwitchCandidate(candidate, primaryTh, secondaryTh);
     if (cand) candidates.push(cand);
@@ -118,7 +133,9 @@ async function autoSwitchTick(cfg) {
   const best = pickBestCandidate(candidates);
   if (!best) return { switched: false, reason: "no_best_candidate" };
 
+  if (isCancelled()) return cancelled();
   return withAccountLocks(["__switch__", curId, best.id], async () => {
+    if (isCancelled()) return cancelled();
     const latestIdx = loadIdx();
     if (latestIdx.current_account_id !== curId) {
       return { switched: false, reason: "current_changed", metrics };
@@ -126,6 +143,7 @@ async function autoSwitchTick(cfg) {
     const freshBest = loadAcct(best.id);
     const freshCur = loadAcct(curId) || cur;
     if (!freshBest) return { switched: false, reason: "candidate_not_found", metrics };
+    if (isCancelled()) return cancelled();
     const result = await doSwitch(freshBest);
     return { switched: true, from: freshCur, to: result.account, metrics };
   });

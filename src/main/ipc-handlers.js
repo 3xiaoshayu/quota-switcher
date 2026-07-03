@@ -283,6 +283,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
 
     let daemonTimer = null;
     let daemonInFlight = false;
+    let daemonGeneration = 0;
     const daemonRuntimeState = {
         lastRunAt: null,
         lastSuccessAt: null,
@@ -292,12 +293,24 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     const daemonIntervalMinutes = () => typeof eng.getTickIntervalMinutes === "function"
         ? eng.getTickIntervalMinutes()
         : Math.max(1, Math.round(eng.getTickIntervalMs() / 60000));
+    const bumpDaemonGeneration = () => {
+        daemonGeneration += 1;
+        return daemonGeneration;
+    };
 
     const runDaemon = async () => {
         if (daemonInFlight) return;
+        const runGeneration = daemonGeneration;
+        const isCancelled = () => runGeneration !== daemonGeneration || daemonTimer === null;
         daemonInFlight = true;
         try {
-            const result = await eng.runDaemonWorker();
+            const result = await eng.runDaemonWorker({ isCancelled });
+            if (runGeneration !== daemonGeneration) {
+                daemonRuntimeState.lastRunAt = result.completedAt || Date.now();
+                daemonRuntimeState.pausedReason = result.pausedReason || "stopped";
+                daemonRuntimeState.lastError = null;
+                return;
+            }
             daemonRuntimeState.lastRunAt = result.completedAt || Date.now();
             daemonRuntimeState.pausedReason = result.pausedReason || null;
             daemonRuntimeState.lastError = result.failures?.length
@@ -327,6 +340,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                 }));
             }
         } catch (error) {
+            if (runGeneration !== daemonGeneration) return;
             daemonRuntimeState.lastRunAt = Date.now();
             daemonRuntimeState.lastError = error.message;
             BrowserWindow.getAllWindows().forEach(window => window.webContents.send("daemon:error", { message: error.message }));
@@ -341,10 +355,13 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     const restartDaemonTimer = () => {
         if (!daemonTimer) return;
         clearInterval(daemonTimer);
+        bumpDaemonGeneration();
         startDaemonTimer();
+        void runDaemon();
     };
     const startDaemon = () => {
         if (daemonTimer) return ok("Already running");
+        bumpDaemonGeneration();
         startDaemonTimer();
         void runDaemon();
         return ok("Started");
@@ -353,6 +370,9 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         if (!daemonTimer) return ok("Not running");
         clearInterval(daemonTimer);
         daemonTimer = null;
+        bumpDaemonGeneration();
+        daemonRuntimeState.pausedReason = "stopped";
+        daemonRuntimeState.lastError = null;
         return ok("Stopped");
     };
 

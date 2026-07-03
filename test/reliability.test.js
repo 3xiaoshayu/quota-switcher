@@ -322,6 +322,67 @@ test("auto-switch refuses to use stale quota after current refresh failure", asy
   assert.equal(result.reason, "current_quota_refresh_failed");
 });
 
+test("auto-switch cancellation prevents switching after a daemon stop", async t => {
+  const { engine } = freshEngine(t);
+  const current = addAccount(engine, "cancel-current@example.com", "acct-cancel-current", "cancel-current");
+  const candidate = addAccount(engine, "cancel-candidate@example.com", "acct-cancel-candidate", "cancel-candidate");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 0,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  candidate.quota = {
+    hourly_remaining_percentage: 100,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 100,
+    weekly_window_present: true,
+  };
+  candidate.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+
+  const quotaModule = require("../engine/quota");
+  const switchModule = require("../engine/switch");
+  const originalRefresh = quotaModule.refreshQuota;
+  const originalSwitch = switchModule.doSwitch;
+  let refreshedCurrent = false;
+  let switched = false;
+  quotaModule.refreshQuota = async acct => {
+    if (acct.id === current.id) refreshedCurrent = true;
+  };
+  switchModule.doSwitch = async () => {
+    switched = true;
+    throw new Error("switch should have been cancelled");
+  };
+  t.after(() => {
+    quotaModule.refreshQuota = originalRefresh;
+    switchModule.doSwitch = originalSwitch;
+  });
+
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  }, {
+    isCancelled: () => refreshedCurrent,
+  });
+
+  assert.equal(result.switched, false);
+  assert.equal(result.reason, "cancelled");
+  assert.equal(switched, false);
+  assert.equal(engine.loadIdx().current_account_id, current.id);
+});
+
 test("daemon pauses before network work when official authentication conflicts", async t => {
   const { engine } = freshEngine(t);
   const account = addAccount(engine, "daemon@example.com", "acct-daemon", "daemon");
