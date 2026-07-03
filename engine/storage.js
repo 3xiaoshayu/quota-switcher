@@ -8,10 +8,11 @@ let secretCodec = null;
 const diagnostics = [];
 
 class AccountCredentialError extends Error {
-  constructor(message, cause) {
+  constructor(message, cause, kind = "unknown") {
     super(message, { cause });
     this.name = "AccountCredentialError";
     this.code = "credential_decrypt_failed";
+    this.kind = kind;
   }
 }
 
@@ -55,7 +56,7 @@ function unprotectData(encoded) {
   try {
     return requireSecretCodec().decrypt(String(encoded));
   } catch (error) {
-    throw new AccountCredentialError("Windows could not decrypt the protected data", error);
+    throw new AccountCredentialError("Windows could not decrypt the protected data", error, "decrypt");
   }
 }
 
@@ -146,7 +147,7 @@ function decodeAccount(raw, filePath) {
       tokens = JSON.parse(unprotectData(raw.tokens_encrypted));
     } catch (error) {
       if (error instanceof AccountCredentialError) throw error;
-      throw new AccountCredentialError("The protected account token payload is invalid", error);
+      throw new AccountCredentialError("The protected account token payload is invalid", error, "payload");
     }
     return { ...raw, tokens };
   }
@@ -207,6 +208,10 @@ function loadAccountPath(filePath, options = {}) {
   try {
     return decodeAccount(raw, filePath);
   } catch (error) {
+    if (error instanceof AccountCredentialError && error.kind === "decrypt") {
+      recordDiagnostic("account_credentials", filePath, error.message, false);
+      return null;
+    }
     if (allowRestore && fs.existsSync(`${filePath}.bak`)) {
       try {
         const account = decodeAccount(readJson(`${filePath}.bak`), `${filePath}.bak`);

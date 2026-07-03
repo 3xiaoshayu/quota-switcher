@@ -284,8 +284,14 @@ test("storage restores valid backups and preserves DPAPI failures", t => {
     encrypt: codec.encrypt,
     decrypt: () => { throw new Error("DPAPI unavailable"); },
   });
+  const protectedBeforeFailure = fs.readFileSync(accountPath, "utf8");
+  fs.writeFileSync(`${accountPath}.bak`, JSON.stringify({
+    ...account,
+    tokens: tokens("backup@example.com", "acct-backup", "backup"),
+  }), "utf8");
   assert.equal(engine.loadAcct(account.id), null);
   assert.equal(fs.existsSync(accountPath), true);
+  assert.equal(fs.readFileSync(accountPath, "utf8"), protectedBeforeFailure);
   assert.ok(engine.getStorageDiagnostics().some(item => item.type === "account_credentials"));
   engine.setSecretCodec(codec);
 });
