@@ -534,8 +534,46 @@ test("OAuth pending state is encrypted, recoverable, cancellable, and target mis
   restoredEngine.setSecretCodec(codec);
   assert.equal(restoredEngine.restorePendingOAuth(), true);
   assert.equal(restoredEngine.getOAuthStatus().pending, true);
-  assert.throws(() => restoredEngine.completeOAuthManually("not-a-url"), /complete OAuth callback URL/);
+  await assert.rejects(restoredEngine.completeOAuthManually("not-a-url"), /complete OAuth callback URL/);
   assert.equal(restoredEngine.cancelOAuth(), true);
+});
+
+test("OAuth manual callback waits for completion and honors cancellation", async t => {
+  const { engine, codec } = freshEngine(t);
+  const pendingPromise = engine.oauthLoginFlow({
+    openBrowser: false,
+    exchangeCode: async () => tokens("manual@example.com", "acct-manual", "manual"),
+  });
+  const pendingPath = require("../engine/oauth").PENDING_PATH;
+  const envelope = JSON.parse(fs.readFileSync(pendingPath, "utf8"));
+  const pending = JSON.parse(codec.decrypt(envelope.protected_payload));
+  const callbackUrl = `${pending.redirectUri}?code=oauth-code&state=${pending.state}`;
+
+  const manualResult = await engine.completeOAuthManually(callbackUrl);
+  const flowResult = await pendingPromise;
+  assert.equal(manualResult.account.email, "manual@example.com");
+  assert.equal(flowResult.account.id, manualResult.account.id);
+  assert.equal(engine.loadAcct(manualResult.account.id).email, "manual@example.com");
+  assert.equal(engine.getOAuthStatus().pending, false);
+  assert.equal(fs.existsSync(pendingPath), false);
+
+  const second = freshEngine(t);
+  let releaseExchange;
+  const blockedFlow = second.engine.oauthLoginFlow({
+    openBrowser: false,
+    exchangeCode: async () => {
+      await new Promise(resolve => { releaseExchange = resolve; });
+      return tokens("cancelled@example.com", "acct-cancelled", "cancelled");
+    },
+  });
+  const secondEnvelope = JSON.parse(fs.readFileSync(require("../engine/oauth").PENDING_PATH, "utf8"));
+  const secondPending = JSON.parse(second.codec.decrypt(secondEnvelope.protected_payload));
+  const blockedManual = second.engine.completeOAuthManually(`${secondPending.redirectUri}?code=late-code&state=${secondPending.state}`);
+  assert.equal(second.engine.cancelOAuth(), true);
+  releaseExchange();
+  await assert.rejects(blockedFlow, /cancelled/);
+  await assert.rejects(blockedManual, /cancelled/);
+  assert.equal(second.engine.listAccts().some(account => account.email === "cancelled@example.com"), false);
 });
 
 test("persistent logger removes credentials and personal email from messages", t => {

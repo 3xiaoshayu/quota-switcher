@@ -608,8 +608,16 @@ export default function App() {
   };
 
   const handleCompleteOAuthManually = async (callbackUrl: string) => {
-    await desktopApi.completeOAuthManually(callbackUrl);
-    addLogEntry('Manual OAuth callback submitted.', 'info');
+    const result = await desktopApi.completeOAuthManually(callbackUrl);
+    const snapshot = await loadDashboardState(false);
+    if (snapshot) queueQuotaAutoSync(snapshot.accounts);
+    if (result.mismatch) {
+      addToast(`The browser used a different account. ${result.account?.email || 'It'} was saved separately.`, 'warning');
+      addLogEntry('Manual OAuth callback completed with a different account saved separately.', 'warning');
+      return;
+    }
+    addToast(result.account?.email ? `Added ${result.account.email}` : 'OAuth account added', 'success');
+    addLogEntry('Manual OAuth callback completed.', 'success');
   };
 
   const handleResolveAuthConflict = async (action: 'adopt' | 'reapply') => {

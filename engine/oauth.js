@@ -278,13 +278,16 @@ function settleActive(error, result) {
 }
 
 async function handleAuthorizationCode(pending, code) {
-  if (!active || active.settled || active.processing) return;
-  active.processing = true;
+  const session = active;
+  if (!session || session.settled || session.processing || session.pending !== pending) return;
+  session.processing = true;
   try {
-    const tokens = await exchangeCode(pending, code);
+    const tokens = await session.exchangeCode(pending, code);
+    if (active !== session || session.settled) return;
     const result = upsert(tokens, { targetAccountId: pending.targetAccountId });
     settleActive(null, result);
   } catch (error) {
+    if (active !== session || session.settled) return;
     logError(`OAuth token exchange failed: ${error.message}`);
     settleActive(error);
   }
@@ -295,7 +298,7 @@ function startPendingSession(pending, options = {}) {
   persistPending(pending);
   setStatus("pending", { targetAccountId: pending.targetAccountId, message: "Waiting for browser authorization." });
 
-  return new Promise((resolve, reject) => {
+  const completion = new Promise((resolve, reject) => {
     const server = http.createServer((request, response) => {
       const url = new URL(request.url || "/", `http://127.0.0.1:${CALLBACK_PORT}`);
       if (url.pathname !== "/auth/callback") {
@@ -318,6 +321,8 @@ function startPendingSession(pending, options = {}) {
     active = {
       pending,
       server,
+      completion: null,
+      exchangeCode: typeof options.exchangeCode === "function" ? options.exchangeCode : exchangeCode,
       resolve,
       reject,
       settled: false,
@@ -338,10 +343,15 @@ function startPendingSession(pending, options = {}) {
       if (options.openBrowser !== false) openBrowser(buildAuthorizationUrl(pending));
     });
   });
+  if (active) active.completion = completion;
+  return completion;
 }
 
 function oauthLoginFlow(options = {}) {
-  return startPendingSession(buildPending(options), { openBrowser: options.openBrowser !== false });
+  return startPendingSession(buildPending(options), {
+    openBrowser: options.openBrowser !== false,
+    exchangeCode: options.exchangeCode,
+  });
 }
 
 function restorePendingOAuth() {
@@ -364,8 +374,9 @@ function cancelOAuth() {
   return true;
 }
 
-function completeOAuthManually(callbackUrl) {
+async function completeOAuthManually(callbackUrl) {
   if (!active || active.settled) throw new Error("No OAuth authorization is pending");
+  const session = active;
   let url;
   try {
     url = new URL(String(callbackUrl || ""));
@@ -374,9 +385,9 @@ function completeOAuthManually(callbackUrl) {
   }
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
-  if (!code || state !== active.pending.state) throw new Error("The callback URL is missing code or has an invalid state");
-  void handleAuthorizationCode(active.pending, code);
-  return true;
+  if (!code || state !== session.pending.state) throw new Error("The callback URL is missing code or has an invalid state");
+  void handleAuthorizationCode(session.pending, code);
+  return session.completion;
 }
 
 module.exports = {

@@ -119,7 +119,7 @@ interface DesktopBridge {
   reauthorizeAccount: (id: string) => Promise<ApiResponse<DesktopOAuthResult>>;
   getOAuthStatus: () => Promise<ApiResponse<DesktopOAuthStatus>>;
   cancelOAuth: () => Promise<ApiResponse<boolean>>;
-  completeOAuthManually: (callbackUrl: string) => Promise<ApiResponse<boolean>>;
+  completeOAuthManually: (callbackUrl: string) => Promise<ApiResponse<DesktopOAuthResult>>;
   getAuthState: () => Promise<ApiResponse<DesktopAuthState>>;
   adoptOfficialAccount: () => Promise<ApiResponse<DesktopAccount>>;
   reapplyManagedAccount: (id?: string | null) => Promise<ApiResponse<unknown>>;

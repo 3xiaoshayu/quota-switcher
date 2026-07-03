@@ -203,8 +203,15 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         try { return ok(eng.cancelOAuth()); }
         catch (error) { return fail(error.message); }
     });
-    handle("oauth:completeManual", (event, callbackUrl) => {
-        try { return ok(eng.completeOAuthManually(callbackUrl)); }
+    handle("oauth:completeManual", async (event, callbackUrl) => {
+        try {
+            const result = await eng.completeOAuthManually(callbackUrl);
+            return ok({
+                account: publicAccount(eng, result.account),
+                mismatch: !!result.mismatch,
+                targetAccountId: result.targetAccountId || null,
+            });
+        }
         catch (error) { return fail(error.message); }
     });
 
