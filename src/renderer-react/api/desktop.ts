@@ -196,6 +196,24 @@ export function expectData<T>(response: ApiResponse<T>, label: string): T {
   return response.data;
 }
 
+async function captureResponse<T>(
+  task: () => Promise<ApiResponse<T>>,
+  label: string,
+): Promise<ApiResponse<T>> {
+  try {
+    return await task();
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : `${label} failed`,
+    };
+  }
+}
+
+function optionalData<T>(response: ApiResponse<T>, fallback: T): T {
+  return response?.success === true ? response.data : fallback;
+}
+
 function defaultConfig(): DesktopAutoSwitchConfig {
   return {
     enabled: false,
@@ -205,6 +223,25 @@ function defaultConfig(): DesktopAutoSwitchConfig {
     selected_account_ids: [],
     sync_interval_minutes: 10,
   };
+}
+
+function defaultDaemonStatus(): DesktopDaemonStatus {
+  return { running: false, syncIntervalMinutes: 10 };
+}
+
+function defaultAuthState(): DesktopAuthState {
+  return {
+    status: 'empty',
+    requiresResolution: false,
+    currentAccountId: null,
+    matchedAccountId: null,
+    officialIdentity: null,
+    message: null,
+  };
+}
+
+function defaultOAuthStatus(): DesktopOAuthStatus {
+  return { status: 'idle', pending: false, message: null };
 }
 
 function clampSyncIntervalMinutes(value: unknown): number {
@@ -376,22 +413,22 @@ export const desktopApi = {
       oauthStatusResponse,
       diagnosticsResponse,
     ] = await Promise.all([
-      api.listAccounts(),
-      api.getCurrentAccount(),
-      api.getDaemonStatus(),
-      api.getAutoSwitchConfig(),
-      api.getAppInfo(),
-      api.getCodexStatus(),
-      api.getUpdateStatus(),
-      api.getAuthState(),
-      api.getOAuthStatus(),
-      api.getStorageDiagnostics(),
+      captureResponse(() => api.listAccounts(), 'Read accounts'),
+      captureResponse(() => api.getCurrentAccount(), 'Read current account'),
+      captureResponse(() => api.getDaemonStatus(), 'Read daemon status'),
+      captureResponse(() => api.getAutoSwitchConfig(), 'Read auto-switch config'),
+      captureResponse(() => api.getAppInfo(), 'Read app info'),
+      captureResponse(() => api.getCodexStatus(), 'Read Codex status'),
+      captureResponse(() => api.getUpdateStatus(), 'Read update status'),
+      captureResponse(() => api.getAuthState(), 'Read authentication state'),
+      captureResponse(() => api.getOAuthStatus(), 'Read OAuth status'),
+      captureResponse(() => api.getStorageDiagnostics(), 'Read storage diagnostics'),
     ]);
 
-    const config = expectData(configResponse, 'Read auto-switch config') || defaultConfig();
+    const config = optionalData(configResponse, defaultConfig()) || defaultConfig();
     const rawAccounts = expectData(accountsResponse, 'Read accounts') || [];
-    const currentAccount = expectData(currentResponse, 'Read current account') || null;
-    const daemon = expectData(daemonResponse, 'Read daemon status');
+    const currentAccount = optionalData(currentResponse, null);
+    const daemon = optionalData(daemonResponse, defaultDaemonStatus()) || defaultDaemonStatus();
 
     return {
       accounts: rawAccounts.map((account) => mapAccountForUi(account, currentAccount, config)),
@@ -400,12 +437,12 @@ export const desktopApi = {
       daemonRunning: !!daemon?.running,
       daemonSyncInterval: clampSyncIntervalMinutes(daemon?.syncIntervalMinutes ?? config.sync_interval_minutes),
       config,
-      appInfo: expectData(appResponse, 'Read app info') || null,
-      codexStatus: expectData(codexResponse, 'Read Codex status') || null,
-      updateStatus: expectData(updateResponse, 'Read update status') || null,
-      authState: expectData(authStateResponse, 'Read authentication state'),
-      oauthStatus: expectData(oauthStatusResponse, 'Read OAuth status'),
-      storageDiagnostics: expectData(diagnosticsResponse, 'Read storage diagnostics') || [],
+      appInfo: optionalData(appResponse, null),
+      codexStatus: optionalData(codexResponse, null),
+      updateStatus: optionalData(updateResponse, null),
+      authState: optionalData(authStateResponse, defaultAuthState()) || defaultAuthState(),
+      oauthStatus: optionalData(oauthStatusResponse, defaultOAuthStatus()) || defaultOAuthStatus(),
+      storageDiagnostics: optionalData(diagnosticsResponse, []) || [],
       daemonLastSuccessAt: daemon?.lastSuccessAt || null,
       daemonLastRunAt: daemon?.lastRunAt || null,
       daemonLastError: daemon?.lastError || null,
