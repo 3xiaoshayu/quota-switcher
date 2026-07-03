@@ -208,6 +208,26 @@ test("subscription retry state blocks background attempts but force bypasses it"
   assert.equal(shouldAttemptSubscriptionRefresh(account, true, now), true);
 });
 
+test("subscription selection never falls back to a different known account", t => {
+  freshEngine(t);
+  const { selectSubscriptionAccount } = require("../engine/subscription");
+  const records = [
+    { account: { account_id: "acct-other" }, entitlement: { subscription_plan: "team" } },
+    { account: { account_id: "acct-expected" }, entitlement: { subscription_plan: "plus" } },
+  ];
+
+  assert.equal(
+    selectSubscriptionAccount(records, "acct-expected").account.account_id,
+    "acct-expected",
+  );
+  assert.equal(selectSubscriptionAccount(records, null), records[0]);
+  assert.equal(selectSubscriptionAccount([], "acct-expected"), null);
+  assert.throws(
+    () => selectSubscriptionAccount(records, "acct-missing"),
+    error => error.code === "subscription_account_mismatch",
+  );
+});
+
 test("storage restores valid backups and preserves DPAPI failures", t => {
   const { engine, codec } = freshEngine(t);
   const account = addAccount(engine, "alpha@example.com", "acct-alpha", "alpha");
@@ -567,6 +587,38 @@ test("switch transaction commits on success and restores state when launch fails
   });
   await assert.rejects(engine.doSwitch(first), /launch failed/);
   assert.equal(engine.loadIdx().current_account_id, second.id);
+  assert.equal(engine.inspectAuthState().status, "aligned");
+});
+
+test("process enumeration failure blocks credential switching", async t => {
+  const { engine } = freshEngine(t);
+  const current = addAccount(engine, "enumeration-current@example.com", "acct-enumeration-current", "enumeration-current");
+  const target = addAccount(engine, "enumeration-target@example.com", "acct-enumeration-target", "enumeration-target");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+
+  const { defaultListProcesses } = require("../engine/switch");
+  const listProcesses = () => defaultListProcesses(async () => {
+    throw new Error("CIM query unavailable");
+  });
+  engine.setSwitchRuntimeForTests({
+    assertInstalled() {},
+    listProcesses,
+    launch() {
+      throw new Error("rollback launch unavailable");
+    },
+    sleep() {},
+  });
+
+  await assert.rejects(engine.doSwitch(target), error => {
+    assert.equal(error.code, "codex_process_enumeration_failed");
+    assert.match(error.message, /CIM query unavailable/);
+    return true;
+  });
+  assert.equal(engine.loadIdx().current_account_id, current.id);
   assert.equal(engine.inspectAuthState().status, "aligned");
 });
 

@@ -9,6 +9,23 @@ function httpError(label, response) {
   return new Error(`${label}: HTTP ${response.status}${code ? ` ${code}` : ""}`);
 }
 
+function subscriptionRecordAccountId(record) {
+  const value = record?.account || record || {};
+  const id = value.account_id || value.id || value.chatgpt_account_id || value.workspace_id || null;
+  return id == null ? null : String(id);
+}
+
+function selectSubscriptionAccount(records, preferredId) {
+  if (!records.length) return null;
+  if (!preferredId) return records[0];
+  const expected = String(preferredId);
+  const target = records.find((record) => subscriptionRecordAccountId(record) === expected);
+  if (target) return target;
+  const error = new Error("Subscription response did not contain the expected account.");
+  error.code = "subscription_account_mismatch";
+  throw error;
+}
+
 async function fetchSubscriptionStatus(account) {
   const headers = buildCodexHeaders(account);
   const timezoneOffset = -(new Date().getTimezoneOffset());
@@ -25,10 +42,7 @@ async function fetchSubscriptionStatus(account) {
   else if (payload.accounts && typeof payload.accounts === "object") records.push(...Object.values(payload.accounts));
 
   const preferredId = account.account_id || extractChatgptAccountId(account.tokens.access_token);
-  const target = records.find((record) => {
-    const value = record.account || record;
-    return (value.account_id || value.id || value.chatgpt_account_id || value.workspace_id) === preferredId;
-  }) || records[0] || null;
+  const target = selectSubscriptionAccount(records, preferredId);
 
   const value = target?.account || target || {};
   const entitlement = target?.entitlement || {};
@@ -114,4 +128,9 @@ async function refreshSubscription(account, force = false) {
   return changed;
 }
 
-module.exports = { fetchSubscriptionStatus, refreshSubscription, shouldAttemptSubscriptionRefresh };
+module.exports = {
+  fetchSubscriptionStatus,
+  refreshSubscription,
+  selectSubscriptionAccount,
+  shouldAttemptSubscriptionRefresh,
+};

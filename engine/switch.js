@@ -27,7 +27,7 @@ function execFileAsync(file, args, options = {}) {
   });
 }
 
-async function defaultListProcesses() {
+async function defaultListProcesses(runCommand = execFileAsync) {
   const script = [
     "$items = Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('Codex.exe','node_repl.exe') }",
     "$codex = @($items | Where-Object { $_.Name -eq 'Codex.exe' -and (($_.ExecutablePath -like '*WindowsApps*OpenAI.Codex*') -or ($_.CommandLine -like '*OpenAI.Codex*')) })",
@@ -37,7 +37,7 @@ async function defaultListProcesses() {
     "@($items | Where-Object { $ids.Contains([int]$_.ProcessId) } | Select-Object Name,ProcessId,ParentProcessId,ExecutablePath) | ConvertTo-Json -Compress",
   ].join("; ");
   try {
-    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    const { stdout } = await runCommand("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
       encoding: "utf8",
       windowsHide: true,
       timeout: 10000,
@@ -52,8 +52,10 @@ async function defaultListProcesses() {
       executablePath: item.ExecutablePath || null,
     })).filter((item) => Number.isInteger(item.pid) && item.pid > 0);
   } catch (error) {
-    logWarn(`Could not enumerate official Codex processes: ${error.message}`);
-    return [];
+    const wrapped = new Error(`Could not enumerate official Codex processes: ${error.message}`, { cause: error });
+    wrapped.code = "codex_process_enumeration_failed";
+    logWarn(wrapped.message);
+    throw wrapped;
   }
 }
 
@@ -267,5 +269,6 @@ module.exports = {
   startCodex,
   doSwitch,
   launchOfficialCodex,
+  defaultListProcesses,
   setSwitchRuntimeForTests,
 };
