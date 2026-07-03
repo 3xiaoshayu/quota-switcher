@@ -157,7 +157,7 @@ ChatGPT 是其各自权利人的商标。
 
 ## 许可证
 
-源代码使用 [MIT License](LICENSE)。运行时背景图片采用其各自的第三方许可，见
+源代码使用 [MIT License](LICENSE)。背景图片采用其各自的第三方许可，见
 [ASSET_LICENSE.md](ASSET_LICENSE.md)。第三方组件许可见
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 

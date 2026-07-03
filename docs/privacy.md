@@ -44,6 +44,9 @@ credentials, JWTs, and email addresses. Review diagnostic logs before sharing.
 The application makes requests only when required by a visible feature or
 background account maintenance:
 
+Interface backgrounds are bundled with the application and do not trigger
+third-party image requests at runtime.
+
 | Destination | Purpose |
 | --- | --- |
 | `auth.openai.com` | OAuth authorization and token refresh |

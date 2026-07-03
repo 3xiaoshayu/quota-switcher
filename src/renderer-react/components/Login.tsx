@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { Key, Mail, Shield, User, ArrowRight, Activity, Cpu } from 'lucide-react';
+import loginBackground from '../assets/background-login.jpg';
 
 interface LoginProps {
   onLogin: (email: string) => void;
@@ -42,7 +43,7 @@ export default function Login({ onLogin, userEmail, appVersion = '0.1.0-beta.9',
     <div 
       className="min-h-screen flex items-center justify-center bg-cover bg-center relative p-4 font-sans select-none overflow-hidden"
       style={{ 
-        backgroundImage: `linear-gradient(to bottom, rgba(15, 23, 42, 0.45), rgba(15, 23, 42, 0.75)), url('https://images.unsplash.com/photo-1578637387939-43c525550085?auto=format&fit=crop&w=2000&q=80')` 
+        backgroundImage: `linear-gradient(to bottom, rgba(15, 23, 42, 0.45), rgba(15, 23, 42, 0.75)), url('${loginBackground}')`
       }}
       id="login-page-container"
     >
