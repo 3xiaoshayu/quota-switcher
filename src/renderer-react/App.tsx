@@ -12,6 +12,7 @@ import {
   DesktopAutoSwitchConfig,
   DesktopAuthState,
   DesktopCodexStatus,
+  DesktopOAuthStatus,
   DesktopUpdateStatus,
   LogEntry,
   SystemSettings,
@@ -121,6 +122,7 @@ export default function App() {
   const [codexStatus, setCodexStatus] = useState<DesktopCodexStatus | null>(null);
   const [updateStatus, setUpdateStatus] = useState<DesktopUpdateStatus | null>(null);
   const [authState, setAuthState] = useState<DesktopAuthState>(EMPTY_AUTH_STATE);
+  const [oauthStatus, setOAuthStatus] = useState<DesktopOAuthStatus | null>(null);
   const [isResolvingAuth, setIsResolvingAuth] = useState(false);
   const quotaAutoSyncPromise = useRef<Promise<void> | null>(null);
   const lastQuotaAutoSyncAt = useRef(0);
@@ -196,6 +198,8 @@ export default function App() {
     setCodexStatus(snapshot.codexStatus);
     setUpdateStatus(snapshot.updateStatus);
     setAuthState(snapshot.authState);
+    setOAuthStatus(snapshot.oauthStatus);
+    if (snapshot.oauthStatus.pending) setActiveTab('accounts');
     setSettings(settingsFromDesktopState(snapshot.config, snapshot.appInfo, snapshot.codexStatus, snapshot.updateStatus));
     setDaemonState({
       status: snapshot.daemonRunning ? 'Running' : 'Stopped',
@@ -337,6 +341,31 @@ export default function App() {
       unsubscribe();
     };
   }, [addLogEntry, addToast, isAuthenticated, loadDashboardState, queueQuotaAutoSync]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !desktopBridgeAvailable || !oauthStatus?.pending) return;
+    let disposed = false;
+    const pollOAuthStatus = async () => {
+      try {
+        const status = await desktopApi.getOAuthStatus();
+        if (disposed) return;
+        setOAuthStatus(status);
+        if (!status.pending) {
+          await loadDashboardState(false);
+          if (status.status === 'error' || status.status === 'expired') {
+            addToast(status.message || 'OAuth authorization ended without an account.', 'warning');
+          }
+        }
+      } catch {}
+    };
+    const timer = window.setInterval(() => {
+      void pollOAuthStatus();
+    }, 1000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [addToast, isAuthenticated, loadDashboardState, oauthStatus?.pending]);
 
   // Global Refresh All trigger
   const handleRefreshAll = async () => {
@@ -604,6 +633,7 @@ export default function App() {
 
   const handleCancelOAuth = async () => {
     await desktopApi.cancelOAuth();
+    setOAuthStatus(await desktopApi.getOAuthStatus());
     addLogEntry('OAuth authorization cancelled.', 'warning');
   };
 
@@ -994,6 +1024,7 @@ export default function App() {
                   onCompleteOAuthManually={desktopBridgeAvailable ? handleCompleteOAuthManually : undefined}
                   onAddLog={addLogEntry}
                   oauthMode={desktopBridgeAvailable}
+                  oauthStatus={oauthStatus}
                   onReloadAccounts={desktopBridgeAvailable ? async () => {
                     const snapshot = await loadDashboardState(true);
                     if (snapshot) queueQuotaAutoSync(snapshot.accounts);

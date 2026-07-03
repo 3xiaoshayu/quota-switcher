@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { 
   Users, 
@@ -17,7 +17,7 @@ import {
   KeyRound,
   Link
 } from 'lucide-react';
-import { AccountQuota } from '../types';
+import { AccountQuota, DesktopOAuthStatus } from '../types';
 
 interface AccountsProps {
   accounts: AccountQuota[];
@@ -31,6 +31,7 @@ interface AccountsProps {
   onCancelOAuth?: () => void | Promise<void>;
   onCompleteOAuthManually?: (callbackUrl: string) => void | Promise<void>;
   oauthMode?: boolean;
+  oauthStatus?: DesktopOAuthStatus | null;
 }
 
 export default function AccountsView({
@@ -45,6 +46,7 @@ export default function AccountsView({
   onCancelOAuth,
   onCompleteOAuthManually,
   oauthMode = false,
+  oauthStatus = null,
 }: AccountsProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterTab, setFilterTab] = useState<'all' | 'current' | 'warning'>('all');
@@ -56,6 +58,7 @@ export default function AccountsView({
   const [manualCallbackUrl, setManualCallbackUrl] = useState('');
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [isRecoveredOAuth, setIsRecoveredOAuth] = useState(false);
 
   // New account form state
   const [newEmail, setNewEmail] = useState('');
@@ -63,6 +66,24 @@ export default function AccountsView({
   const [newPlan, setNewPlan] = useState<'Pro Plan' | 'Standard' | 'Enterprise'>('Pro Plan');
   const [newPriority, setNewPriority] = useState<AccountQuota['priority']>('Normal');
   const [formError, setFormError] = useState('');
+
+  useEffect(() => {
+    if (!oauthMode) return;
+    if (oauthStatus?.pending) {
+      setIsRecoveredOAuth(true);
+      setShowAddModal(true);
+      setIsAdding(true);
+      setReauthorizeId(oauthStatus.targetAccountId || null);
+      return;
+    }
+    if (!isRecoveredOAuth) return;
+    setIsRecoveredOAuth(false);
+    setIsAdding(false);
+    setShowAddModal(false);
+    setReauthorizeId(null);
+    setManualCallbackUrl('');
+    setFormError('');
+  }, [isRecoveredOAuth, oauthMode, oauthStatus?.pending, oauthStatus?.targetAccountId]);
 
   // Handle single card refresh animation
   const handleSingleRefresh = async (id: string, name: string) => {

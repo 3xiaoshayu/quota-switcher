@@ -162,6 +162,7 @@ export interface DashboardState {
   codexStatus: DesktopCodexStatus | null;
   updateStatus: DesktopUpdateStatus | null;
   authState: DesktopAuthState;
+  oauthStatus: DesktopOAuthStatus;
   storageDiagnostics: StorageDiagnostic[];
   daemonLastSuccessAt?: string | number | null;
   daemonLastRunAt?: string | number | null;
@@ -372,6 +373,7 @@ export const desktopApi = {
       codexResponse,
       updateResponse,
       authStateResponse,
+      oauthStatusResponse,
       diagnosticsResponse,
     ] = await Promise.all([
       api.listAccounts(),
@@ -382,6 +384,7 @@ export const desktopApi = {
       api.getCodexStatus(),
       api.getUpdateStatus(),
       api.getAuthState(),
+      api.getOAuthStatus(),
       api.getStorageDiagnostics(),
     ]);
 
@@ -401,6 +404,7 @@ export const desktopApi = {
       codexStatus: expectData(codexResponse, 'Read Codex status') || null,
       updateStatus: expectData(updateResponse, 'Read update status') || null,
       authState: expectData(authStateResponse, 'Read authentication state'),
+      oauthStatus: expectData(oauthStatusResponse, 'Read OAuth status'),
       storageDiagnostics: expectData(diagnosticsResponse, 'Read storage diagnostics') || [],
       daemonLastSuccessAt: daemon?.lastSuccessAt || null,
       daemonLastRunAt: daemon?.lastRunAt || null,
