@@ -2,8 +2,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const cp = require("node:child_process");
 const { tsIso, ts } = require("./crypto-utils");
-const { CODEX_DIR, CODEX_AUMID, IDX_PATH, ACCTS_DIR } = require("./config");
-const { loadIdx, saveIdx, saveAcct, currentAcct, ensureDir } = require("./storage");
+const { CODEX_DIR, CODEX_AUMID, IDX_PATH } = require("./config");
+const { loadIdx, saveIdx, saveAcct, currentAcct, ensureDir, accountFilePath } = require("./storage");
 const { writeJsonAtomic, writeTextAtomic } = require("./atomic-file");
 const { writeManagedProjection, inspectAuthState } = require("./auth-state");
 const { assertOfficialCodexInstalled } = require("./codex-installation");
@@ -220,7 +220,7 @@ async function doSwitch(account, options = {}) {
   const authPath = path.join(CODEX_DIR, "auth.json");
   const projectionPath = path.join(CODEX_DIR, "codex_auth_projection.json");
   const configPath = path.join(CODEX_DIR, "config.toml");
-  const accountPath = path.join(ACCTS_DIR, `${account.id}.json`);
+  const accountPath = accountFilePath(account.id);
   const snapshot = new Map([
     [authPath, captureFile(authPath)],
     [projectionPath, captureFile(projectionPath)],

@@ -115,8 +115,31 @@ function accountSummary(account) {
   };
 }
 
+function normalizeAccountId(id) {
+  const value = String(id || "");
+  if (
+    !value ||
+    value === "." ||
+    value === ".." ||
+    value.length > 128 ||
+    !/^[A-Za-z0-9._-]+$/.test(value)
+  ) {
+    throw new Error("Invalid account id");
+  }
+  return value;
+}
+
+function accountFilePath(id) {
+  const safeId = normalizeAccountId(id);
+  const root = path.resolve(ACCTS_DIR);
+  const target = path.resolve(root, `${safeId}.json`);
+  if (!target.startsWith(`${root}${path.sep}`)) throw new Error("Invalid account id");
+  return target;
+}
+
 function decodeAccount(raw, filePath) {
   if (!raw || typeof raw !== "object") throw new Error(`Invalid account file: ${filePath}`);
+  normalizeAccountId(raw.id);
   if (raw.tokens_encrypted) {
     let tokens;
     try {
@@ -253,7 +276,7 @@ function saveIdx(index) {
 
 function loadAcct(id) {
   if (!id) return null;
-  const filePath = path.join(ACCTS_DIR, `${id}.json`);
+  const filePath = accountFilePath(id);
   if (!fs.existsSync(filePath)) return null;
   return loadAccountPath(filePath);
 }
@@ -261,14 +284,54 @@ function loadAcct(id) {
 function saveAcct(account) {
   if (!account?.id) throw new Error("Account id is required");
   ensureDir(ACCTS_DIR);
-  const filePath = path.join(ACCTS_DIR, `${account.id}.json`);
+  const filePath = accountFilePath(account.id);
   writeJsonAtomic(filePath, encodeAccount(account));
 }
 
-function deleteAcct(id) {
-  const filePath = path.join(ACCTS_DIR, `${id}.json`);
-  for (const target of [filePath, `${filePath}.bak`]) {
-    if (fs.existsSync(target)) fs.unlinkSync(target);
+function captureFile(filePath) {
+  return fs.existsSync(filePath) ? fs.readFileSync(filePath) : null;
+}
+
+function restoreFile(filePath, content) {
+  if (content === null) {
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    return;
+  }
+  ensureDir(path.dirname(filePath));
+  const tempPath = `${filePath}.rollback.tmp`;
+  fs.writeFileSync(tempPath, content);
+  fs.renameSync(tempPath, filePath);
+}
+
+function deleteAcct(id, options = {}) {
+  const accountId = normalizeAccountId(id);
+  const filePath = accountFilePath(accountId);
+  const targets = [filePath, `${filePath}.bak`, IDX_PATH];
+  const snapshot = new Map(targets.map((target) => [target, captureFile(target)]));
+
+  try {
+    const index = loadIdx();
+    if (index.current_account_id === accountId && options.allowCurrent !== true) {
+      throw new Error("Switch to another account before deleting the current account.");
+    }
+
+    for (const target of [filePath, `${filePath}.bak`]) {
+      if (fs.existsSync(target)) fs.unlinkSync(target);
+    }
+
+    if (options.updateIndex !== false) {
+      index.accounts = index.accounts.filter((item) => item.id !== accountId);
+      if (index.current_account_id === accountId) index.current_account_id = null;
+      saveIdx(index);
+    }
+    return true;
+  } catch (error) {
+    for (const [target, content] of snapshot) {
+      try { restoreFile(target, content); } catch (restoreError) {
+        logError(`Rollback failed for ${target}: ${restoreError.message}`);
+      }
+    }
+    throw error;
   }
 }
 
@@ -300,6 +363,8 @@ module.exports = {
   protectData,
   unprotectData,
   ensureDir,
+  normalizeAccountId,
+  accountFilePath,
   loadIdx,
   saveIdx,
   loadAcct,

@@ -1,7 +1,7 @@
 const { b64url, sha256hex, codeChallenge, ts, tsIso, buildId, jwtPayload, jwtExp, isTokenExpired, extractChatgptAccountId } = require("./crypto-utils");
 const { parseTsStr } = require("./time-utils");
 const { httpJson, buildCodexHeaders, extractErrorCode, isTokenRevoked } = require("./http-client");
-const { setSecretCodec, protectData, unprotectData, ensureDir, loadIdx, saveIdx, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct, getStorageDiagnostics, rebuildIndex } = require("./storage");
+const { setSecretCodec, protectData, unprotectData, ensureDir, normalizeAccountId, accountFilePath, loadIdx, saveIdx, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct, getStorageDiagnostics, rebuildIndex } = require("./storage");
 const { writeAuthJson, writeProjection, clearApiBaseUrl, killCodex, startCodex, doSwitch, launchOfficialCodex, setSwitchRuntimeForTests } = require("./switch");
 const { oauthLoginFlow, restorePendingOAuth, cancelOAuth, completeOAuthManually, getOAuthStatus, upsert } = require("./oauth");
 const { inspectAuthState, adoptOfficialAuth, reapplyManagedAuth, authFingerprint, identityMatchesAccount } = require("./auth-state");
@@ -24,7 +24,7 @@ module.exports = {
   // http-client
   httpJson, buildCodexHeaders, extractErrorCode, isTokenRevoked,
   // storage
-  setSecretCodec, protectData, unprotectData, ensureDir, loadIdx, saveIdx, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct, getStorageDiagnostics, rebuildIndex,
+  setSecretCodec, protectData, unprotectData, ensureDir, normalizeAccountId, accountFilePath, loadIdx, saveIdx, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct, getStorageDiagnostics, rebuildIndex,
   // switch
   writeAuthJson, writeProjection, clearApiBaseUrl, killCodex, startCodex, doSwitch, launchOfficialCodex, setSwitchRuntimeForTests,
   // oauth

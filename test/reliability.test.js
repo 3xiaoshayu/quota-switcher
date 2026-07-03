@@ -227,6 +227,46 @@ test("storage restores valid backups and preserves DPAPI failures", t => {
   engine.setSecretCodec(codec);
 });
 
+test("account file access rejects unsafe ids and delete rolls back on index failure", t => {
+  const { engine } = freshEngine(t);
+  const first = addAccount(engine, "delete-one@example.com", "acct-delete-one", "delete-one");
+  const second = addAccount(engine, "delete-two@example.com", "acct-delete-two", "delete-two");
+  const config = require("../engine/config");
+  const firstPath = engine.accountFilePath(first.id);
+
+  assert.throws(() => engine.loadAcct("..\\outside"), /Invalid account id/);
+  assert.throws(() => engine.saveAcct({ ...first, id: "../outside" }), /Invalid account id/);
+
+  const index = engine.loadIdx();
+  index.current_account_id = first.id;
+  engine.saveIdx(index);
+  assert.throws(() => engine.deleteAcct(first.id), /Switch to another account/);
+  assert.equal(fs.existsSync(firstPath), true);
+  assert.equal(engine.loadIdx().current_account_id, first.id);
+
+  const secondPath = engine.accountFilePath(second.id);
+  const originalRename = fs.renameSync;
+  let blockedIndexWrite = false;
+  fs.renameSync = (from, to) => {
+    if (!blockedIndexWrite && path.resolve(to) === path.resolve(config.IDX_PATH)) {
+      blockedIndexWrite = true;
+      throw new Error("index write failed");
+    }
+    return originalRename(from, to);
+  };
+  t.after(() => { fs.renameSync = originalRename; });
+
+  assert.throws(() => engine.deleteAcct(second.id), /index write failed/);
+  assert.equal(fs.existsSync(secondPath), true);
+  assert.ok(engine.loadIdx().accounts.some(item => item.id === second.id));
+  assert.equal(engine.loadAcct(second.id).email, second.email);
+
+  fs.renameSync = originalRename;
+  assert.equal(engine.deleteAcct(second.id), true);
+  assert.equal(fs.existsSync(secondPath), false);
+  assert.equal(engine.loadIdx().accounts.some(item => item.id === second.id), false);
+});
+
 test("auth state detects drift, migrates legacy projections, and adopts official login", t => {
   const { engine } = freshEngine(t);
   const first = addAccount(engine, "first@example.com", "acct-first", "first");

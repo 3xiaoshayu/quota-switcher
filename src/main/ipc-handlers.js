@@ -15,7 +15,11 @@ function tokenRefreshResponse(result) {
 
 function loadAcctById(eng, id) {
     if (!id) return null;
-    return eng.loadAcct(id) || eng.listAccts().find(account => account.email === id || account.id === id) || null;
+    try {
+        const account = eng.loadAcct(id);
+        if (account) return account;
+    } catch {}
+    return eng.listAccts().find(account => account.email === id || account.id === id) || null;
 }
 
 function publicQuota(quota) {
@@ -207,14 +211,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     handle("account:delete", async (event, id) => {
         try {
             return await withFreshAccount(eng, id, async account => {
-                const index = eng.loadIdx();
-                if (index.current_account_id === account.id) {
-                    return fail("Switch to another account before deleting the current account.");
-                }
-                index.accounts = index.accounts.filter(item => item.id !== account.id);
-                eng.saveIdx(index);
-                eng.deleteAcct(account.id);
-                return ok(true);
+                return ok(eng.deleteAcct(account.id, { allowCurrent: false }));
             });
         } catch (error) { return fail(error.message); }
     });
