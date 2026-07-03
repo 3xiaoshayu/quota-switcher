@@ -9,6 +9,10 @@ function getEngine() {
 function ok(data) { return { success: true, data }; }
 function fail(message) { return { success: false, error: String(message) }; }
 
+function tokenRefreshResponse(result) {
+    return result?.ok ? ok(result) : fail(result?.error || "Token refresh failed");
+}
+
 function loadAcctById(eng, id) {
     if (!id) return null;
     return eng.loadAcct(id) || eng.listAccts().find(account => account.email === id || account.id === id) || null;
@@ -234,7 +238,12 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     });
 
     ipcMain.handle("token:refresh", async (event, id) => {
-        try { return await withFreshAccount(eng, id, async account => ok(await eng.refreshOneTok(account))); }
+        try {
+            return await withFreshAccount(eng, id, async account => {
+                const result = await eng.refreshOneTok(account);
+                return tokenRefreshResponse(result);
+            });
+        }
         catch (error) { return fail(error.message); }
     });
     ipcMain.handle("token:refreshAll", async (event, force) => {
@@ -255,8 +264,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     ipcMain.handle("reset:consume", async (event, id) => {
         try {
             return await withFreshAccount(eng, id, async account => {
-                await eng.consumeResetCredit(account);
-                return ok(true);
+                return ok(await eng.consumeResetCredit(account));
             });
         } catch (error) { return fail(error.message); }
     });
@@ -371,4 +379,4 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     return { startDaemon, stopDaemon, runDaemon };
 }
 
-module.exports = { registerIpcHandlers };
+module.exports = { registerIpcHandlers, tokenRefreshResponse };

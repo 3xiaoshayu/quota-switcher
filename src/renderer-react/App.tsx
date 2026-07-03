@@ -432,14 +432,26 @@ export default function App() {
       const confirmed = window.confirm(`Consume one reset credit for ${account.email}?`);
       if (!confirmed) return;
       try {
-        await runAccountOperation(id, async () => {
-          await desktopApi.consumeResetCredit(id);
-          await desktopApi.refreshQuota(id);
+        const result = await runAccountOperation(id, async () => {
+          const consumption = await desktopApi.consumeResetCredit(id);
+          let quotaRefreshError: string | null = null;
+          try {
+            await desktopApi.refreshQuota(id);
+          } catch (error) {
+            quotaRefreshError = error instanceof Error ? error.message : String(error);
+          }
+          return { consumption, quotaRefreshError };
         });
         const snapshot = await loadDashboardState(false);
         if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-        addToast(`${account.email} reset credit consumed`, 'success');
-        addLogEntry(`Consumed one reset credit for ${account.email}.`, 'success');
+        if (!result.consumption.balance_refreshed || result.quotaRefreshError) {
+          const detail = result.consumption.refresh_error || result.quotaRefreshError || 'Latest status is unavailable.';
+          addToast(`${account.email} reset credit was consumed, but status refresh failed. Do not consume another credit; refresh later.`, 'warning');
+          addLogEntry(`Consumed one reset credit for ${account.email}; status refresh pending: ${detail}`, 'warning');
+        } else {
+          addToast(`${account.email} reset credit consumed`, 'success');
+          addLogEntry(`Consumed one reset credit for ${account.email}.`, 'success');
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         addToast(message, 'error');
@@ -467,6 +479,7 @@ export default function App() {
     const account = accountsRef.current.find(item => item.id === id);
     try {
       const result = await runAccountOperation(id, () => desktopApi.refreshToken(id));
+      if (!result.ok) throw new Error(result.error || 'Token refresh failed');
       await loadDashboardState(false);
       addToast(result?.skipped ? `${account?.email || id} Token is still valid` : `${account?.email || id} Token refreshed`, 'success');
       addLogEntry(`Token check completed: ${account?.email || id}`, 'success');
@@ -773,9 +786,16 @@ export default function App() {
 
   const handleBatchVerifyTokens = async () => {
     if (!desktopBridgeAvailable) return;
-    await desktopApi.refreshAllTokens(false);
+    const summary = await desktopApi.refreshAllTokens(false);
     await loadDashboardState(false);
-    addToast('Token check completed', 'success');
+    const total = summary.results.length;
+    const failed = summary.results.filter(result => !result.ok);
+    if (failed.length > 0) {
+      const message = `Token check completed: ${total - failed.length}/${total} succeeded, ${failed.length} failed.`;
+      addToast(message, 'warning');
+      throw new Error(message);
+    }
+    addToast(total > 0 ? `${total} account tokens checked` : 'No account tokens to check', total > 0 ? 'success' : 'info');
   };
 
   const handleDetectClient = async () => {

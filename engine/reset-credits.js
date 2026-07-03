@@ -42,31 +42,74 @@ function parseResetCreditsPayload(payload) {
   return { available_count: available, credits, next_expires_at: nextExpiry, updated_at: ts() };
 }
 
-async function consumeResetCredit(acct) {
+async function consumeResetCredit(acct, dependencies = {}) {
+  const request = dependencies.httpJson || httpJson;
+  const refreshTask = dependencies.fetchResetCredits || fetchResetCredits;
+  const persist = dependencies.saveAcct || saveAcct;
   const headers = buildCodexHeaders(acct);
-  const redeemId = crypto.randomUUID();
-  const resp = await httpJson(RESET_CONSUME_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ redeem_request_id: redeemId }),
-  });
+  const knownAvailable = Number(acct.reset_credits?.available_count);
+  if (!acct.reset_credit_pending_redeem_id && Number.isFinite(knownAvailable) && knownAvailable <= 0) {
+    throw new Error("No reset credits are available for this account.");
+  }
+
+  const redeemId = acct.reset_credit_pending_redeem_id || crypto.randomUUID();
+  acct.reset_credit_pending_redeem_id = redeemId;
+  persist(acct);
+
+  let resp;
+  try {
+    resp = await request(RESET_CONSUME_URL, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ redeem_request_id: redeemId }),
+    });
+  } catch (error) {
+    const message = error.message || String(error);
+    acct.reset_credits_error = { message, timestamp: ts() };
+    persist(acct);
+    const unknown = new Error(`Reset credit request status is unknown: ${message}. Retrying will reuse the same request id.`);
+    unknown.code = "reset_consume_status_unknown";
+    throw unknown;
+  }
   if (resp.status >= 400) {
     const code = extractErrorCode(resp.body);
+    if (resp.status < 500) {
+      acct.reset_credit_pending_redeem_id = null;
+      persist(acct);
+    }
     throw new Error("HTTP " + resp.status + (code ? " " + code : "") + " " + resp.body.slice(0, 200));
   }
+
+  acct.reset_credit_pending_redeem_id = null;
+  if (Number.isFinite(knownAvailable)) {
+    acct.reset_credits = {
+      ...(acct.reset_credits || {}),
+      available_count: Math.max(0, knownAvailable - 1),
+    };
+  }
+  persist(acct);
+
   try {
-    const snap = await fetchResetCredits(acct);
+    const snap = await refreshTask(acct);
     acct.reset_credits = snap;
     acct.reset_credits_error = null;
-    saveAcct(acct);
+    persist(acct);
+    return {
+      consumed: true,
+      balance_refreshed: true,
+      reset_credits: snap,
+      refresh_error: null,
+    };
   } catch (error) {
     acct.reset_credits_error = { message: error.message || String(error), timestamp: ts() };
-    saveAcct(acct);
-    const partial = new Error(`Reset credit was consumed, but the remaining balance could not be refreshed: ${error.message || error}`);
-    partial.code = "reset_consumed_refresh_failed";
-    throw partial;
+    persist(acct);
+    return {
+      consumed: true,
+      balance_refreshed: false,
+      reset_credits: acct.reset_credits || null,
+      refresh_error: error.message || String(error),
+    };
   }
-  return true;
 }
 
 module.exports = { fetchResetCredits, consumeResetCredit, parseResetCreditsPayload };

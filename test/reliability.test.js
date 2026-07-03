@@ -119,6 +119,75 @@ test("reset credit parsing retains an explicit zero balance", t => {
   assert.equal(snapshot.available_count, 0);
 });
 
+test("reset credit consumption stays successful when the balance refresh fails", async t => {
+  const { engine } = freshEngine(t);
+  const account = addAccount(engine, "reset@example.com", "acct-reset", "reset");
+  account.reset_credits = { available_count: 1, credits: [], next_expires_at: null };
+  let persisted = 0;
+
+  const { consumeResetCredit } = require("../engine/reset-credits");
+  const result = await consumeResetCredit(account, {
+    httpJson: async () => ({ status: 200, headers: {}, body: "{}" }),
+    fetchResetCredits: async () => { throw new Error("balance endpoint unavailable"); },
+    saveAcct: () => { persisted += 1; },
+  });
+
+  assert.equal(result.consumed, true);
+  assert.equal(result.balance_refreshed, false);
+  assert.equal(result.refresh_error, "balance endpoint unavailable");
+  assert.equal(account.reset_credits_error.message, "balance endpoint unavailable");
+  assert.equal(account.reset_credits.available_count, 0);
+  assert.equal(account.reset_credit_pending_redeem_id, null);
+  assert.equal(persisted, 3);
+});
+
+test("reset credit retry reuses the pending redemption request id", async t => {
+  const { engine } = freshEngine(t);
+  const account = addAccount(engine, "retry-reset@example.com", "acct-retry-reset", "retry-reset");
+  account.reset_credits = { available_count: 1, credits: [], next_expires_at: null };
+  const requestIds = [];
+
+  const { consumeResetCredit } = require("../engine/reset-credits");
+  await assert.rejects(
+    consumeResetCredit(account, {
+      httpJson: async (_url, options) => {
+        requestIds.push(JSON.parse(options.body).redeem_request_id);
+        throw new Error("socket disconnected");
+      },
+      saveAcct: () => {},
+    }),
+    /Retrying will reuse the same request id/,
+  );
+  assert.equal(account.reset_credit_pending_redeem_id, requestIds[0]);
+
+  const result = await consumeResetCredit(account, {
+    httpJson: async (_url, options) => {
+      requestIds.push(JSON.parse(options.body).redeem_request_id);
+      return { status: 200, headers: {}, body: "{}" };
+    },
+    fetchResetCredits: async () => ({ available_count: 0, credits: [], next_expires_at: null }),
+    saveAcct: () => {},
+  });
+
+  assert.equal(requestIds.length, 2);
+  assert.equal(requestIds[1], requestIds[0]);
+  assert.equal(result.consumed, true);
+  assert.equal(result.balance_refreshed, true);
+  assert.equal(account.reset_credit_pending_redeem_id, null);
+});
+
+test("token refresh IPC does not convert an engine failure into success", () => {
+  const { tokenRefreshResponse } = require("../src/main/ipc-handlers");
+  assert.deepEqual(
+    tokenRefreshResponse({ ok: false, error: "HTTP 403 unsupported_country_region_territory" }),
+    { success: false, error: "HTTP 403 unsupported_country_region_territory" },
+  );
+  assert.deepEqual(
+    tokenRefreshResponse({ ok: true, skipped: true }),
+    { success: true, data: { ok: true, skipped: true } },
+  );
+});
+
 test("subscription retry state blocks background attempts but force bypasses it", t => {
   freshEngine(t);
   const { shouldAttemptSubscriptionRefresh } = require("../engine/subscription");

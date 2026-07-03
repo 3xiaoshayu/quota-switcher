@@ -82,6 +82,28 @@ type DesktopSubscriptionRefreshResult = {
   subscription_active_until?: string | number | null;
 };
 
+type DesktopResetConsumeResult = {
+  consumed: boolean;
+  balance_refreshed: boolean;
+  refresh_error?: string | null;
+  reset_credits?: { available_count?: number | null; next_expires_at?: string | number | null } | null;
+};
+
+type DesktopTokenRefreshResult = {
+  ok: boolean;
+  skipped?: boolean;
+  revoked?: boolean;
+  gen?: number;
+  error?: string;
+};
+
+type DesktopTokenRefreshAllResult = {
+  okCount: number;
+  revivedCount: number;
+  deadCount: number;
+  results: Array<{ email: string; ok: boolean; skipped?: boolean; gen?: number; error?: string }>;
+};
+
 interface DesktopBridge {
   getAppInfo: () => Promise<ApiResponse<DesktopAppInfo>>;
   getCodexStatus: () => Promise<ApiResponse<DesktopCodexStatus>>;
@@ -105,9 +127,9 @@ interface DesktopBridge {
   switchAccount: (id: string) => Promise<ApiResponse<unknown>>;
   refreshQuota: (id: string, force?: boolean) => Promise<ApiResponse<DesktopQuota>>;
   refreshAllQuotas: () => Promise<ApiResponse<Array<{ id: string; email: string; quota?: DesktopQuota; error?: string }>>>;
-  refreshToken: (id: string) => Promise<ApiResponse<{ ok?: boolean; skipped?: boolean; error?: string }>>;
-  refreshAllTokens: (force?: boolean) => Promise<ApiResponse<unknown>>;
-  consumeResetCredit: (id: string) => Promise<ApiResponse<boolean>>;
+  refreshToken: (id: string) => Promise<ApiResponse<DesktopTokenRefreshResult>>;
+  refreshAllTokens: (force?: boolean) => Promise<ApiResponse<DesktopTokenRefreshAllResult>>;
+  consumeResetCredit: (id: string) => Promise<ApiResponse<DesktopResetConsumeResult>>;
   refreshSubscription: (id: string, force?: boolean) => Promise<ApiResponse<DesktopSubscriptionRefreshResult>>;
   getAutoSwitchConfig: () => Promise<ApiResponse<DesktopAutoSwitchConfig>>;
   saveAutoSwitchConfig: (cfg: DesktopAutoSwitchConfig) => Promise<ApiResponse<boolean>>;
