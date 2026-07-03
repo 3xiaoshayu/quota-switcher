@@ -8,6 +8,7 @@ function metricCrossedThreshold(metric, primaryTh, secondaryTh) {
 }
 
 function buildSwitchCandidate(acct, primaryTh, secondaryTh) {
+  if (acct.requires_reauth || acct.quota_error) return null;
   const metrics = extractQuotaMetrics(acct);
   if (metrics.length === 0) return null;
   const allAbove = metrics.every((m) => {
@@ -109,7 +110,8 @@ async function autoSwitchTick(cfg, options = {}) {
     if (listed.id === curId) continue;
     if (!monitoredIds.includes(listed.id)) continue;
     let candidate = loadAcct(listed.id) || listed;
-    if (!candidate.quota || (ts() - (candidate.usage_updated_at || 0) > 600)) {
+    if (candidate.requires_reauth) continue;
+    if (!candidate.quota || candidate.quota_error || (ts() - (candidate.usage_updated_at || 0) > 600)) {
       try {
         await withAccountLock(candidate.id, async () => {
           if (isCancelled()) return;
@@ -124,6 +126,7 @@ async function autoSwitchTick(cfg, options = {}) {
     }
     if (isCancelled()) return cancelled();
     if (!candidate) continue;
+    if (candidate.requires_reauth || candidate.quota_error) continue;
     const cand = buildSwitchCandidate(candidate, primaryTh, secondaryTh);
     if (cand) candidates.push(cand);
   }

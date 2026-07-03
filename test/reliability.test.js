@@ -82,6 +82,17 @@ test("quota parsing preserves window absence, clamps percentages, and applies we
   assert.equal(blocked.weekly_remaining_percentage, 0);
   assert.equal(blocked.hourly_remaining_percentage, 0);
   assert.equal(blocked.weekly_blocks_hourly, true);
+
+  const malformed = parseQuotaPayload({
+    rate_limit: {
+      primary_window: {},
+      secondary_window: { used_percent: "not-a-number" },
+    },
+  });
+  assert.equal(malformed.hourly_window_present, true);
+  assert.equal(malformed.hourly_remaining_percentage, null);
+  assert.equal(malformed.weekly_window_present, true);
+  assert.equal(malformed.weekly_remaining_percentage, null);
 });
 
 test("quota authorization retries once after repairing an invalidated access token", async t => {
@@ -421,6 +432,83 @@ test("auto-switch cancellation prevents switching after a daemon stop", async t 
   assert.equal(result.reason, "cancelled");
   assert.equal(switched, false);
   assert.equal(engine.loadIdx().current_account_id, current.id);
+});
+
+test("auto-switch revalidates failed candidates and excludes accounts requiring reauthorization", async t => {
+  const { engine } = freshEngine(t);
+  const current = addAccount(engine, "candidate-current@example.com", "acct-candidate-current", "candidate-current");
+  const candidate = addAccount(engine, "candidate-ready@example.com", "acct-candidate-ready", "candidate-ready");
+  const revoked = addAccount(engine, "candidate-revoked@example.com", "acct-candidate-revoked", "candidate-revoked");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 0,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  candidate.quota = {
+    hourly_remaining_percentage: 90,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 90,
+    weekly_window_present: true,
+  };
+  candidate.usage_updated_at = now;
+  candidate.quota_error = { code: "network_error", message: "previous refresh failed", timestamp: now };
+  revoked.quota = {
+    hourly_remaining_percentage: 100,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 100,
+    weekly_window_present: true,
+  };
+  revoked.usage_updated_at = now;
+  revoked.requires_reauth = true;
+  revoked.reauth_reason = "refresh token revoked";
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  engine.saveAcct(revoked);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+
+  const quotaModule = require("../engine/quota");
+  const switchModule = require("../engine/switch");
+  const originalRefresh = quotaModule.refreshQuota;
+  const originalSwitch = switchModule.doSwitch;
+  let candidateRefreshed = false;
+  let switchedTo = null;
+  quotaModule.refreshQuota = async account => {
+    if (account.id === candidate.id) {
+      candidateRefreshed = true;
+      account.quota_error = null;
+      account.usage_updated_at = engine.ts();
+      engine.saveAcct(account);
+    }
+    return account.quota;
+  };
+  switchModule.doSwitch = async account => {
+    switchedTo = account.id;
+    return { account };
+  };
+  t.after(() => {
+    quotaModule.refreshQuota = originalRefresh;
+    switchModule.doSwitch = originalSwitch;
+  });
+
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+
+  assert.equal(candidateRefreshed, true);
+  assert.equal(result.switched, true);
+  assert.equal(switchedTo, candidate.id);
+  assert.notEqual(switchedTo, revoked.id);
 });
 
 test("daemon pauses before network work when official authentication conflicts", async t => {

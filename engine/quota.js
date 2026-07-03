@@ -74,8 +74,10 @@ function parseQuotaPayload(data) {
 
   const remaining = (win) => {
     if (!win) return null;
-    const used = Number(win.used_percent ?? 0);
-    const normalized = Number.isFinite(used) ? Math.max(0, Math.min(100, used)) : 0;
+    if (win.used_percent == null || win.used_percent === "") return null;
+    const used = Number(win.used_percent);
+    if (!Number.isFinite(used)) return null;
+    const normalized = Math.max(0, Math.min(100, used));
     return 100 - normalized;
   };
   const resetTime = (win) => {
