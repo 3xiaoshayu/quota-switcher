@@ -568,25 +568,27 @@ export default function App() {
     });
   };
 
-  // Update sync interval
-  const handleUpdateSyncInterval = (val: number) => {
+  const handlePreviewSyncInterval = (val: number) => {
     const syncInterval = Math.min(60, Math.max(1, Math.round(Number(val) || 10)));
-    if (desktopBridgeAvailable) {
-      const nextConfig = {
-        ...autoSwitchConfigRef.current,
-        sync_interval_minutes: syncInterval,
-      };
-      setDaemonState(prev => ({
-        ...prev,
-        syncInterval,
-      }));
-      void saveAutoSwitchConfig(nextConfig);
-      return;
-    }
     setDaemonState(prev => ({
       ...prev,
       syncInterval,
     }));
+  };
+
+  // Update sync interval
+  const handleUpdateSyncInterval = (val: number) => {
+    const syncInterval = Math.min(60, Math.max(1, Math.round(Number(val) || 10)));
+    handlePreviewSyncInterval(syncInterval);
+    if (desktopBridgeAvailable) {
+      if (Number(autoSwitchConfigRef.current.sync_interval_minutes) === syncInterval) return;
+      const nextConfig = {
+        ...autoSwitchConfigRef.current,
+        sync_interval_minutes: syncInterval,
+      };
+      void saveAutoSwitchConfig(nextConfig);
+      return;
+    }
     addToast(`同步间隔已调整为 ${val} 分钟`, 'info');
     addLogEntry(`Daemon sync interval adjusted to ${syncInterval} minutes.`, 'info');
   };
@@ -802,23 +804,23 @@ export default function App() {
     await saveAutoSwitchConfig(nextConfig);
   };
 
-  const handleUpdateThreshold = (type: '5h' | 'weekly', val: number) => {
-    if (!desktopBridgeAvailable) {
-      setSettings(prev => ({
-        ...prev,
-        [type === '5h' ? 'fiveHourThreshold' : 'weeklyThreshold']: val,
-      }));
-      return;
-    }
-
-    const nextConfig = {
-      ...autoSwitchConfigRef.current,
-      [type === '5h' ? 'primary_threshold' : 'secondary_threshold']: val,
-    };
+  const handlePreviewThreshold = (type: '5h' | 'weekly', val: number) => {
     setSettings(prev => ({
       ...prev,
       [type === '5h' ? 'fiveHourThreshold' : 'weeklyThreshold']: val,
     }));
+  };
+
+  const handleUpdateThreshold = (type: '5h' | 'weekly', val: number) => {
+    handlePreviewThreshold(type, val);
+    if (!desktopBridgeAvailable) return;
+
+    const configKey = type === '5h' ? 'primary_threshold' : 'secondary_threshold';
+    if (Number(autoSwitchConfigRef.current[configKey]) === val) return;
+    const nextConfig = {
+      ...autoSwitchConfigRef.current,
+      [configKey]: val,
+    };
     void saveAutoSwitchConfig(nextConfig);
   };
 
@@ -1002,6 +1004,7 @@ export default function App() {
                   settings={settings}
                   daemonState={daemonState}
                   onToggleGlobalSwitch={handleToggleGlobalSwitch}
+                  onPreviewThreshold={handlePreviewThreshold}
                   onUpdateThreshold={handleUpdateThreshold}
                   onAddLog={addLogEntry}
                   onToggleAccountSelection={handleToggleAccountSelection}
@@ -1037,6 +1040,7 @@ export default function App() {
                   settings={settings}
                   daemonState={daemonState}
                   onToggleDaemon={handleToggleDaemon}
+                  onPreviewSyncInterval={handlePreviewSyncInterval}
                   onUpdateSyncInterval={handleUpdateSyncInterval}
                   onAddLog={addLogEntry}
                   onBatchVerifyTokens={desktopBridgeAvailable ? handleBatchVerifyTokens : undefined}

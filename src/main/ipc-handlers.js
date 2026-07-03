@@ -94,6 +94,8 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     if (engineInstance) engine = engineInstance;
     const eng = engineInstance || getEngine();
     const updateService = services.updateService || null;
+    const setDaemonInterval = services.setInterval || setInterval;
+    const clearDaemonInterval = services.clearInterval || clearInterval;
     const trustedWebContentsId = Number.isInteger(services.trustedWebContentsId)
         ? services.trustedWebContentsId
         : null;
@@ -381,14 +383,12 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     };
 
     const startDaemonTimer = () => {
-        daemonTimer = setInterval(() => void runDaemon(), eng.getTickIntervalMs());
+        daemonTimer = setDaemonInterval(() => void runDaemon(), eng.getTickIntervalMs());
     };
-    const restartDaemonTimer = () => {
+    const reloadDaemonTimer = () => {
         if (!daemonTimer) return;
-        clearInterval(daemonTimer);
-        bumpDaemonGeneration();
+        clearDaemonInterval(daemonTimer);
         startDaemonTimer();
-        void runDaemon();
     };
     const startDaemon = () => {
         if (daemonTimer) return ok("Already running");
@@ -399,7 +399,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     };
     const stopDaemon = () => {
         if (!daemonTimer) return ok("Not running");
-        clearInterval(daemonTimer);
+        clearDaemonInterval(daemonTimer);
         daemonTimer = null;
         daemonRunRequested = false;
         bumpDaemonGeneration();
@@ -411,8 +411,9 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     handle("autoswitch:config:get", () => ok(eng.loadAutoSwitchCfg()));
     handle("autoswitch:config:save", (event, config) => {
         try {
+            const previousInterval = daemonIntervalMinutes();
             eng.saveAutoSwitchCfg(config);
-            restartDaemonTimer();
+            if (daemonIntervalMinutes() !== previousInterval) reloadDaemonTimer();
             return ok(true);
         } catch (error) { return fail(error.message); }
     });

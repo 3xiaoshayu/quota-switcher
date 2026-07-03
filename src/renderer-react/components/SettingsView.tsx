@@ -22,6 +22,7 @@ interface SettingsProps {
   settings: SystemSettings;
   daemonState: DaemonState;
   onToggleDaemon: () => void | Promise<void>;
+  onPreviewSyncInterval: (interval: number) => void;
   onUpdateSyncInterval: (interval: number) => void;
   onAddLog: (msg: string, type: 'success' | 'info' | 'warning' | 'error') => void;
   onBatchVerifyTokens?: () => Promise<void>;
@@ -39,6 +40,7 @@ export default function SettingsView({
   settings,
   daemonState,
   onToggleDaemon,
+  onPreviewSyncInterval,
   onUpdateSyncInterval,
   onAddLog,
   onBatchVerifyTokens,
@@ -253,9 +255,10 @@ export default function SettingsView({
                     min="1"
                     max="60"
                     value={daemonState.syncInterval}
-                    onChange={(e) => {
-                      onUpdateSyncInterval(Number(e.target.value));
-                    }}
+                    onChange={(e) => onPreviewSyncInterval(Number(e.target.value))}
+                    onPointerUp={(e) => onUpdateSyncInterval(Number(e.currentTarget.value))}
+                    onKeyUp={(e) => onUpdateSyncInterval(Number(e.currentTarget.value))}
+                    onBlur={(e) => onUpdateSyncInterval(Number(e.currentTarget.value))}
                     className="flex-1 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500 outline-none"
                     id="sync-interval-slider"
                   />

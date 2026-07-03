@@ -15,6 +15,7 @@ interface AutoSwitchProps {
   settings: SystemSettings;
   daemonState: DaemonState;
   onToggleGlobalSwitch: () => void | Promise<void>;
+  onPreviewThreshold: (type: '5h' | 'weekly', val: number) => void;
   onUpdateThreshold: (type: '5h' | 'weekly', val: number) => void;
   onAddLog: (msg: string, type: 'success' | 'info' | 'warning' | 'error') => void;
   onToggleAccountSelection: (id: string) => void;
@@ -30,6 +31,7 @@ export default function AutoSwitchView({
   settings,
   daemonState,
   onToggleGlobalSwitch,
+  onPreviewThreshold,
   onUpdateThreshold,
   onAddLog,
   onToggleAccountSelection,
@@ -218,7 +220,10 @@ export default function AutoSwitchView({
                   min="1"
                   max="50"
                   value={settings.fiveHourThreshold}
-                  onChange={(e) => onUpdateThreshold('5h', Number(e.target.value))}
+                  onChange={(e) => onPreviewThreshold('5h', Number(e.target.value))}
+                  onPointerUp={(e) => onUpdateThreshold('5h', Number(e.currentTarget.value))}
+                  onKeyUp={(e) => onUpdateThreshold('5h', Number(e.currentTarget.value))}
+                  onBlur={(e) => onUpdateThreshold('5h', Number(e.currentTarget.value))}
                   className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500 outline-none"
                   id="threshold-5h-slider"
                 />
@@ -235,7 +240,10 @@ export default function AutoSwitchView({
                   min="1"
                   max="50"
                   value={settings.weeklyThreshold}
-                  onChange={(e) => onUpdateThreshold('weekly', Number(e.target.value))}
+                  onChange={(e) => onPreviewThreshold('weekly', Number(e.target.value))}
+                  onPointerUp={(e) => onUpdateThreshold('weekly', Number(e.currentTarget.value))}
+                  onKeyUp={(e) => onUpdateThreshold('weekly', Number(e.currentTarget.value))}
+                  onBlur={(e) => onUpdateThreshold('weekly', Number(e.currentTarget.value))}
                   className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500 outline-none"
                   id="threshold-weekly-slider"
                 />

@@ -705,6 +705,81 @@ test("daemon restart during in-flight work schedules an immediate replacement ru
   assert.equal(handlers.has("daemon:stop"), true);
 });
 
+test("config saves reload only a changed daemon interval without triggering work", async t => {
+  const handlers = new Map();
+  const intervalCalls = [];
+  const clearedIntervals = [];
+  let nextTimerId = 0;
+  let runCount = 0;
+  let config = {
+    enabled: false,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+    sync_interval_minutes: 10,
+  };
+  const electron = {
+    ipcMain: {
+      handle(channel, listener) {
+        handlers.set(channel, listener);
+      },
+    },
+    BrowserWindow: { getAllWindows: () => [] },
+    app: {
+      getVersion: () => "0.1.0-beta.9",
+      isPackaged: false,
+    },
+    shell: {
+      async openExternal() {},
+      async openPath() { return ""; },
+    },
+  };
+  const engine = {
+    getTickIntervalMs: () => config.sync_interval_minutes * 60000,
+    getTickIntervalMinutes: () => config.sync_interval_minutes,
+    loadAutoSwitchCfg: () => ({ ...config }),
+    saveAutoSwitchCfg(next) { config = { ...next }; },
+    async runDaemonWorker() {
+      runCount += 1;
+      return {
+        completedAt: Date.now(),
+        pausedReason: null,
+        failures: [],
+        autoSwitchResult: null,
+      };
+    },
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  const daemon = registerIpcHandlers(engine, {
+    electron,
+    setInterval(callback, milliseconds) {
+      const timer = { id: ++nextTimerId, callback, milliseconds };
+      intervalCalls.push(timer);
+      return timer;
+    },
+    clearInterval(timer) {
+      clearedIntervals.push(timer);
+    },
+  });
+  t.after(() => daemon.stopDaemon());
+
+  daemon.startDaemon();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(runCount, 1);
+  assert.deepEqual(intervalCalls.map(timer => timer.milliseconds), [10 * 60000]);
+
+  await handlers.get("autoswitch:config:save")({}, { ...config, primary_threshold: 15 });
+  assert.equal(runCount, 1);
+  assert.equal(intervalCalls.length, 1);
+  assert.equal(clearedIntervals.length, 0);
+
+  await handlers.get("autoswitch:config:save")({}, { ...config, sync_interval_minutes: 25 });
+  assert.equal(runCount, 1);
+  assert.deepEqual(intervalCalls.map(timer => timer.milliseconds), [10 * 60000, 25 * 60000]);
+  assert.equal(clearedIntervals.length, 1);
+});
+
 test("switch transaction commits on success and restores state when launch fails", async t => {
   const { engine } = freshEngine(t);
   const first = addAccount(engine, "one@example.com", "acct-one", "one");
