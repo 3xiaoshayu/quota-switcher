@@ -6,10 +6,11 @@ interface LoginProps {
   onLogin: (email: string) => void;
   userEmail: string;
   appVersion?: string;
+  showDemoShortcuts?: boolean;
 }
 
-export default function Login({ onLogin, userEmail, appVersion = '0.1.0-beta.9' }: LoginProps) {
-  const [email, setEmail] = useState(userEmail || 'admin@codex.ai');
+export default function Login({ onLogin, userEmail, appVersion = '0.1.0-beta.9', showDemoShortcuts = false }: LoginProps) {
+  const [email, setEmail] = useState(userEmail || '');
   const [password] = useState('Windows DPAPI protected');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -141,34 +142,43 @@ export default function Login({ onLogin, userEmail, appVersion = '0.1.0-beta.9' 
           </button>
         </form>
 
-        <div className="relative my-7 flex items-center justify-center" id="login-divider-row">
-          <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-white/5"></div>
-          </div>
-          <span className="relative px-3 bg-slate-900/0 text-xs text-slate-400 font-medium">
-            或使用快捷测试账户
-          </span>
-        </div>
+        {showDemoShortcuts ? (
+          <>
+            <div className="relative my-7 flex items-center justify-center" id="login-divider-row">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-white/5"></div>
+              </div>
+              <span className="relative px-3 bg-slate-900/0 text-xs text-slate-400 font-medium">
+                浏览器界面预览
+              </span>
+            </div>
 
-        {/* Quick login grid */}
-        <div className="grid grid-cols-2 gap-3" id="quick-login-grid">
-          <button
-            onClick={() => handleQuickLogin(userEmail || 'user@example.com')}
-            className="py-2.5 px-3 backdrop-blur-md bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-xs text-slate-200 transition-all cursor-pointer text-center truncate flex items-center justify-center gap-1.5"
-            id="quick-login-user-btn"
-          >
-            <User className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-            我的账号
-          </button>
-          <button
-            onClick={() => handleQuickLogin('ops-01-primary@codex.ai')}
-            className="py-2.5 px-3 backdrop-blur-md bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-xs text-slate-200 transition-all cursor-pointer text-center truncate flex items-center justify-center gap-1.5"
-            id="quick-login-admin-btn"
-          >
-            <Shield className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-            运维主中心
-          </button>
-        </div>
+            {/* Preview-only shortcuts are never rendered by the packaged desktop app. */}
+            <div className="grid grid-cols-2 gap-3" id="quick-login-grid">
+              <button
+                onClick={() => handleQuickLogin(userEmail || 'preview-user@codex.local')}
+                className="py-2.5 px-3 backdrop-blur-md bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-xs text-slate-200 transition-all cursor-pointer text-center truncate flex items-center justify-center gap-1.5"
+                id="quick-login-user-btn"
+              >
+                <User className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                普通预览
+              </button>
+              <button
+                onClick={() => handleQuickLogin('ops-preview@codex.local')}
+                className="py-2.5 px-3 backdrop-blur-md bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-xs text-slate-200 transition-all cursor-pointer text-center truncate flex items-center justify-center gap-1.5"
+                id="quick-login-admin-btn"
+              >
+                <Shield className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                管理预览
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="mt-7 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-xs text-slate-300 flex items-start gap-3" id="login-desktop-bridge-note">
+            <Shield className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
+            <span>进入后将从本机 Codex 凭证与账号库读取真实账号数据。</span>
+          </div>
+        )}
 
         <div className="mt-8 text-center" id="login-footer-credits">
           <p className="text-[10px] text-slate-500 font-mono tracking-widest">

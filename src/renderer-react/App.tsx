@@ -103,7 +103,7 @@ export default function App() {
   });
   
   const [userEmail, setUserEmail] = useState<string>(() => {
-    return localStorage.getItem('codex_auth_email') || 'user@example.com';
+    return localStorage.getItem('codex_auth_email') || '';
   });
 
   // Main UI States
@@ -859,7 +859,7 @@ export default function App() {
   };
 
   if (!isAuthenticated) {
-    return <Login onLogin={handleLogin} userEmail={userEmail} appVersion={settings.version} />;
+    return <Login onLogin={handleLogin} userEmail={userEmail} appVersion={settings.version} showDemoShortcuts={!desktopBridgeAvailable} />;
   }
 
   return (

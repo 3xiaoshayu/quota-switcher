@@ -4,7 +4,7 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
   {
     id: '1',
     name: 'Main Operations Center',
-    email: 'ops-01-primary@codex.ai',
+    email: 'ops-01-primary@codex.local',
     status: 'ACTIVE',
     fiveHourQuotaRemaining: 2600,
     fiveHourQuotaTotal: 5000,
@@ -20,7 +20,7 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
   {
     id: '2',
     name: 'Data Scraping Cluster',
-    email: 'sc-node-beta@codex.ai',
+    email: 'sc-node-beta@codex.local',
     status: 'WARNING',
     fiveHourQuotaRemaining: 900,
     fiveHourQuotaTotal: 5000,
@@ -36,7 +36,7 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
   {
     id: '3',
     name: 'Legacy Bridge API',
-    email: 'api-v1-fallback@codex.ai',
+    email: 'api-v1-fallback@codex.local',
     status: 'EXPIRED',
     fiveHourQuotaRemaining: 0,
     fiveHourQuotaTotal: 5000,
@@ -52,7 +52,7 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
   {
     id: '4',
     name: 'Staging Sandbox',
-    email: 'sandbox-dev@codex.ai',
+    email: 'sandbox-dev@codex.local',
     status: 'ACTIVE',
     fiveHourQuotaRemaining: 4898,
     fiveHourQuotaTotal: 5000,
@@ -67,7 +67,7 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
   {
     id: '5',
     name: 'Premium_Member_01',
-    email: 'premium-member-01@codex.ai',
+    email: 'premium-member-01@codex.local',
     status: 'ACTIVE',
     fiveHourQuotaRemaining: 34,
     fiveHourQuotaTotal: 40,
@@ -82,7 +82,7 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
   {
     id: '6',
     name: 'Team_Admin_Shared',
-    email: 'team-admin-shared@codex.ai',
+    email: 'team-admin-shared@codex.local',
     status: 'LOW_QUOTA',
     fiveHourQuotaRemaining: 2,
     fiveHourQuotaTotal: 40,
@@ -98,7 +98,7 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
   {
     id: '7',
     name: 'Legacy_User_45',
-    email: 'legacy-user-45@codex.ai',
+    email: 'legacy-user-45@codex.local',
     status: 'SUSPENDED',
     fiveHourQuotaRemaining: 0,
     fiveHourQuotaTotal: 40,
@@ -114,7 +114,7 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
   {
     id: '8',
     name: 'Internal_Dev_Account',
-    email: 'internal-dev-account@codex.ai',
+    email: 'internal-dev-account@codex.local',
     status: 'READY',
     fiveHourQuotaRemaining: 40,
     fiveHourQuotaTotal: 40,
@@ -128,8 +128,8 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
   },
   {
     id: '9',
-    name: 'user@example.com',
-    email: 'user@example.com',
+    name: 'preview-user@codex.local',
+    email: 'preview-user@codex.local',
     status: 'ACTIVE',
     fiveHourQuotaRemaining: 4000,
     fiveHourQuotaTotal: 5000,
@@ -205,7 +205,7 @@ export const INITIAL_LOGS: LogEntry[] = [
   {
     id: 'l5',
     timestamp: '2026-06-30 10:15:22',
-    message: 'Account api-v1-fallback@codex.ai marked as EXPIRED.',
+    message: 'Account api-v1-fallback@codex.local marked as EXPIRED.',
     type: 'error',
   },
 ];
