@@ -231,6 +231,52 @@ test("token refresh IPC does not convert an engine failure into success", () => 
   );
 });
 
+test("background quota IPC stops at an authentication conflict", async () => {
+  const handlers = new Map();
+  let refreshCount = 0;
+  const electron = {
+    ipcMain: {
+      handle(channel, listener) {
+        handlers.set(channel, listener);
+      },
+    },
+    BrowserWindow: { getAllWindows: () => [] },
+    app: {
+      getVersion: () => "0.1.0-beta.9",
+      isPackaged: false,
+    },
+    shell: {
+      async openExternal() {},
+      async openPath() { return ""; },
+    },
+  };
+  const account = { id: "account-one", email: "one@example.com" };
+  const engine = {
+    inspectAuthState: () => ({
+      status: "conflict",
+      requiresResolution: true,
+      message: "Official Codex authentication changed.",
+    }),
+    withAccountLock: async (_id, task) => task(),
+    loadAcct: () => account,
+    async refreshQuota() {
+      refreshCount += 1;
+      return { hourly_remaining_percentage: 50 };
+    },
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, { electron });
+
+  const background = await handlers.get("quota:refresh")({}, account.id, false);
+  assert.equal(background.success, false);
+  assert.match(background.error, /authentication changed/i);
+  assert.equal(refreshCount, 0);
+
+  const manual = await handlers.get("quota:refresh")({}, account.id, true);
+  assert.equal(manual.success, true);
+  assert.equal(refreshCount, 1);
+});
+
 test("subscription retry state blocks background attempts but force bypasses it", t => {
   freshEngine(t);
   const { shouldAttemptSubscriptionRefresh } = require("../engine/subscription");
@@ -353,6 +399,12 @@ test("auth state detects drift, migrates legacy projections, and adopts official
   const conflict = engine.inspectAuthState();
   assert.equal(conflict.status, "conflict");
   assert.equal(conflict.matchedAccountId, second.id);
+  engine.inspectAuthState();
+  const logPath = path.join(config.DATA_DIR, "logs", `app-${new Date().toISOString().slice(0, 10)}.log`);
+  const conflictWarnings = () => fs.readFileSync(logPath, "utf8")
+    .split("\n")
+    .filter(line => line.includes("Official Codex authentication differs from the managed current account"));
+  assert.equal(conflictWarnings().length, 1);
 
   const adopted = engine.adoptOfficialAuth();
   assert.equal(adopted.id, second.id);
@@ -370,6 +422,9 @@ test("auth state detects drift, migrates legacy projections, and adopts official
   assert.equal(engine.inspectAuthState().status, "aligned");
   const migrated = JSON.parse(fs.readFileSync(path.join(config.CODEX_DIR, "codex_auth_projection.json"), "utf8"));
   assert.ok(migrated.auth_fingerprint);
+  fs.writeFileSync(path.join(config.CODEX_DIR, "auth.json"), JSON.stringify(secondAuth), "utf8");
+  assert.equal(engine.inspectAuthState().status, "conflict");
+  assert.equal(conflictWarnings().length, 2);
 });
 
 test("auth state accepts and synchronizes token rotation for the same official identity", t => {

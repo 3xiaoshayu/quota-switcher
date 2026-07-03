@@ -129,6 +129,7 @@ export default function App() {
   const accountsRef = useRef<AccountQuota[]>(accounts);
   const accountOperationIds = useRef<Set<string>>(new Set());
   const autoSwitchConfigRef = useRef<DesktopAutoSwitchConfig>(autoSwitchConfig);
+  const authStateRef = useRef<DesktopAuthState>(authState);
   const configSaveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const configSaveRevision = useRef(0);
   
@@ -198,6 +199,7 @@ export default function App() {
     setCodexStatus(snapshot.codexStatus);
     setUpdateStatus(snapshot.updateStatus);
     setAuthState(snapshot.authState);
+    authStateRef.current = snapshot.authState;
     setOAuthStatus(snapshot.oauthStatus);
     if (snapshot.oauthStatus.pending) setActiveTab('accounts');
     setSettings(settingsFromDesktopState(snapshot.config, snapshot.appInfo, snapshot.codexStatus, snapshot.updateStatus));
@@ -240,6 +242,7 @@ export default function App() {
 
   const queueQuotaAutoSync = useCallback((candidateAccounts: AccountQuota[]) => {
     if (!desktopBridgeAvailable || quotaAutoSyncPromise.current) return;
+    if (authStateRef.current.requiresResolution) return;
     if (Date.now() - lastQuotaAutoSyncAt.current < QUOTA_AUTO_SYNC_MIN_GAP_MS) return;
     const staleAccounts = candidateAccounts.filter((account) => (
       !accountOperationIds.current.has(account.id) && needsQuotaAutoSync(account)
@@ -331,6 +334,7 @@ export default function App() {
       },
       onAuthConflict: (state) => {
         setAuthState(state);
+        authStateRef.current = state;
         addToast(state.message || 'Official Codex authentication changed.', 'warning');
       },
     });

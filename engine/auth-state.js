@@ -8,6 +8,21 @@ const { logInfo, logWarn } = require("./logger");
 
 const AUTH_PATH = path.join(CODEX_DIR, "auth.json");
 const PROJECTION_PATH = path.join(CODEX_DIR, "codex_auth_projection.json");
+let lastConflictWarning = null;
+
+function returnNonConflict(state) {
+  lastConflictWarning = null;
+  return state;
+}
+
+function returnConflict(state, officialFingerprint) {
+  const signature = `${state.currentAccountId || "none"}:${officialFingerprint || "none"}`;
+  if (signature !== lastConflictWarning) {
+    logWarn("Official Codex authentication differs from the managed current account");
+    lastConflictWarning = signature;
+  }
+  return state;
+}
 
 function canonicalAuthTokens(value) {
   const tokens = value?.tokens || {};
@@ -140,25 +155,25 @@ function inspectAuthState(options = {}) {
   const accounts = listAccts();
 
   if (!official) {
-    return {
+    return returnNonConflict({
       status: current ? "missing_official_auth" : "empty",
       requiresResolution: !!current,
       currentAccountId: current?.id || null,
       matchedAccountId: null,
       officialIdentity: null,
       message: current ? "Official Codex authentication is missing." : null,
-    };
+    });
   }
 
   if (!official.supported) {
-    return {
+    return returnNonConflict({
       status: "unsupported_official_auth",
       requiresResolution: !!current,
       currentAccountId: current?.id || null,
       matchedAccountId: null,
       officialIdentity: null,
       message: "The official Codex authentication format is not an OAuth account.",
-    };
+    });
   }
 
   const matching = findMatchingAccount(official, accounts);
@@ -174,48 +189,47 @@ function inspectAuthState(options = {}) {
       writeManagedProjection(current, official.value);
       logInfo("Migrated the managed Codex authentication projection");
     }
-    return {
+    return returnNonConflict({
       status: "aligned",
       requiresResolution: false,
       currentAccountId: current.id,
       matchedAccountId: current.id,
       officialIdentity: publicOfficialIdentity(official),
       message: null,
-    };
+    });
   }
 
   if (sameIdentity) {
     if (migrateProjection) syncCurrentAccountFromOfficial(current, official);
-    return {
+    return returnNonConflict({
       status: "aligned",
       requiresResolution: false,
       currentAccountId: current.id,
       matchedAccountId: current.id,
       officialIdentity: publicOfficialIdentity(official),
       message: null,
-    };
+    });
   }
 
   if (!current) {
-    return {
+    return returnNonConflict({
       status: "unmanaged_official_auth",
       requiresResolution: true,
       currentAccountId: null,
       matchedAccountId: matching?.id || null,
       officialIdentity: publicOfficialIdentity(official),
       message: "An official Codex login is present but is not managed yet.",
-    };
+    });
   }
 
-  logWarn("Official Codex authentication differs from the managed current account");
-  return {
+  return returnConflict({
     status: "conflict",
     requiresResolution: true,
     currentAccountId: current.id,
     matchedAccountId: matching?.id || null,
     officialIdentity: publicOfficialIdentity(official),
     message: "Official Codex was signed into a different account outside this manager.",
-  };
+  }, official.fingerprint);
 }
 
 function adoptOfficialAuth() {

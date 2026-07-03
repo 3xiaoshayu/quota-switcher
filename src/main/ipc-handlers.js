@@ -237,6 +237,12 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
 
     handle("quota:refresh", async (event, id, force = true) => {
         try {
+            if (force === false) {
+                const authState = eng.inspectAuthState({ migrateProjection: false });
+                if (authState.requiresResolution) {
+                    return fail(authState.message || "Automatic quota sync is paused until authentication is resolved");
+                }
+            }
             return await withFreshAccount(eng, id, async account => {
                 const quota = await eng.refreshQuota(account, { force: force !== false });
                 return ok(publicQuota(quota));
