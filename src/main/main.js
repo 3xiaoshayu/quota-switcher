@@ -36,7 +36,7 @@ app.whenReady().then(() => {
         icon: path.join(__dirname, "..", "..", "resources", "icon.ico"),
         webPreferences: {
             preload: path.join(__dirname, "..", "preload", "preload.js"),
-            contextIsolation: true, nodeIntegration: false, sandbox: false,
+            contextIsolation: true, nodeIntegration: false, sandbox: true,
         },
     });
     win.setMenuBarVisibility(false);
@@ -49,12 +49,13 @@ app.whenReady().then(() => {
         openExternalUrl(url);
         return { action: "deny" };
     });
-    win.webContents.on("will-navigate", (event, url) => {
+    const guardNavigation = (event, url) => {
         if (url === win.webContents.getURL()) return;
-        if (!/^https?:\/\//i.test(String(url || ""))) return;
         event.preventDefault();
-        openExternalUrl(url);
-    });
+        if (/^https?:\/\//i.test(String(url || ""))) openExternalUrl(url);
+    };
+    win.webContents.on("will-navigate", guardNavigation);
+    win.webContents.on("will-redirect", guardNavigation);
 
     win.once("ready-to-show", () => {
         win.show();
