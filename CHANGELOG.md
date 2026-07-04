@@ -9,6 +9,14 @@ release is published.
 
 No unreleased changes.
 
+## [0.1.0-beta.10] - 2026-07-04
+
+- Clarify batch token validation results by separating accounts that require
+  reauthorization from real check failures.
+- Remove misleading OAuth add-account plan and priority selectors while keeping
+  the same modal layout and automatic account detection flow.
+- Publish a refreshed Windows installer with the latest verified renderer build.
+
 ## [0.1.0-beta.9] - 2026-07-02
 
 - Prevent Microsoft Store activation exit codes from causing false switch
