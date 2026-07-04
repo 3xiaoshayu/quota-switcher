@@ -211,6 +211,9 @@ function restoreFile(filePath, content) {
 
 async function doSwitch(account, options = {}) {
   if (!account?.id || !account.tokens?.access_token) throw new Error("The target account is incomplete");
+  if (account.requires_reauth) {
+    throw new Error("The target account requires reauthorization before it can be switched to");
+  }
   const current = currentAcct();
   if (!options.force && current?.id === account.id) {
     const authState = inspectAuthState({ migrateProjection: true });

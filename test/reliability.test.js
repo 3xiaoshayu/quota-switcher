@@ -277,6 +277,76 @@ test("background quota IPC stops at an authentication conflict", async () => {
   assert.equal(refreshCount, 1);
 });
 
+test("quota and subscription IPC skip accounts that require reauthorization", async () => {
+  const handlers = new Map();
+  let quotaRefreshCount = 0;
+  let subscriptionRefreshCount = 0;
+  const electron = {
+    ipcMain: {
+      handle(channel, listener) {
+        handlers.set(channel, listener);
+      },
+    },
+    BrowserWindow: { getAllWindows: () => [] },
+    app: {
+      getVersion: () => "0.1.0-beta.9",
+      isPackaged: false,
+    },
+    shell: {
+      async openExternal() {},
+      async openPath() { return ""; },
+    },
+  };
+  const suspended = {
+    id: "suspended-account",
+    email: "suspended@example.com",
+    requires_reauth: true,
+  };
+  const active = {
+    id: "active-account",
+    email: "active@example.com",
+    requires_reauth: false,
+  };
+  const accounts = new Map([[suspended.id, suspended], [active.id, active]]);
+  const engine = {
+    inspectAuthState: () => ({ status: "aligned", requiresResolution: false }),
+    listAccts: () => [suspended, active],
+    loadAcct: id => accounts.get(id) || null,
+    withAccountLock: async (_id, task) => task(),
+    async refreshQuota() {
+      quotaRefreshCount += 1;
+      return { hourly_remaining_percentage: 50 };
+    },
+    async refreshSubscription() {
+      subscriptionRefreshCount += 1;
+      return true;
+    },
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, { electron });
+
+  const directQuota = await handlers.get("quota:refresh")({}, suspended.id, true);
+  assert.equal(directQuota.success, false);
+  assert.match(directQuota.error, /requires reauthorization/i);
+  assert.equal(quotaRefreshCount, 0);
+
+  const allQuotas = await handlers.get("quota:refreshAll")({});
+  assert.equal(allQuotas.success, true);
+  assert.deepEqual(allQuotas.data[0], {
+    id: suspended.id,
+    email: suspended.email,
+    skipped: true,
+    reason: "reauthorization_required",
+  });
+  assert.equal(allQuotas.data[1].id, active.id);
+  assert.equal(quotaRefreshCount, 1);
+
+  const subscription = await handlers.get("subscription:refresh")({}, suspended.id, true);
+  assert.equal(subscription.success, false);
+  assert.match(subscription.error, /requires reauthorization/i);
+  assert.equal(subscriptionRefreshCount, 0);
+});
+
 test("subscription retry state blocks background attempts but force bypasses it", t => {
   freshEngine(t);
   const { shouldAttemptSubscriptionRefresh } = require("../engine/subscription");
@@ -959,6 +1029,11 @@ test("switch transaction commits on success and restores state when launch fails
   await engine.doSwitch(second);
   assert.equal(engine.loadIdx().current_account_id, second.id);
   assert.equal(engine.inspectAuthState().status, "aligned");
+
+  first.requires_reauth = true;
+  await assert.rejects(engine.doSwitch(first), /requires reauthorization/i);
+  assert.equal(engine.loadIdx().current_account_id, second.id);
+  first.requires_reauth = false;
 
   engine.setSwitchRuntimeForTests({
     assertInstalled() {},

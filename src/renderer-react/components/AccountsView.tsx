@@ -480,16 +480,16 @@ export default function AccountsView({
                 {/* 1. Refresh */}
                 <motion.button
                   onClick={() => handleSingleRefresh(account.id, account.name)}
-                  disabled={isCardRefreshing}
+                  disabled={isCardRefreshing || account.status === 'SUSPENDED'}
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.95 }}
                   transition={{ type: 'spring', stiffness: 450, damping: 20 }}
-                  className="flex-1 py-3 px-2 bg-white/5 hover:bg-white/10 rounded-xl text-slate-300 hover:text-white transition-all text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
-                  title="刷新此账号"
+                  className="flex-1 py-3 px-2 bg-white/5 hover:bg-white/10 rounded-xl text-slate-300 hover:text-white transition-all text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                  title={account.status === 'SUSPENDED' ? 'Reauthorize this account before refreshing quotas' : '刷新此账号'}
                   id={`action-refresh-${account.id}`}
                 >
             <RefreshCw className={`w-3.5 h-3.5 ${isCardRefreshing ? 'animate-spin text-blue-400' : ''}`} />
-                  Refresh
+                  {account.status === 'SUSPENDED' ? 'Reauthorize first' : 'Refresh'}
                 </motion.button>
 
                 {account.status === 'SUSPENDED' && onReauthorizeAccount && (
@@ -523,16 +523,17 @@ export default function AccountsView({
                 ) : (
                   <motion.button
                     onClick={() => void handleSwitchAccount(account.id)}
-                    disabled={switchingId !== null || deletingId === account.id}
+                    disabled={account.status === 'SUSPENDED' || switchingId !== null || deletingId === account.id}
                     aria-busy={switchingId === account.id}
+                    title={account.status === 'SUSPENDED' ? 'Reauthorize this account before switching' : 'Switch to this account'}
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.95 }}
                     transition={{ type: 'spring', stiffness: 450, damping: 20 }}
-                    className="flex-1 py-3 px-2 bg-white/5 hover:bg-blue-500/15 hover:text-blue-300 hover:border-blue-500/35 border border-transparent rounded-xl text-slate-300 transition-all text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                    className="flex-1 py-3 px-2 bg-white/5 hover:bg-blue-500/15 hover:text-blue-300 hover:border-blue-500/35 border border-transparent rounded-xl text-slate-300 transition-all text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
                     id={`action-switch-${account.id}`}
                   >
                     <ArrowLeftRight className={`w-3.5 h-3.5 ${switchingId === account.id ? 'animate-pulse' : ''}`} />
-                    {switchingId === account.id ? 'Switching...' : 'Switch'}
+                    {switchingId === account.id ? 'Switching...' : account.status === 'SUSPENDED' ? 'Unavailable' : 'Switch'}
                   </motion.button>
                 )}
 

@@ -280,6 +280,7 @@ export default function QuotasView({
           const weeklyExceeded = weeklyPercentage === 0;
           const hasResetCredits = Number(account.resetCreditsAvailable || 0) > 0;
           const tokenRefreshUnavailable = account.status === 'SUSPENDED' || account.tokenRefreshAvailable === false;
+          const accountRequiresReauthorization = account.status === 'SUSPENDED';
 
           // Progress color follows remaining quota: low red, medium amber, high green.
           const barColor5h = fiveHourPercentage == null
@@ -389,15 +390,16 @@ export default function QuotasView({
                 ) : (
                   <motion.button
                     onClick={() => handleCardRefresh(account.id)}
-                    disabled={isCardRefreshing}
+                    disabled={isCardRefreshing || accountRequiresReauthorization}
+                    title={accountRequiresReauthorization ? 'Reauthorize this account before refreshing quotas' : 'Refresh quota'}
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.96 }}
                     transition={{ type: 'spring', stiffness: 400, damping: 20 }}
-                    className="flex-1 py-3 bg-blue-500/10 hover:bg-blue-500/15 border border-blue-500/25 disabled:bg-white/5 disabled:border-white/5 disabled:text-slate-500 text-blue-300 hover:text-blue-200 text-xs font-bold rounded-2xl flex items-center justify-center gap-2 cursor-pointer transition-all"
+                    className="flex-1 py-3 bg-blue-500/10 hover:bg-blue-500/15 border border-blue-500/25 disabled:bg-white/5 disabled:border-white/5 disabled:text-slate-500 disabled:cursor-not-allowed text-blue-300 hover:text-blue-200 text-xs font-bold rounded-2xl flex items-center justify-center gap-2 cursor-pointer transition-all"
                     id={`quota-btn-refresh-${account.id}`}
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${isCardRefreshing ? 'animate-spin' : ''}`} />
-                    {isCardRefreshing ? 'Refreshing...' : 'Quick Refresh'}
+                    {isCardRefreshing ? 'Refreshing...' : accountRequiresReauthorization ? 'Reauthorize to refresh' : 'Quick Refresh'}
                   </motion.button>
                 )}
 
@@ -433,8 +435,9 @@ export default function QuotasView({
                               setActiveMenuId(null);
                               handleCardRefresh(account.id);
                             }}
-                            disabled={isCardRefreshing}
+                            disabled={isCardRefreshing || accountRequiresReauthorization}
                             aria-busy={isCardRefreshing}
+                            title={accountRequiresReauthorization ? 'Reauthorize this account before refreshing quotas' : 'Sync quota now'}
                             id={`quota-menu-sync-${account.id}`}
                             className="w-full px-3 py-2 hover:bg-white/5 rounded-xl text-left text-xs flex items-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           >
@@ -447,8 +450,9 @@ export default function QuotasView({
                               setActiveMenuId(null);
                               handleSubscriptionRefresh(account.id);
                             }}
-                            disabled={isSubscriptionRefreshing}
+                            disabled={isSubscriptionRefreshing || accountRequiresReauthorization}
                             aria-busy={isSubscriptionRefreshing}
+                            title={accountRequiresReauthorization ? 'Reauthorize this account before refreshing the subscription' : 'Refresh subscription'}
                             id={`quota-menu-refresh-subscription-${account.id}`}
                             className="w-full px-3 py-2 hover:bg-white/5 rounded-xl text-left text-xs flex items-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           >

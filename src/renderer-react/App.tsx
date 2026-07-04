@@ -405,13 +405,18 @@ export default function App() {
       try {
         const results = await desktopApi.refreshAllQuotas();
         const failed = results.filter((item) => item.error).length;
+        const skipped = results.filter((item) => item.skipped).length;
+        const refreshed = results.length - failed - skipped;
         const snapshot = await loadDashboardState(false);
         if (snapshot) queueQuotaAutoSync(snapshot.accounts);
         if (failed) {
-          addToast(`${results.length - failed} accounts refreshed, ${failed} failed`, 'warning');
-          addLogEntry(`Quota refresh completed with ${failed} failed account(s).`, 'warning');
+          addToast(`${refreshed} refreshed, ${skipped} need reauthorization, ${failed} failed`, 'warning');
+          addLogEntry(`Quota refresh completed with ${skipped} account(s) skipped and ${failed} failed.`, 'warning');
+        } else if (skipped) {
+          addToast(`${refreshed} refreshed; ${skipped} need reauthorization`, 'info');
+          addLogEntry(`Quota refresh completed; ${skipped} account(s) require reauthorization.`, 'info');
         } else {
-          addToast(`${results.length} account quotas refreshed`, 'success');
+          addToast(`${refreshed} account quotas refreshed`, 'success');
           addLogEntry('Global accounts quota synchronization complete. Status OK.', 'success');
         }
       } catch (error) {

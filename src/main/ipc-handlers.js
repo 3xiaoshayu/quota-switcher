@@ -13,6 +13,10 @@ function tokenRefreshResponse(result) {
     return result?.ok ? ok(result) : fail(result?.error || "Token refresh failed");
 }
 
+function reauthorizationRequiredMessage(operation) {
+    return `Account requires reauthorization before ${operation}.`;
+}
+
 function loadAcctById(eng, id) {
     if (!id) return null;
     try {
@@ -244,6 +248,9 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                 }
             }
             return await withFreshAccount(eng, id, async account => {
+                if (account.requires_reauth) {
+                    return fail(reauthorizationRequiredMessage("quotas can be refreshed"));
+                }
                 const quota = await eng.refreshQuota(account, { force: force !== false });
                 return ok(publicQuota(quota));
             });
@@ -256,6 +263,15 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                 await eng.withAccountLock(listed.id, async () => {
                     const account = eng.loadAcct(listed.id);
                     if (!account) return;
+                    if (account.requires_reauth) {
+                        results.push({
+                            id: account.id,
+                            email: account.email,
+                            skipped: true,
+                            reason: "reauthorization_required",
+                        });
+                        return;
+                    }
                     const quota = await eng.refreshQuota(account, { force: true });
                     results.push({ id: account.id, email: account.email, quota: publicQuota(quota) });
                 });
@@ -300,6 +316,9 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     handle("subscription:refresh", async (event, id, force) => {
         try {
             return await withFreshAccount(eng, id, async account => {
+                if (account.requires_reauth) {
+                    return fail(reauthorizationRequiredMessage("the subscription can be refreshed"));
+                }
                 const changed = await eng.refreshSubscription(account, !!force);
                 return ok({
                     changed,

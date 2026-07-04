@@ -120,7 +120,14 @@ interface DesktopBridge {
   deleteAccount: (id: string) => Promise<ApiResponse<boolean>>;
   switchAccount: (id: string) => Promise<ApiResponse<unknown>>;
   refreshQuota: (id: string, force?: boolean) => Promise<ApiResponse<DesktopQuota>>;
-  refreshAllQuotas: () => Promise<ApiResponse<Array<{ id: string; email: string; quota?: DesktopQuota; error?: string }>>>;
+  refreshAllQuotas: () => Promise<ApiResponse<Array<{
+    id: string;
+    email: string;
+    quota?: DesktopQuota;
+    error?: string;
+    skipped?: boolean;
+    reason?: 'reauthorization_required' | string;
+  }>>>;
   refreshToken: (id: string) => Promise<ApiResponse<DesktopTokenRefreshResult>>;
   refreshAllTokens: (force?: boolean) => Promise<ApiResponse<DesktopTokenRefreshAllResult>>;
   consumeResetCredit: (id: string) => Promise<ApiResponse<DesktopResetConsumeResult>>;
