@@ -95,7 +95,14 @@ type DesktopTokenRefreshAllResult = {
   okCount: number;
   revivedCount: number;
   deadCount: number;
-  results: Array<{ email: string; ok: boolean; skipped?: boolean; gen?: number; error?: string }>;
+  results: Array<{
+    email: string;
+    ok: boolean;
+    skipped?: boolean;
+    reauthRequired?: boolean;
+    gen?: number;
+    error?: string;
+  }>;
 };
 
 interface DesktopBridge {

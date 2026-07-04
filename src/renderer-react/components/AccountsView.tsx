@@ -649,38 +649,56 @@ export default function AccountsView({
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-slate-300 tracking-wider uppercase font-mono block ml-1">
-                      选择方案 / 套餐 (Plan)
+                      {oauthMode ? '套餐（OAuth 自动识别）' : '选择方案 / 套餐 (Plan)'}
                     </label>
-                    <select
-                      value={newPlan}
-                      onChange={(e) => setNewPlan(e.target.value as any)}
-                      disabled={oauthMode}
-                      className="w-full px-4 py-3 bg-slate-950 border border-white/10 rounded-2xl text-slate-300 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-all text-xs"
-                      id="input-add-plan"
-                    >
-                      <option value="Pro Plan">Pro Plan</option>
-                      <option value="Standard">Standard</option>
-                      <option value="Enterprise">Enterprise</option>
-                    </select>
+                    {oauthMode ? (
+                      <div
+                        className="w-full px-4 py-3 bg-slate-950 border border-white/10 rounded-2xl text-slate-500 text-xs"
+                        id="input-add-plan"
+                        role="status"
+                      >
+                        授权完成后自动识别
+                      </div>
+                    ) : (
+                      <select
+                        value={newPlan}
+                        onChange={(e) => setNewPlan(e.target.value as any)}
+                        className="w-full px-4 py-3 bg-slate-950 border border-white/10 rounded-2xl text-slate-300 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-all text-xs"
+                        id="input-add-plan"
+                      >
+                        <option value="Pro Plan">Pro Plan</option>
+                        <option value="Standard">Standard</option>
+                        <option value="Enterprise">Enterprise</option>
+                      </select>
+                    )}
                   </div>
 
                   {/* Priority Select */}
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-slate-300 tracking-wider uppercase font-mono block ml-1">
-                      轮转优先级 (Priority)
+                      {oauthMode ? '轮转优先级（自动计算）' : '轮转优先级 (Priority)'}
                     </label>
-                    <select
-                      value={newPriority}
-                      onChange={(e) => setNewPriority(e.target.value as any)}
-                      disabled={oauthMode}
-                      className="w-full px-4 py-3 bg-slate-950 border border-white/10 rounded-2xl text-slate-300 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-all text-xs"
-                      id="input-add-priority"
-                    >
-                      <option value="Ultra">Ultra</option>
-                      <option value="High">High</option>
-                      <option value="Normal">Normal</option>
-                      <option value="Low">Low</option>
-                    </select>
+                    {oauthMode ? (
+                      <div
+                        className="w-full px-4 py-3 bg-slate-950 border border-white/10 rounded-2xl text-slate-500 text-xs"
+                        id="input-add-priority"
+                        role="status"
+                      >
+                        根据实际套餐自动计算
+                      </div>
+                    ) : (
+                      <select
+                        value={newPriority}
+                        onChange={(e) => setNewPriority(e.target.value as any)}
+                        className="w-full px-4 py-3 bg-slate-950 border border-white/10 rounded-2xl text-slate-300 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-all text-xs"
+                        id="input-add-priority"
+                      >
+                        <option value="Ultra">Ultra</option>
+                        <option value="High">High</option>
+                        <option value="Normal">Normal</option>
+                        <option value="Low">Low</option>
+                      </select>
+                    )}
                   </div>
                 </div>
 

@@ -863,13 +863,30 @@ export default function App() {
     const summary = await desktopApi.refreshAllTokens(false);
     await loadDashboardState(false);
     const total = summary.results.length;
-    const failed = summary.results.filter(result => !result.ok);
+    const needsReauthorization = summary.results.filter(
+      result => !result.ok && (result.reauthRequired || result.skipped),
+    );
+    const failed = summary.results.filter(
+      result => !result.ok && !needsReauthorization.includes(result),
+    );
+    const passed = summary.results.filter(result => result.ok).length;
     if (failed.length > 0) {
-      const message = `Token check completed: ${total - failed.length}/${total} succeeded, ${failed.length} failed.`;
+      const reauthorizationText = needsReauthorization.length > 0
+        ? `, ${needsReauthorization.length} require reauthorization`
+        : '';
+      const message = `Token check completed: ${passed}/${total} passed${reauthorizationText}, ${failed.length} failed.`;
       addToast(message, 'warning');
       throw new Error(message);
     }
-    addToast(total > 0 ? `${total} account tokens checked` : 'No account tokens to check', total > 0 ? 'success' : 'info');
+    if (needsReauthorization.length > 0) {
+      const message = `Token check completed: ${passed}/${total} passed, ${needsReauthorization.length} require reauthorization.`;
+      addToast(message, 'warning');
+      addLogEntry(message, 'warning');
+      return;
+    }
+    const message = total > 0 ? `${total} account tokens checked` : 'No account tokens to check';
+    addToast(message, total > 0 ? 'success' : 'info');
+    addLogEntry(message, total > 0 ? 'success' : 'info');
   };
 
   const handleDetectClient = async () => {

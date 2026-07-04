@@ -76,14 +76,12 @@ export default function SettingsView({
     setIsVerifyingTokens(true);
     onAddLog('Initiating batch token integrity validation scan...', 'info');
     try {
-      if (onBatchVerifyTokens) await onBatchVerifyTokens();
-      else await new Promise((resolve) => setTimeout(resolve, 1500));
-      onAddLog(
-        onBatchVerifyTokens
-          ? 'Batch Token Validation successful. Active tokens verified.'
-          : `Batch Token Validation successful. ${accountCount} active tokens verified.`,
-        'success',
-      );
+      if (onBatchVerifyTokens) {
+        await onBatchVerifyTokens();
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        onAddLog(`Batch Token Validation successful. ${accountCount} active tokens verified.`, 'success');
+      }
     } catch (error) {
       onAddLog(error instanceof Error ? error.message : String(error), 'error');
     } finally {
