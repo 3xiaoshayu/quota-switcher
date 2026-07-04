@@ -42,7 +42,9 @@ import {
   Info, 
   ShieldAlert, 
   HelpCircle,
-  Activity
+  Activity,
+  RefreshCw,
+  LoaderCircle
 } from 'lucide-react';
 
 const desktopBridgeAvailable = hasDesktopBridge();
@@ -124,6 +126,11 @@ export default function App() {
   const [authState, setAuthState] = useState<DesktopAuthState>(EMPTY_AUTH_STATE);
   const [oauthStatus, setOAuthStatus] = useState<DesktopOAuthStatus | null>(null);
   const [isResolvingAuth, setIsResolvingAuth] = useState(false);
+  const [dashboardLoadState, setDashboardLoadState] = useState<'loading' | 'ready' | 'error'>(
+    desktopBridgeAvailable ? 'loading' : 'ready',
+  );
+  const [dashboardLoadError, setDashboardLoadError] = useState<string | null>(null);
+  const hasLoadedDashboard = useRef(!desktopBridgeAvailable);
   const quotaAutoSyncPromise = useRef<Promise<void> | null>(null);
   const lastQuotaAutoSyncAt = useRef(0);
   const accountsRef = useRef<AccountQuota[]>(accounts);
@@ -227,15 +234,25 @@ export default function App() {
 
   const loadDashboardState = useCallback(async (showLoading = false) => {
     if (!desktopBridgeAvailable) return null;
-    void showLoading;
+    if (showLoading && !hasLoadedDashboard.current) {
+      setDashboardLoadState('loading');
+      setDashboardLoadError(null);
+    }
     try {
       const snapshot = await desktopApi.loadDashboardState();
       applyDashboardState(snapshot);
+      hasLoadedDashboard.current = true;
+      setDashboardLoadState('ready');
+      setDashboardLoadError(null);
       return snapshot;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       addToast(message, 'error');
       addLogEntry(message, 'error');
+      if (!hasLoadedDashboard.current) {
+        setDashboardLoadState('error');
+        setDashboardLoadError(message);
+      }
       return null;
     }
   }, [addLogEntry, addToast, applyDashboardState]);
@@ -276,6 +293,9 @@ export default function App() {
     addToast('登录成功，欢迎回来！', 'success');
     addLogEntry(`User ${email} signed into the console panel successfully.`, 'success');
     if (desktopBridgeAvailable) {
+      hasLoadedDashboard.current = false;
+      setDashboardLoadState('loading');
+      setDashboardLoadError(null);
       loadDashboardState(true).then((snapshot) => {
         if (snapshot) queueQuotaAutoSync(snapshot.accounts);
       });
@@ -287,6 +307,11 @@ export default function App() {
     setIsAuthenticated(false);
     localStorage.removeItem('codex_auth_status');
     localStorage.removeItem('codex_auth_email');
+    if (desktopBridgeAvailable) {
+      hasLoadedDashboard.current = false;
+      setDashboardLoadState('loading');
+      setDashboardLoadError(null);
+    }
     addToast('已安全退出登录', 'info');
   };
 
@@ -990,6 +1015,52 @@ export default function App() {
             className="flex-1 flex flex-col overflow-hidden"
             id="active-view-animator"
           >
+              {dashboardLoadState === 'loading' && (
+                <div
+                  className="flex flex-1 items-center justify-center p-8"
+                  id="dashboard-loading-state"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <div className="flex w-full max-w-sm flex-col items-center rounded-3xl border border-white/10 bg-slate-950/45 px-8 py-10 text-center shadow-2xl backdrop-blur-xl">
+                    <LoaderCircle className="mb-4 h-8 w-8 animate-spin text-blue-400" />
+                    <h2 className="text-base font-bold text-white">Loading account data</h2>
+                    <p className="mt-2 text-xs leading-5 text-slate-400">
+                      Reading local accounts, quota status, and daemon settings.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {dashboardLoadState === 'error' && (
+                <div
+                  className="flex flex-1 items-center justify-center p-8"
+                  id="dashboard-load-error-state"
+                  role="alert"
+                >
+                  <div className="flex w-full max-w-md flex-col items-center rounded-3xl border border-rose-500/20 bg-slate-950/55 px-8 py-10 text-center shadow-2xl backdrop-blur-xl">
+                    <AlertCircle className="mb-4 h-9 w-9 text-rose-400" />
+                    <h2 className="text-base font-bold text-white">Account data could not be loaded</h2>
+                    <p className="mt-2 max-w-sm text-xs leading-5 text-slate-400">
+                      {dashboardLoadError || 'The local account store did not respond.'}
+                    </p>
+                    <motion.button
+                      type="button"
+                      onClick={() => void loadDashboardState(true)}
+                      whileHover={{ y: -1 }}
+                      whileTap={{ scale: 0.96 }}
+                      className="mt-6 flex items-center gap-2 rounded-2xl border border-blue-500/30 bg-blue-500/15 px-5 py-2.5 text-xs font-bold text-blue-200 hover:bg-blue-500/20"
+                      id="dashboard-retry-load"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      Retry
+                    </motion.button>
+                  </div>
+                </div>
+              )}
+
+              {dashboardLoadState === 'ready' && (
+                <>
               {activeTab === 'quotas' && (
                 <QuotasView 
                   accounts={accounts}
@@ -1058,6 +1129,8 @@ export default function App() {
                   repositoryUrl={appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}
                   onOpenLogs={desktopBridgeAvailable ? async () => { await desktopApi.openLogs(); } : undefined}
                 />
+              )}
+                </>
               )}
           </motion.div>
         </main>
