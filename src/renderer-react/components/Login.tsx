@@ -10,7 +10,7 @@ interface LoginProps {
   showDemoShortcuts?: boolean;
 }
 
-export default function Login({ onLogin, userEmail, appVersion = '0.1.0-beta.10', showDemoShortcuts = false }: LoginProps) {
+export default function Login({ onLogin, userEmail, appVersion = '0.1.0-beta.11', showDemoShortcuts = false }: LoginProps) {
   const [email, setEmail] = useState(userEmail || '');
   const [password] = useState('Windows DPAPI protected');
   const [error, setError] = useState('');

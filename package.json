@@ -1,6 +1,6 @@
 {
   "name": "codex-account-manager",
-  "version": "0.1.0-beta.10",
+  "version": "0.1.0-beta.11",
   "private": true,
   "description": "Local-first Windows desktop manager for Codex accounts, quotas, tokens, and automatic switching",
   "main": "src/main/main.js",

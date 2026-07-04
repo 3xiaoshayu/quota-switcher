@@ -9,6 +9,13 @@ release is published.
 
 No unreleased changes.
 
+## [0.1.0-beta.11] - 2026-07-04
+
+- Correct the in-app Release Notes dialog so it matches the latest verified
+  token-validation and OAuth add-account fixes.
+- Rebuild and republish the Windows installer after visual verification of the
+  updated release dialog.
+
 ## [0.1.0-beta.10] - 2026-07-04
 
 - Clarify batch token validation results by separating accounts that require

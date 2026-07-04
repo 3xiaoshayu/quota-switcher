@@ -1365,19 +1365,19 @@ export default function App() {
 
               <div className="space-y-4 max-h-48 overflow-y-auto pr-2 mb-6 text-xs text-slate-300 leading-relaxed font-sans" id="changelog-list">
                 <div>
-                  <h4 className="font-bold text-white mb-1">可靠性修复 (Reliability)</h4>
+                  <h4 className="font-bold text-white mb-1">发布说明校准 (Release Notes)</h4>
                   <ul className="list-disc pl-4 space-y-1 text-slate-400 text-[11px]">
-                    <li>检测官方 Codex 登录变化，并在写入凭证前要求明确处理冲突。</li>
-                    <li>切号事务支持原子写入、启动验证和失败回滚。</li>
-                    <li>损坏的账号索引与数据文件可从备份恢复。</li>
+                    <li>修正应用内 Release Notes 的过时说明，与当前版本保持一致。</li>
+                    <li>保留批量 Token 检查的真实反馈：区分重新授权与真正失败。</li>
+                    <li>通知日志继续记录每次检查结果，便于回看操作是否执行。</li>
                   </ul>
                 </div>
                 <div>
-                  <h4 className="font-bold text-white mb-1">状态与恢复 (Recovery)</h4>
+                  <h4 className="font-bold text-white mb-1">已验证修复 (Verified Fixes)</h4>
                   <ul className="list-disc pl-4 space-y-1 text-slate-400 text-[11px]">
-                    <li>缺失配额窗口保持未知，不再显示虚构的零值。</li>
-                    <li>OAuth 会话可在重启后恢复，并支持取消和手动回调。</li>
-                    <li>新增脱敏日志与结构化守护进程状态。</li>
+                    <li>添加账号弹窗不再显示误导性的套餐和优先级下拉框。</li>
+                    <li>套餐与轮转优先级继续由 OAuth 授权后的账号状态自动识别。</li>
+                    <li>本版本已重新视觉验证并发布 Windows 安装包与 zip 包。</li>
                   </ul>
                 </div>
               </div>
