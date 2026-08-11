@@ -1,6 +1,6 @@
 const { CFG_FILE, DATA_DIR, REFRESH_MINUTES } = require("./config");
 const { ensureDir } = require("./storage");
-const { writeJsonAtomic, restoreBackup, quarantineFile } = require("./atomic-file");
+const { writeJsonAtomic, quarantineFile } = require("./atomic-file");
 const { logWarn } = require("./logger");
 
 const DEFAULT_AUTO_SWITCH_CFG = {
@@ -40,18 +40,33 @@ function normalizeAutoSwitchCfg(cfg) {
 }
 
 function loadAutoSwitchCfg() {
+  const fs = require("node:fs");
+  let primaryError = null;
   try {
-    return normalizeAutoSwitchCfg(JSON.parse(require("node:fs").readFileSync(CFG_FILE, "utf8")));
+    return normalizeAutoSwitchCfg(JSON.parse(fs.readFileSync(CFG_FILE, "utf8")));
   } catch (error) {
-    try {
-      if (restoreBackup(CFG_FILE)) {
-        logWarn(`Auto-switch configuration was restored from backup: ${error.message}`);
-        return normalizeAutoSwitchCfg(JSON.parse(require("node:fs").readFileSync(CFG_FILE, "utf8")));
-      }
-      if (require("node:fs").existsSync(CFG_FILE)) quarantineFile(CFG_FILE, "invalid-json");
-    } catch {}
-    return normalizeAutoSwitchCfg();
+    primaryError = error;
   }
+  // A missing file is a fresh start (or an intentional reset), not
+  // corruption: do not resurrect a stale backup for it.
+  if (primaryError.code === "ENOENT") return normalizeAutoSwitchCfg();
+
+  try {
+    if (fs.existsSync(`${CFG_FILE}.bak`)) {
+      // Parse and validate the backup before touching the disk, so a corrupt
+      // backup cannot destroy the evidence or masquerade as a recovery.
+      const restored = normalizeAutoSwitchCfg(JSON.parse(fs.readFileSync(`${CFG_FILE}.bak`, "utf8")));
+      try { quarantineFile(CFG_FILE, "invalid-json"); } catch {}
+      writeJsonAtomic(CFG_FILE, restored, { backup: false });
+      logWarn(`Auto-switch configuration was restored from backup: ${primaryError.message}`);
+      return restored;
+    }
+  } catch (backupError) {
+    logWarn(`Auto-switch configuration backup is also unreadable: ${backupError.message}`);
+  }
+  try { quarantineFile(CFG_FILE, "invalid-json"); } catch {}
+  logWarn(`Auto-switch configuration was reset to defaults: ${primaryError.message}`);
+  return normalizeAutoSwitchCfg();
 }
 
 function saveAutoSwitchCfg(cfg) {

@@ -180,12 +180,19 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         const account = eng.loadAcct(id);
         return account ? ok(publicAccount(eng, account)) : fail("Account does not exist");
     });
-    handle("account:authState", () => {
-        try { return ok(eng.inspectAuthState()); }
-        catch (error) { return fail(error.message); }
+    handle("account:authState", async () => {
+        try {
+            // inspectAuthState may write the current account file (official
+            // token rotation sync); serialize it against in-flight refreshes.
+            const index = eng.loadIdx();
+            const state = index.current_account_id
+                ? await eng.withAccountLock(index.current_account_id, async () => eng.inspectAuthState())
+                : eng.inspectAuthState();
+            return ok(state);
+        } catch (error) { return fail(error.message); }
     });
-    handle("account:adoptOfficial", () => {
-        try { return ok(publicAccount(eng, eng.adoptOfficialAuth())); }
+    handle("account:adoptOfficial", async () => {
+        try { return ok(publicAccount(eng, await eng.adoptOfficialAuth())); }
         catch (error) { return fail(error.message); }
     });
     handle("account:reapplyManaged", async (event, id) => {
@@ -243,8 +250,17 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     });
     handle("account:switch", async (event, id) => {
         try {
-            return await eng.withAccountLocks(["__switch__", id], async () => {
-                const account = loadAcctById(eng, id);
+            // Resolve the canonical id before locking (the renderer contract
+            // also accepts emails) and hold the outgoing current account's
+            // lock too, so a token refresh cannot rotate its credentials in
+            // the middle of the transaction and get destroyed by a rollback.
+            const target = loadAcctById(eng, id);
+            if (!target) return fail("Account does not exist");
+            const currentId = eng.loadIdx().current_account_id;
+            const lockIds = ["__switch__", target.id];
+            if (currentId && currentId !== target.id) lockIds.push(currentId);
+            return await eng.withAccountLocks(lockIds, async () => {
+                const account = eng.loadAcct(target.id);
                 if (!account) return fail("Account does not exist");
                 const result = await eng.doSwitch(account);
                 return ok({ ...result, account: publicAccount(eng, result.account) });
@@ -319,6 +335,15 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             timeLeft: expiryDate ? expiryDate - eng.ts() : null,
         });
     });
+    // Windows can linger in getAllWindows() for a tick after their
+    // webContents is destroyed; sending there throws.
+    const broadcast = (channel, payload) => {
+        for (const window of BrowserWindow.getAllWindows()) {
+            if (window.isDestroyed() || window.webContents.isDestroyed()) continue;
+            try { window.webContents.send(channel, payload); } catch {}
+        }
+    };
+
     let daemonTimer = null;
     let daemonInFlight = false;
     let daemonRunRequested = false;
@@ -365,27 +390,27 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                 ...result,
                 autoSwitchResult: publicAutoSwitchResult(eng, result.autoSwitchResult),
             };
-            BrowserWindow.getAllWindows().forEach(window => window.webContents.send("daemon:tick", {
+            broadcast("daemon:tick", {
                 ts: Date.now(),
                 result: safeResult,
-            }));
+            });
             if (safeResult.autoSwitchResult?.switched) {
-                BrowserWindow.getAllWindows().forEach(window => window.webContents.send("autoswitch:executed", safeResult.autoSwitchResult));
+                broadcast("autoswitch:executed", safeResult.autoSwitchResult);
             }
             if (safeResult.pausedReason === "auth_conflict") {
-                BrowserWindow.getAllWindows().forEach(window => window.webContents.send("auth:conflict", safeResult.authState));
+                broadcast("auth:conflict", safeResult.authState);
             }
             if (safeResult.failures?.length) {
-                BrowserWindow.getAllWindows().forEach(window => window.webContents.send("daemon:error", {
+                broadcast("daemon:error", {
                     message: safeResult.failures.map(item => item.message).join("; "),
                     failures: safeResult.failures,
-                }));
+                });
             }
         } catch (error) {
             if (runGeneration !== daemonGeneration) return;
             daemonRuntimeState.lastRunAt = Date.now();
             daemonRuntimeState.lastError = error.message;
-            BrowserWindow.getAllWindows().forEach(window => window.webContents.send("daemon:error", { message: error.message }));
+            broadcast("daemon:error", { message: error.message });
         } finally {
             daemonInFlight = false;
             if (daemonRunRequested && daemonTimer !== null) {
@@ -427,8 +452,14 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     handle("autoswitch:config:save", (event, config) => {
         try {
             const previousInterval = daemonIntervalMinutes();
+            const wasEnabled = !!eng.loadAutoSwitchCfg().enabled;
             eng.saveAutoSwitchCfg(config);
             if (daemonIntervalMinutes() !== previousInterval) reloadDaemonTimer();
+            // Mirror the startup behavior: enabling auto-switch must pull the
+            // daemon up, or the feature silently does nothing until a restart.
+            // Disabling does not stop the daemon (it still owns periodic sync).
+            const isEnabled = !!eng.loadAutoSwitchCfg().enabled;
+            if (isEnabled && !wasEnabled && !daemonTimer) startDaemon();
             return ok(true);
         } catch (error) { return fail(error.message); }
     });

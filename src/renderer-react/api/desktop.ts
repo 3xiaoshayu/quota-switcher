@@ -285,8 +285,15 @@ export function formatDuration(seconds: unknown): string {
   const value = Number(seconds);
   if (!Number.isFinite(value)) return '未知';
   if (value <= 0) return '已过期';
-  if (value < 3600) return `${Math.max(1, Math.ceil(value / 60))}m`;
-  if (value < 86400) return `${Math.floor(value / 3600)}h ${Math.ceil((value % 3600) / 60)}m`;
+  if (value < 3600) {
+    const minutes = Math.max(1, Math.ceil(value / 60));
+    return minutes >= 60 ? '1h 0m' : `${minutes}m`;
+  }
+  if (value < 86400) {
+    const hours = Math.floor(value / 3600);
+    const minutes = Math.ceil((value % 3600) / 60);
+    return minutes >= 60 ? `${hours + 1}h 0m` : `${hours}h ${minutes}m`;
+  }
   return `${Math.floor(value / 86400)}d ${Math.floor((value % 86400) / 3600)}h`;
 }
 
@@ -334,7 +341,9 @@ function statusForUi(
   config: DesktopAutoSwitchConfig,
 ): AccountQuota['status'] {
   if (account.requires_reauth) return 'SUSPENDED';
-  if (account.token_status?.expired || account.token_status?.accessAvailable === false) return 'SUSPENDED';
+  const tokenUnusable = (account.token_status?.expired || account.token_status?.accessAvailable === false)
+    && account.token_status?.refreshAvailable === false;
+  if (tokenUnusable) return 'SUSPENDED';
   if (account.quota_error) return 'WARNING';
   const hasPresence = account.quota?.hourly_window_present !== undefined || account.quota?.weekly_window_present !== undefined;
   const hourlyPresent = !hasPresence || account.quota?.hourly_window_present === true;
@@ -414,7 +423,9 @@ export function mapAccountForUi(
 }
 
 export function needsQuotaAutoSync(account: AccountQuota): boolean {
-  if (account.tokenExpired || account.tokenAccessAvailable === false) return false;
+  // An expired access token with a usable refresh token is repaired inside
+  // quota:refresh, so only exclude accounts with no path back to a token.
+  if ((account.tokenExpired || account.tokenAccessAvailable === false) && account.tokenRefreshAvailable === false) return false;
   if (account.status === 'SUSPENDED') return false;
   const retryAt = toDate(account.quotaNextRetryAt);
   if (retryAt && retryAt.getTime() > Date.now()) return false;

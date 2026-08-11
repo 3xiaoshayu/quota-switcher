@@ -27,9 +27,12 @@ function isTransientNetworkError(error) {
   return text.includes("socket") ||
     text.includes("tls") ||
     text.includes("timeout") ||
+    text.includes("请求超时") ||
     text.includes("econnreset") ||
     text.includes("econnaborted") ||
     text.includes("etimedout") ||
+    text.includes("err_connection") ||
+    text.includes("err_network") ||
     text.includes("network");
 }
 
@@ -180,17 +183,30 @@ async function httpJson(url, opts = {}) {
     opts.headers || {}
   );
   const timeout = opts.timeout || REFRESH_TIMEOUT;
+  // Non-idempotent requests (OAuth token refresh, code exchange) must never
+  // be replayed: after a timeout the server may already have processed them,
+  // and replaying a rotated refresh token or consumed code kills the account.
+  const idempotent = opts.idempotent !== false;
 
   const attempts = [];
   try {
-    const electronResult = await withOneRetry("Electron network", () => electronHttpJson(url, opts, headers, timeout));
+    const runElectron = () => electronHttpJson(url, opts, headers, timeout);
+    const electronResult = idempotent
+      ? await withOneRetry("Electron network", runElectron)
+      : await runElectron();
     if (electronResult) return electronResult;
+    // A null result means the Electron stack is unavailable and nothing was
+    // sent yet, so the Node attempt below is a first attempt, not a replay.
   } catch (error) {
     attempts.push({ label: "Electron", error });
+    if (!idempotent) throw buildNetworkFailure(url, attempts);
   }
 
   try {
-    return await withOneRetry("Node network", () => nodeHttpJson(url, opts, headers, timeout));
+    const runNode = () => nodeHttpJson(url, opts, headers, timeout);
+    return idempotent
+      ? await withOneRetry("Node network", runNode)
+      : await runNode();
   } catch (error) {
     attempts.push({ label: "Node", error });
     throw buildNetworkFailure(url, attempts);

@@ -66,7 +66,7 @@ function quarantineFile(filePath, reason = "invalid") {
   if (!fs.existsSync(filePath)) return null;
   const safeReason = String(reason).replace(/[^a-z0-9_-]+/gi, "-");
   const target = `${filePath}.${safeReason}.${Date.now()}`;
-  fs.renameSync(filePath, target);
+  renameWithRetry(filePath, target);
   return target;
 }
 
@@ -84,4 +84,5 @@ module.exports = {
   quarantineFile,
   restoreBackup,
   renameWithRetry,
+  sleepSync,
 };

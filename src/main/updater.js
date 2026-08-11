@@ -40,8 +40,12 @@ function createUpdateService({ app, BrowserWindow }) {
 
   function setStatus(patch) {
     status = { ...status, ...patch, updatedAt: Date.now() };
-    BrowserWindow.getAllWindows()
-      .forEach((win) => win.webContents.send("update:status", publicStatus()));
+    // This runs inside autoUpdater's EventEmitter callbacks: a throw on a
+    // destroyed webContents there would escalate to an uncaughtException.
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
+      try { win.webContents.send("update:status", publicStatus()); } catch {}
+    }
     return publicStatus();
   }
 

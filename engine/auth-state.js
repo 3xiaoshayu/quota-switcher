@@ -253,11 +253,11 @@ function inspectAuthState(options = {}) {
   }, official.fingerprint);
 }
 
-function adoptOfficialAuth() {
+async function adoptOfficialAuth() {
   const official = readOfficialAuth();
   if (!official?.supported) throw new Error("No supported official Codex OAuth login was found");
   const { upsert } = require("./oauth");
-  const result = upsert(official.tokens);
+  const result = await upsert(official.tokens);
   const account = result.account || result;
   const index = loadIdx();
   index.current_account_id = account.id;
@@ -267,13 +267,24 @@ function adoptOfficialAuth() {
   return account;
 }
 
-function reapplyManagedAuth(accountId = null) {
+async function reapplyManagedAuth(accountId = null) {
   const index = loadIdx();
   const targetId = accountId || index.current_account_id;
-  const account = targetId ? loadAcct(targetId) : null;
-  if (!account) throw new Error("The managed current account is not available");
+  if (!targetId) throw new Error("The managed current account is not available");
+  // Reapply runs the same switch transaction as a manual switch, so it must
+  // hold the same locks; otherwise two transactions can interleave and one
+  // rollback undoes the other's committed state.
+  const { withAccountLocks } = require("./operation-locks");
   const { doSwitch } = require("./switch");
-  return doSwitch(account, { force: true });
+  const lockIds = ["__switch__", targetId];
+  if (index.current_account_id && index.current_account_id !== targetId) {
+    lockIds.push(index.current_account_id);
+  }
+  return withAccountLocks(lockIds, async () => {
+    const account = loadAcct(targetId);
+    if (!account) throw new Error("The managed current account is not available");
+    return doSwitch(account, { force: true });
+  });
 }
 
 module.exports = {

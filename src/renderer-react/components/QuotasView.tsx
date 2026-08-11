@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Users, 
@@ -35,7 +35,17 @@ export default function QuotasView({
   isRefreshingAll,
 }: QuotasProps) {
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
-  const [refreshingCardId, setRefreshingCardId] = useState<string | null>(null);
+
+  // backdrop-filter on the cards turns them into containing blocks for fixed
+  // descendants, so a click-away overlay can never cover the page; close the
+  // menu from a document-level listener instead.
+  useEffect(() => {
+    if (!activeMenuId) return;
+    const close = () => setActiveMenuId(null);
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [activeMenuId]);
+  const [refreshingCardIds, setRefreshingCardIds] = useState<Set<string>>(new Set());
   const [refreshingTokenId, setRefreshingTokenId] = useState<string | null>(null);
 
   const gridAccounts = accounts;
@@ -57,11 +67,9 @@ export default function QuotasView({
     }
     return percentages;
   });
-  const avgRemaining = Math.round(
-    visibleQuotaPercentages.length
-      ? visibleQuotaPercentages.reduce((sum, percentage) => sum + percentage, 0) / visibleQuotaPercentages.length
-      : 0,
-  );
+  const avgRemaining = visibleQuotaPercentages.length
+    ? `${Math.round(visibleQuotaPercentages.reduce((sum, percentage) => sum + percentage, 0) / visibleQuotaPercentages.length)}%`
+    : '--';
 
   const syncedCount = accounts.filter(acc => acc.quotaUpdatedAt && !acc.quotaError).length;
   const lastUpdatedAtMs = accounts.reduce<number | null>((latest, account) => {
@@ -71,13 +79,18 @@ export default function QuotasView({
   }, null);
 
   const handleCardRefresh = async (id: string) => {
-    setRefreshingCardId(id);
+    if (refreshingCardIds.has(id)) return;
+    setRefreshingCardIds(prev => new Set(prev).add(id));
     try {
       await onRefreshAccount(id);
     } catch {
       // The app-level handler already reports the error through toast/log state.
     } finally {
-      setRefreshingCardId(null);
+      setRefreshingCardIds(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     }
   };
 
@@ -211,7 +224,7 @@ export default function QuotasView({
           </div>
           <div className="flex flex-col">
             <span className="text-[10px] font-bold text-slate-400 tracking-wider uppercase tabular-nums">平均剩余</span>
-            <span className="text-2xl font-bold text-white mt-0.5 tracking-tight">{avgRemaining}%</span>
+            <span className="text-2xl font-bold text-white mt-0.5 tracking-tight">{avgRemaining}</span>
           </div>
         </div>
       </div>
@@ -231,7 +244,7 @@ export default function QuotasView({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6" id="quotas-accounts-grid">
         <AnimatePresence initial={false}>
         {gridAccounts.map((account) => {
-          const isCardRefreshing = refreshingCardId === account.id;
+          const isCardRefreshing = refreshingCardIds.has(account.id);
           const fiveHourPercentage = account.fiveHourQuotaRemaining == null
             ? null
             : Math.min((account.fiveHourQuotaRemaining / account.fiveHourQuotaTotal) * 100, 100);
@@ -345,7 +358,10 @@ export default function QuotasView({
                 {/* More Action Popover Toggle */}
                 <div className="relative" id={`quota-more-wrapper-${account.id}`}>
                   <motion.button
-                    onClick={() => setActiveMenuId(activeMenuId === account.id ? null : account.id)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setActiveMenuId(activeMenuId === account.id ? null : account.id);
+                    }}
                     whileHover={{ scale: 1.06 }}
                     whileTap={{ scale: 0.94 }}
                     transition={{ type: 'spring', stiffness: 400, damping: 15 }}
@@ -358,11 +374,8 @@ export default function QuotasView({
                   <AnimatePresence>
                     {activeMenuId === account.id && (
                       <>
-                        <div 
-                          className="fixed inset-0 z-10" 
-                          onClick={() => setActiveMenuId(null)} 
-                        />
                         <motion.div
+                          onClick={(event) => event.stopPropagation()}
                           initial={{ opacity: 0, scale: 0.95, y: 10 }}
                           animate={{ opacity: 1, scale: 1, y: 0 }}
                           exit={{ opacity: 0, scale: 0.95, y: 10 }}

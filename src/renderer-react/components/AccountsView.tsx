@@ -49,7 +49,7 @@ export default function AccountsView({
   const [searchTerm, setSearchTerm] = useState('');
   const [filterTab, setFilterTab] = useState<'all' | 'current' | 'warning'>('all');
   const [showAddModal, setShowAddModal] = useState(false);
-  const [refreshingId, setRefreshingId] = useState<string | null>(null);
+  const [refreshingIds, setRefreshingIds] = useState<Set<string>>(new Set());
   const [isAdding, setIsAdding] = useState(false);
   const [reauthorizeId, setReauthorizeId] = useState<string | null>(null);
   const [manualCallbackUrl, setManualCallbackUrl] = useState('');
@@ -76,11 +76,12 @@ export default function AccountsView({
     if (!isRecoveredOAuth) return;
     setIsRecoveredOAuth(false);
     setIsAdding(false);
-    setShowAddModal(false);
-    setReauthorizeId(null);
-    setManualCallbackUrl('');
-    setFormError('');
-  }, [isRecoveredOAuth, oauthMode, oauthStatus?.pending, oauthStatus?.targetAccountId]);
+    if (!formError) {
+      setShowAddModal(false);
+      setReauthorizeId(null);
+      setManualCallbackUrl('');
+    }
+  }, [formError, isRecoveredOAuth, oauthMode, oauthStatus?.pending, oauthStatus?.targetAccountId]);
 
   // Escape closes the add-account modal, except while an OAuth authorization
   // is pending (cancelling that must be an explicit choice).
@@ -97,15 +98,20 @@ export default function AccountsView({
 
   // Handle single card refresh animation
   const handleSingleRefresh = async (id: string, name: string) => {
-    setRefreshingId(id);
-    onAddLog(`Refreshing account status for ${name}...`, 'info');
+    if (refreshingIds.has(id)) return;
+    setRefreshingIds(prev => new Set(prev).add(id));
+    onAddLog(`正在刷新账号状态：${name}...`, 'info');
     try {
       await onRefreshAccount(id);
-      onAddLog(`Account ${name} refreshed successfully.`, 'success');
+      onAddLog(`账号 ${name} 刷新完成。`, 'success');
     } catch (error) {
       onAddLog(error instanceof Error ? error.message : String(error), 'error');
     } finally {
-      setRefreshingId(null);
+      setRefreshingIds(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     }
   };
 
@@ -349,7 +355,7 @@ export default function AccountsView({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6" id="accounts-cards-grid">
         <AnimatePresence initial={false}>
         {filteredAccounts.map((account) => {
-          const isCardRefreshing = refreshingId === account.id;
+          const isCardRefreshing = refreshingIds.has(account.id);
           const fiveHourPct = account.fiveHourQuotaRemaining == null
             ? null
             : Math.round((account.fiveHourQuotaRemaining / account.fiveHourQuotaTotal) * 100);
@@ -496,7 +502,7 @@ export default function AccountsView({
                   whileTap={{ scale: 0.95 }}
                   transition={{ type: 'spring', stiffness: 450, damping: 20 }}
                   className="flex-1 py-3 px-2 bg-white/5 hover:bg-white/10 rounded-xl text-slate-300 hover:text-white transition-all text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
-                  title={account.status === 'SUSPENDED' ? 'Reauthorize this account before refreshing quotas' : '刷新此账号'}
+                  title={account.status === 'SUSPENDED' ? '该账号需要重新授权后才能刷新额度' : '刷新此账号'}
                   id={`action-refresh-${account.id}`}
                 >
             <RefreshCw className={`w-3.5 h-3.5 ${isCardRefreshing ? 'animate-spin text-blue-400' : ''}`} />
@@ -552,7 +558,7 @@ export default function AccountsView({
                 <motion.button
                   onClick={() => {
                     if (account.isCurrent) {
-                      onAddLog('Cannot delete the active current account.', 'error');
+                      onAddLog('无法删除当前正在使用的账号。', 'error');
                       return;
                     }
                     void handleDeleteAccount(account.id);

@@ -39,7 +39,13 @@ async function runDaemonWorker(options = {}) {
   });
 
   if (isCancelled()) return stopped();
-  authState = inspectAuthState();
+  // inspectAuthState can write the current account file (official token
+  // rotation sync); hold the account lock so it cannot interleave with an
+  // in-flight refresh of the same account.
+  const preIndex = loadIdx();
+  authState = preIndex.current_account_id
+    ? await withAccountLock(preIndex.current_account_id, async () => inspectAuthState())
+    : inspectAuthState();
   if (authState.requiresResolution) {
     return {
       startedAt,
@@ -91,13 +97,19 @@ async function runDaemonWorker(options = {}) {
         failures.push(failure("current_account", null, new Error("Managed current account could not be read")));
         return;
       }
+      // Reauthorization is an explicit user action: refreshing quotas here
+      // would only fail and overwrite the reauth marker's quota_error code.
+      if (current.requires_reauth) return;
 
       try {
         if (isCancelled()) return;
         await refreshQuota(current, { force: false });
         accountsUpdated++;
       } catch (error) {
-        failures.push(failure("quota_refresh", current, error));
+        // Waiting out a retry backoff is expected throttling, not a failure.
+        if (error?.code !== "quota_retry_pending") {
+          failures.push(failure("quota_refresh", current, error));
+        }
       }
 
       if (isCancelled()) return;

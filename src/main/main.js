@@ -18,29 +18,38 @@ function loadWindowState() {
         if (!state || typeof state !== "object") return null;
         const bounds = state.bounds;
         const isMaximized = !!state.isMaximized;
-        if (!bounds || ![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)) {
+        if (!bounds
+            || ![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)
+            || bounds.width <= 0 || bounds.height <= 0) {
             return { bounds: null, isMaximized };
         }
-        // Only restore the position when it still intersects a visible display
-        // (monitor layouts change between sessions).
+        // Display scaling can change between sessions; keep the window no
+        // larger than the primary work area.
+        const primaryArea = screen.getPrimaryDisplay().workArea;
+        const width = Math.min(bounds.width, primaryArea.width);
+        const height = Math.min(bounds.height, primaryArea.height);
+        // Require a grabbable strip on some display, not just a 1px sliver:
+        // the frameless window has no system menu to recover it otherwise.
         const visible = screen.getAllDisplays().some((display) => {
             const area = display.workArea;
-            return bounds.x < area.x + area.width
-                && bounds.x + bounds.width > area.x
-                && bounds.y < area.y + area.height
-                && bounds.y + bounds.height > area.y;
+            const overlapX = Math.min(bounds.x + width, area.x + area.width) - Math.max(bounds.x, area.x);
+            const overlapY = Math.min(bounds.y + height, area.y + area.height) - Math.max(bounds.y, area.y);
+            return overlapX >= 200 && overlapY >= 100;
         });
-        return { bounds: visible ? bounds : null, isMaximized };
+        return { bounds: visible ? { x: bounds.x, y: bounds.y, width, height } : null, isMaximized };
     } catch {
         return null;
     }
 }
 
-function saveWindowState(win) {
+function saveWindowState(win, lastKnownMaximized) {
     try {
+        // isMaximized() reports false for a minimized window even when it will
+        // restore to the maximized state, so rely on the tracked value there.
+        const maximized = win.isMinimized() ? !!lastKnownMaximized : win.isMaximized();
         writeJsonAtomic(windowStatePath(), {
             bounds: win.isMaximized() || win.isMinimized() ? win.getNormalBounds() : win.getBounds(),
-            isMaximized: win.isMaximized(),
+            isMaximized: maximized,
         }, { backup: false });
     } catch {}
 }
@@ -93,7 +102,10 @@ function startApplication() {
     });
     mainWindow = win;
     if (savedWindowState?.isMaximized) win.maximize();
-    win.on("close", () => saveWindowState(win));
+    let lastKnownMaximized = !!savedWindowState?.isMaximized;
+    win.on("maximize", () => { lastKnownMaximized = true; });
+    win.on("unmaximize", () => { lastKnownMaximized = false; });
+    win.on("close", () => saveWindowState(win, lastKnownMaximized));
     win.on("closed", () => {
         if (mainWindow === win) mainWindow = null;
     });
@@ -137,11 +149,30 @@ function startApplication() {
     }
 }
 
+// Without this guard a startup exception leaves a windowless zombie process
+// holding the single-instance lock, and every later launch exits silently.
+function reportStartupFailure(error) {
+    console.error("Startup failed:", error);
+    try {
+        dialog.showErrorBox(
+            "Codex Account Manager",
+            `应用启动失败：${error?.message || error}`,
+        );
+    } catch {}
+    app.quit();
+}
+
 if (!hasSingleInstanceLock) {
     app.quit();
 } else {
     app.on("second-instance", focusMainWindow);
-    app.whenReady().then(startApplication);
+    app.whenReady().then(() => {
+        try {
+            startApplication();
+        } catch (error) {
+            reportStartupFailure(error);
+        }
+    }).catch(reportStartupFailure);
 }
 
 app.on("window-all-closed", () => app.quit());

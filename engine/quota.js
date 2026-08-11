@@ -181,8 +181,11 @@ async function refreshQuota(acct, options = {}) {
     acct.quota_last_attempt_at = now;
     acct.quota_refresh_failures = Number(acct.quota_refresh_failures || 0) + 1;
     acct.quota_next_retry_at = now + quotaRetryDelaySeconds(acct, err);
+    // The missing_refresh_token code is the self-heal marker checked by
+    // refreshOneTok; never let a generic quota failure overwrite it.
+    const selfHealCode = acct.quota_error?.code === "missing_refresh_token" ? "missing_refresh_token" : null;
     acct.quota_error = {
-      code: extractCodeFromError(err),
+      code: extractCodeFromError(err) || selfHealCode,
       message: err?.message || String(err),
       timestamp: ts(),
     };
@@ -197,10 +200,26 @@ async function refreshQuota(acct, options = {}) {
 // slot once upstream moved it into primary_window).
 function normalizeQuota(quota) {
   if (!quota || typeof quota !== "object") return quota;
-  if (quota.raw_data && quota.raw_data.rate_limit) {
-    return parseQuotaPayload(quota.raw_data);
+  if (!quota.raw_data || !quota.raw_data.rate_limit) return quota;
+  const reparsed = parseQuotaPayload(quota.raw_data);
+
+  // parseQuotaPayload derives relative reset times from "now", which is wrong
+  // for a cached payload. Carry over the reset times computed at fetch time,
+  // matching windows across slots by their duration.
+  const originalSlots = [
+    { minutes: quota.hourly_window_minutes, reset: quota.hourly_reset_time, present: quota.hourly_window_present },
+    { minutes: quota.weekly_window_minutes, reset: quota.weekly_reset_time, present: quota.weekly_window_present },
+  ].filter((slot) => slot.present && slot.reset != null);
+  const carriedReset = (minutes) => originalSlots.find((slot) => slot.minutes === minutes)?.reset;
+  if (reparsed.hourly_window_present) {
+    const carried = carriedReset(reparsed.hourly_window_minutes);
+    if (carried != null) reparsed.hourly_reset_time = carried;
   }
-  return quota;
+  if (reparsed.weekly_window_present) {
+    const carried = carriedReset(reparsed.weekly_window_minutes);
+    if (carried != null) reparsed.weekly_reset_time = carried;
+  }
+  return reparsed;
 }
 
 // 自动切号指标提取

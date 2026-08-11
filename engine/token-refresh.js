@@ -67,7 +67,14 @@ function reauthRequiredError(code) {
 
 function markRequiresReauth(acct, code, detail) {
   const errorCode = code || "token_refresh_failed";
-  acct.quota_error = { code: errorCode, message: reauthRequiredError(errorCode) || detail || null, timestamp: ts() };
+  acct.quota_error = {
+    code: errorCode,
+    message: reauthRequiredError(errorCode),
+    // Keep the upstream response snippet for diagnostics; it stays in the
+    // local record and is not exposed over IPC.
+    detail: detail ? String(detail).slice(0, 300) : null,
+    timestamp: ts(),
+  };
   acct.requires_reauth = true;
   acct.reauth_reason = "refresh_token needs re-authorization";
   saveAcct(acct);
@@ -119,6 +126,7 @@ async function refreshOneTok(acct, options = {}) {
     const resp = await request(TOKEN_URL, {
       method: "POST", body,
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      idempotent: false,
     });
     if (resp.status >= 400) {
       const code = extractErrorCode(resp.body);
@@ -136,9 +144,9 @@ async function refreshOneTok(acct, options = {}) {
       id_token: String(idTok),
       access_token: String(accTok),
       refresh_token: refTok ? String(refTok) : null,
-      account_id: acct.account_id,
+      account_id: acct.account_id || acct.tokens.account_id || null,
     };
-    acct.token_generation += 1;
+    acct.token_generation = Number(acct.token_generation || 0) + 1;
     acct.token_updated_at = ts();
     acct.quota_error = null;
     acct.requires_reauth = false;
@@ -195,11 +203,13 @@ async function refreshAll(force) {
     });
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  // 保持当前账号 auth.json 最新
+  // 保持当前账号 auth.json 最新（锁内执行，避免与在途刷新交错）
   const idx = loadIdx();
   if (idx.current_account_id) {
-    const cur = loadAcct(idx.current_account_id);
-    if (cur) syncCurrentAuthIfNeeded(cur);
+    await withAccountLock(idx.current_account_id, async () => {
+      const cur = loadAcct(idx.current_account_id);
+      if (cur) syncCurrentAuthIfNeeded(cur);
+    });
   }
 
   return { okCount: okN, revivedCount: revived, deadCount: dead, results };

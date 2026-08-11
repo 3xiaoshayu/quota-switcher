@@ -25,7 +25,7 @@ const rendererMethods = new Set();
 for (const method of collect(reactDesktopSource, /\bbridge\(\)\.([A-Za-z_$][\w$]*)/g)) rendererMethods.add(method);
 for (const method of collect(reactDesktopSource, /\bapi\.([A-Za-z_$][\w$]*)/g)) rendererMethods.add(method);
 const mainHandlers = collect(mainSource, /(?:ipcMain\.handle|handle)\(["']([^"']+)["']/g);
-const mainEvents = collect(mainSource, /webContents\.send\(["']([^"']+)["']/g);
+const mainEvents = collect(mainSource, /(?:webContents\.send|broadcast)\(["']([^"']+)["']/g);
 const invokedChannels = new Set();
 const subscribedChannels = new Set();
 let exposedApi = null;

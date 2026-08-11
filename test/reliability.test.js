@@ -56,8 +56,8 @@ function tokens(email, accountId, suffix) {
   };
 }
 
-function addAccount(engine, email, accountId, suffix) {
-  return engine.upsert(tokens(email, accountId, suffix)).account;
+async function addAccount(engine, email, accountId, suffix) {
+  return (await engine.upsert(tokens(email, accountId, suffix))).account;
 }
 
 test("quota parsing preserves window absence, clamps percentages, and applies weekly blocking", t => {
@@ -279,9 +279,9 @@ test("quota IPC skips accounts that require reauthorization", async () => {
   assert.equal(quotaRefreshCount, 1);
 });
 
-test("storage restores valid backups and preserves DPAPI failures", t => {
+test("storage restores valid backups and preserves DPAPI failures", async t => {
   const { engine, codec } = freshEngine(t);
-  const account = addAccount(engine, "alpha@example.com", "acct-alpha", "alpha");
+  const account = await addAccount(engine, "alpha@example.com", "acct-alpha", "alpha");
   account.last_used += 1;
   engine.saveAcct(account);
   const config = require("../engine/config");
@@ -318,10 +318,10 @@ test("storage restores valid backups and preserves DPAPI failures", t => {
   engine.setSecretCodec(codec);
 });
 
-test("account file access rejects unsafe ids and delete rolls back on index failure", t => {
+test("account file access rejects unsafe ids and delete rolls back on index failure", async t => {
   const { engine } = freshEngine(t);
-  const first = addAccount(engine, "delete-one@example.com", "acct-delete-one", "delete-one");
-  const second = addAccount(engine, "delete-two@example.com", "acct-delete-two", "delete-two");
+  const first = await addAccount(engine, "delete-one@example.com", "acct-delete-one", "delete-one");
+  const second = await addAccount(engine, "delete-two@example.com", "acct-delete-two", "delete-two");
   const config = require("../engine/config");
   const firstPath = engine.accountFilePath(first.id);
 
@@ -358,10 +358,10 @@ test("account file access rejects unsafe ids and delete rolls back on index fail
   assert.equal(engine.loadIdx().accounts.some(item => item.id === second.id), false);
 });
 
-test("auth state detects drift, migrates legacy projections, and adopts official login", t => {
+test("auth state detects drift, migrates legacy projections, and adopts official login", async t => {
   const { engine } = freshEngine(t);
-  const first = addAccount(engine, "first@example.com", "acct-first", "first");
-  const second = addAccount(engine, "second@example.com", "acct-second", "second");
+  const first = await addAccount(engine, "first@example.com", "acct-first", "first");
+  const second = await addAccount(engine, "second@example.com", "acct-second", "second");
   const index = engine.loadIdx();
   index.current_account_id = first.id;
   engine.saveIdx(index);
@@ -382,7 +382,7 @@ test("auth state detects drift, migrates legacy projections, and adopts official
     .filter(line => line.includes("Official Codex authentication differs from the managed current account"));
   assert.equal(conflictWarnings().length, 1);
 
-  const adopted = engine.adoptOfficialAuth();
+  const adopted = await engine.adoptOfficialAuth();
   assert.equal(adopted.id, second.id);
   assert.equal(engine.loadIdx().current_account_id, second.id);
   assert.equal(engine.inspectAuthState().status, "aligned");
@@ -403,9 +403,9 @@ test("auth state detects drift, migrates legacy projections, and adopts official
   assert.equal(conflictWarnings().length, 2);
 });
 
-test("auth state accepts and synchronizes token rotation for the same official identity", t => {
+test("auth state accepts and synchronizes token rotation for the same official identity", async t => {
   const { engine } = freshEngine(t);
-  const account = addAccount(engine, "same@example.com", "acct-same", "first-token");
+  const account = await addAccount(engine, "same@example.com", "acct-same", "first-token");
   const index = engine.loadIdx();
   index.current_account_id = account.id;
   engine.saveIdx(index);
@@ -433,8 +433,8 @@ test("auth state accepts and synchronizes token rotation for the same official i
 
 test("token refresh rechecks official auth before writing refreshed credentials", async t => {
   const { engine } = freshEngine(t);
-  const current = addAccount(engine, "race-current@example.com", "acct-race-current", "race-current");
-  const external = addAccount(engine, "race-external@example.com", "acct-race-external", "race-external");
+  const current = await addAccount(engine, "race-current@example.com", "acct-race-current", "race-current");
+  const external = await addAccount(engine, "race-external@example.com", "acct-race-external", "race-external");
   const index = engine.loadIdx();
   index.current_account_id = current.id;
   engine.saveIdx(index);
@@ -477,7 +477,7 @@ test("token refresh rechecks official auth before writing refreshed credentials"
 
 test("token refresh skips revoked accounts until reauthorization", async t => {
   const { engine } = freshEngine(t);
-  const account = addAccount(engine, "revoked-token@example.com", "acct-revoked-token", "revoked-token");
+  const account = await addAccount(engine, "revoked-token@example.com", "acct-revoked-token", "revoked-token");
   account.requires_reauth = true;
   account.reauth_reason = "refresh_token needs re-authorization";
   account.quota_error = {
@@ -507,7 +507,7 @@ test("token refresh skips revoked accounts until reauthorization", async t => {
 
 test("auto-switch refuses to use stale quota after current refresh failure", async t => {
   const { engine } = freshEngine(t);
-  const account = addAccount(engine, "current@example.com", "acct-current", "current");
+  const account = await addAccount(engine, "current@example.com", "acct-current", "current");
   account.quota = {
     hourly_remaining_percentage: 0,
     hourly_window_present: true,
@@ -538,8 +538,8 @@ test("auto-switch refuses to use stale quota after current refresh failure", asy
 
 test("auto-switch cancellation prevents switching after a daemon stop", async t => {
   const { engine } = freshEngine(t);
-  const current = addAccount(engine, "cancel-current@example.com", "acct-cancel-current", "cancel-current");
-  const candidate = addAccount(engine, "cancel-candidate@example.com", "acct-cancel-candidate", "cancel-candidate");
+  const current = await addAccount(engine, "cancel-current@example.com", "acct-cancel-current", "cancel-current");
+  const candidate = await addAccount(engine, "cancel-candidate@example.com", "acct-cancel-candidate", "cancel-candidate");
   const now = engine.ts();
   current.quota = {
     hourly_remaining_percentage: 0,
@@ -547,7 +547,9 @@ test("auto-switch cancellation prevents switching after a daemon stop", async t 
     weekly_remaining_percentage: 0,
     weekly_window_present: true,
   };
-  current.usage_updated_at = now;
+  // Stale on purpose: the tick must go through the refresh path so the
+  // cancellation signal below can fire.
+  current.usage_updated_at = now - 1200;
   candidate.quota = {
     hourly_remaining_percentage: 100,
     hourly_window_present: true,
@@ -599,9 +601,9 @@ test("auto-switch cancellation prevents switching after a daemon stop", async t 
 
 test("auto-switch revalidates failed candidates and excludes accounts requiring reauthorization", async t => {
   const { engine } = freshEngine(t);
-  const current = addAccount(engine, "candidate-current@example.com", "acct-candidate-current", "candidate-current");
-  const candidate = addAccount(engine, "candidate-ready@example.com", "acct-candidate-ready", "candidate-ready");
-  const revoked = addAccount(engine, "candidate-revoked@example.com", "acct-candidate-revoked", "candidate-revoked");
+  const current = await addAccount(engine, "candidate-current@example.com", "acct-candidate-current", "candidate-current");
+  const candidate = await addAccount(engine, "candidate-ready@example.com", "acct-candidate-ready", "candidate-ready");
+  const revoked = await addAccount(engine, "candidate-revoked@example.com", "acct-candidate-revoked", "candidate-revoked");
   const now = engine.ts();
   current.quota = {
     hourly_remaining_percentage: 0,
@@ -676,7 +678,7 @@ test("auto-switch revalidates failed candidates and excludes accounts requiring 
 
 test("daemon pauses before network work when official authentication conflicts", async t => {
   const { engine } = freshEngine(t);
-  const account = addAccount(engine, "daemon@example.com", "acct-daemon", "daemon");
+  const account = await addAccount(engine, "daemon@example.com", "acct-daemon", "daemon");
   const index = engine.loadIdx();
   index.current_account_id = account.id;
   engine.saveIdx(index);
@@ -912,8 +914,8 @@ test("manual auto-switch checks update daemon status metadata", async () => {
 
 test("switch transaction commits on success and restores state when launch fails", async t => {
   const { engine } = freshEngine(t);
-  const first = addAccount(engine, "one@example.com", "acct-one", "one");
-  const second = addAccount(engine, "two@example.com", "acct-two", "two");
+  const first = await addAccount(engine, "one@example.com", "acct-one", "one");
+  const second = await addAccount(engine, "two@example.com", "acct-two", "two");
   const index = engine.loadIdx();
   index.current_account_id = first.id;
   engine.saveIdx(index);
@@ -953,8 +955,8 @@ test("switch transaction commits on success and restores state when launch fails
 
 test("process enumeration failure blocks credential switching", async t => {
   const { engine } = freshEngine(t);
-  const current = addAccount(engine, "enumeration-current@example.com", "acct-enumeration-current", "enumeration-current");
-  const target = addAccount(engine, "enumeration-target@example.com", "acct-enumeration-target", "enumeration-target");
+  const current = await addAccount(engine, "enumeration-current@example.com", "acct-enumeration-current", "enumeration-current");
+  const target = await addAccount(engine, "enumeration-target@example.com", "acct-enumeration-target", "enumeration-target");
   const index = engine.loadIdx();
   index.current_account_id = current.id;
   engine.saveIdx(index);
@@ -1011,8 +1013,8 @@ test("official Codex launcher does not treat the explorer activation exit code a
 
 test("OAuth pending state is encrypted, recoverable, cancellable, and target mismatch is saved separately", async t => {
   const { engine, codec } = freshEngine(t);
-  const original = addAccount(engine, "original@example.com", "acct-original", "original");
-  const renamed = engine.upsert(tokens("renamed@example.com", "acct-original", "renamed"), {
+  const original = await addAccount(engine, "original@example.com", "acct-original", "original");
+  const renamed = await engine.upsert(tokens("renamed@example.com", "acct-original", "renamed"), {
     targetAccountId: original.id,
   });
   assert.equal(renamed.mismatch, false);
@@ -1020,7 +1022,7 @@ test("OAuth pending state is encrypted, recoverable, cancellable, and target mis
   assert.equal(engine.loadAcct(original.id).email, "renamed@example.com");
   assert.equal(engine.listAccts().length, 1);
 
-  const result = engine.upsert(tokens("different@example.com", "acct-different", "different"), {
+  const result = await engine.upsert(tokens("different@example.com", "acct-different", "different"), {
     targetAccountId: original.id,
   });
   assert.equal(result.mismatch, true);
@@ -1163,7 +1165,7 @@ test("error code extraction reads FastAPI-style detail objects", t => {
 
 test("token refresh sends a form-encoded OAuth request", async t => {
   const { engine } = freshEngine(t);
-  const account = addAccount(engine, "form@example.com", "acct-form", "form");
+  const account = await addAccount(engine, "form@example.com", "acct-form", "form");
   let captured = null;
   const refreshed = tokens("form@example.com", "acct-form", "form-next");
   const { refreshOneTok } = require("../engine/token-refresh");
@@ -1192,7 +1194,7 @@ test("token refresh sends a form-encoded OAuth request", async t => {
 
 test("an invalid_refresh_token error marks the account for reauthorization", async t => {
   const { engine } = freshEngine(t);
-  const account = addAccount(engine, "invalid-rt@example.com", "acct-invalid-rt", "invalid-rt");
+  const account = await addAccount(engine, "invalid-rt@example.com", "acct-invalid-rt", "invalid-rt");
   const { refreshOneTok } = require("../engine/token-refresh");
   const result = await refreshOneTok(account, {
     force: true,
@@ -1212,7 +1214,7 @@ test("an invalid_refresh_token error marks the account for reauthorization", asy
 
 test("token refresh treats invalidated-token text errors as reauthorization", async t => {
   const { engine } = freshEngine(t);
-  const account = addAccount(engine, "text-reauth@example.com", "acct-text-reauth", "text-reauth");
+  const account = await addAccount(engine, "text-reauth@example.com", "acct-text-reauth", "text-reauth");
   const { refreshOneTok } = require("../engine/token-refresh");
   const result = await refreshOneTok(account, {
     force: true,
@@ -1229,7 +1231,7 @@ test("token refresh treats invalidated-token text errors as reauthorization", as
 
 test("a missing refresh token flag clears once a refresh token is available", async t => {
   const { engine } = freshEngine(t);
-  const account = addAccount(engine, "heal@example.com", "acct-heal", "heal");
+  const account = await addAccount(engine, "heal@example.com", "acct-heal", "heal");
   account.tokens.refresh_token = null;
   engine.saveAcct(account);
   const { refreshOneTok } = require("../engine/token-refresh");
@@ -1263,9 +1265,9 @@ test("a missing refresh token flag clears once a refresh token is available", as
   assert.equal(persisted.quota_error, null);
 });
 
-test("adding the same identity merges into the existing account record", t => {
+test("adding the same identity merges into the existing account record", async t => {
   const { engine } = freshEngine(t);
-  const original = engine.upsert(tokens("merge@example.com", "acct-merge", "merge-one")).account;
+  const original = (await engine.upsert(tokens("merge@example.com", "acct-merge", "merge-one"))).account;
   const payload = {
     email: "merge@example.com",
     exp: Math.floor(Date.now() / 1000) + 3600,
@@ -1276,7 +1278,7 @@ test("adding the same identity merges into the existing account record", t => {
     },
   };
   const orgTokens = { id_token: jwt(payload), access_token: jwt(payload), refresh_token: "refresh-merge-two" };
-  const result = engine.upsert(orgTokens);
+  const result = await engine.upsert(orgTokens);
   assert.equal(result.account.id, original.id);
   assert.equal(engine.listAccts().length, 1);
 });
@@ -1313,9 +1315,9 @@ test("atomic writes retry when the target file is transiently locked", t => {
   assert.throws(() => writeTextAtomic(target, "should fail"), /ENOSPC/);
 });
 
-test("auth state reports an official agent identity as unsupported with identity details", t => {
+test("auth state reports an official agent identity as unsupported with identity details", async t => {
   const { engine } = freshEngine(t);
-  const account = addAccount(engine, "agent@example.com", "acct-agent", "agent");
+  const account = await addAccount(engine, "agent@example.com", "acct-agent", "agent");
   const index = engine.loadIdx();
   index.current_account_id = account.id;
   engine.saveIdx(index);
@@ -1337,4 +1339,211 @@ test("auth state reports an official agent identity as unsupported with identity
   assert.match(state.message, /agent identity/i);
   assert.equal(state.officialIdentity.email, "agent-official@example.com");
   assert.equal(state.officialIdentity.accountId, "acct-agent-official");
+});
+
+test("transient read errors do not quarantine account files or drop them from the index", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "locked@example.com", "acct-locked", "locked");
+  engine.listAccts();
+  const filePath = engine.accountFilePath(account.id);
+
+  const originalRead = fs.readFileSync;
+  fs.readFileSync = (target, ...rest) => {
+    if (path.resolve(String(target)) === path.resolve(filePath)) {
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalRead(target, ...rest);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+
+  assert.equal(engine.loadAcct(account.id), null);
+  assert.equal(fs.existsSync(filePath), true, "a locked file must not be quarantined");
+  const accounts = engine.listAccts();
+  assert.equal(accounts.some(item => item.id === account.id), false);
+  assert.ok(engine.loadIdx().accounts.some(item => item.id === account.id),
+    "a transiently locked account must stay in the index");
+
+  fs.readFileSync = originalRead;
+  assert.equal(engine.loadAcct(account.id).email, "locked@example.com");
+});
+
+test("legacy backup recovery keeps the backup usable and migrates without plaintext residue", async t => {
+  const { engine, codec } = freshEngine(t);
+  const account = await addAccount(engine, "legacy@example.com", "acct-legacy", "legacy");
+  const filePath = engine.accountFilePath(account.id);
+
+  const legacyRecord = { ...JSON.parse(fs.readFileSync(filePath, "utf8")) };
+  delete legacyRecord.tokens_encrypted;
+  legacyRecord.tokens = {
+    id_token: "legacy-id-token",
+    access_token: account.tokens.access_token,
+    refresh_token: "legacy-refresh-token",
+    account_id: "acct-legacy",
+  };
+
+  // Corrupt primary + legacy plaintext backup: the recovery chain used to
+  // copy the corrupt primary over the backup via the migration side effect.
+  fs.writeFileSync(`${filePath}.bak`, JSON.stringify(legacyRecord), "utf8");
+  fs.writeFileSync(filePath, "{ corrupted", "utf8");
+
+  const recovered = engine.loadAcct(account.id);
+  assert.equal(recovered.email, "legacy@example.com");
+  assert.equal(recovered.tokens.refresh_token, "legacy-refresh-token");
+
+  const primaryRaw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  assert.ok(primaryRaw.tokens_encrypted, "the migrated primary must be encrypted");
+  assert.equal(primaryRaw.tokens, undefined);
+  const backupRaw = JSON.parse(fs.readFileSync(`${filePath}.bak`, "utf8"));
+  assert.ok(backupRaw.tokens_encrypted, "the refreshed backup must be encrypted, not plaintext");
+  assert.equal(fs.readFileSync(`${filePath}.bak`, "utf8").includes("legacy-refresh-token"), false);
+  assert.equal(codec.decrypt(backupRaw.tokens_encrypted).includes("legacy-refresh-token"), true);
+});
+
+test("token refresh posts opt out of retries and cross-stack replays", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "replay@example.com", "acct-replay", "replay");
+  account.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) - 10 });
+  engine.saveAcct(account);
+
+  let observedOptions = null;
+  const result = await engine.refreshOneTok(account, {
+    force: true,
+    httpJson: async (url, options) => {
+      observedOptions = options;
+      return { status: 200, body: JSON.stringify({ access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }) }) };
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(observedOptions.idempotent, false,
+    "the token endpoint must be marked non-idempotent so httpJson never replays it");
+});
+
+test("normalizeQuota keeps fetch-time reset times instead of recomputing them", t => {
+  freshEngine(t);
+  const { normalizeQuota } = require("../engine/quota");
+  const fetchTimeReset = 1_700_000_000;
+  const stale = {
+    hourly_remaining_percentage: 41,
+    hourly_window_present: true,
+    hourly_window_minutes: 10080,
+    hourly_reset_time: fetchTimeReset,
+    weekly_remaining_percentage: null,
+    weekly_window_present: false,
+    raw_data: {
+      rate_limit: {
+        primary_window: { used_percent: 59, limit_window_seconds: 604800, reset_after_seconds: 86400 },
+      },
+    },
+  };
+  const normalized = normalizeQuota(stale);
+  assert.equal(normalized.weekly_window_present, true);
+  assert.equal(normalized.weekly_remaining_percentage, 41);
+  assert.equal(normalized.weekly_reset_time, fetchTimeReset,
+    "the reset time computed at fetch time must carry over to the corrected slot");
+});
+
+test("the daemon leaves reauth-required current accounts alone", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "reauth-current@example.com", "acct-reauth-current", "reauth-current");
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(account);
+  engine.writeProjection(account, auth);
+
+  account.requires_reauth = true;
+  account.reauth_reason = "refresh_token needs re-authorization";
+  account.quota_error = { code: "missing_refresh_token", message: "no refresh token", timestamp: engine.ts() };
+  engine.saveAcct(account);
+
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.pausedReason, null);
+  assert.equal(result.failures.length, 0);
+  const persisted = engine.loadAcct(account.id);
+  assert.equal(persisted.quota_error.code, "missing_refresh_token",
+    "the self-heal marker must survive daemon ticks");
+});
+
+test("auto-switch trusts fresh cached quota instead of refreshing the current account again", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "fresh-current@example.com", "acct-fresh-current", "fresh-current");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: null,
+    hourly_window_present: false,
+    weekly_remaining_percentage: 80,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  engine.saveAcct(current);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+
+  const quotaModule = require("../engine/quota");
+  const originalRefresh = quotaModule.refreshQuota;
+  let refreshCalls = 0;
+  quotaModule.refreshQuota = async () => { refreshCalls += 1; };
+  t.after(() => { quotaModule.refreshQuota = originalRefresh; });
+
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+  assert.equal(result.reason, "quota_sufficient");
+  assert.equal(refreshCalls, 0,
+    "a quota refreshed moments ago must not trigger a second usage request");
+});
+
+test("auto-switch config recovery ignores stale backups on ENOENT and survives double corruption", t => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  engine.ensureDir(config.DATA_DIR);
+
+  // Deleting the config is a reset: a stale backup must not resurrect it.
+  fs.writeFileSync(`${config.CFG_FILE}.bak`, JSON.stringify({ enabled: true }), "utf8");
+  assert.equal(engine.loadAutoSwitchCfg().enabled, false);
+
+  // Corrupt primary with a good backup restores and rewrites the primary.
+  fs.writeFileSync(config.CFG_FILE, "{ corrupted", "utf8");
+  assert.equal(engine.loadAutoSwitchCfg().enabled, true);
+  assert.equal(JSON.parse(fs.readFileSync(config.CFG_FILE, "utf8")).enabled, true);
+
+  // Both corrupt: quarantine the primary and fall back to defaults loudly.
+  fs.writeFileSync(config.CFG_FILE, "{ corrupted", "utf8");
+  fs.writeFileSync(`${config.CFG_FILE}.bak`, "{ also corrupted", "utf8");
+  assert.equal(engine.loadAutoSwitchCfg().enabled, false);
+  assert.equal(fs.existsSync(config.CFG_FILE), false, "the corrupt primary must be quarantined");
+  const quarantined = fs.readdirSync(config.DATA_DIR).filter(name => name.includes("invalid-json"));
+  assert.ok(quarantined.length >= 1);
+});
+
+test("a mismatched reauthorization still merges into an existing same-identity record", async t => {
+  const { engine } = freshEngine(t);
+  const target = await addAccount(engine, "target@example.com", "acct-target", "target");
+  const existing = await addAccount(engine, "existing@example.com", "acct-existing", "existing");
+
+  // The authorized identity matches `existing` but derives a different
+  // storage id (organization claim appeared); it must merge, not duplicate.
+  const payload = {
+    email: "existing@example.com",
+    exp: Math.floor(Date.now() / 1000) + 3600,
+    "https://api.openai.com/auth": {
+      account_id: "acct-existing",
+      chatgpt_org_id: "org-existing",
+      organizations: [],
+    },
+  };
+  const orgTokens = { id_token: jwt(payload), access_token: jwt(payload), refresh_token: "refresh-mismatch" };
+  const result = await engine.upsert(orgTokens, { targetAccountId: target.id });
+  assert.equal(result.mismatch, true);
+  assert.equal(result.account.id, existing.id);
+  assert.equal(engine.listAccts().length, 2);
 });

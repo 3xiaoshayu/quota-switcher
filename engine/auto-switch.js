@@ -58,7 +58,12 @@ async function autoSwitchTick(cfg, options = {}) {
   const cancelled = () => ({ switched: false, reason: "cancelled" });
 
   if (isCancelled()) return cancelled();
-  const authState = inspectAuthState();
+  // inspectAuthState can write the current account file (official token
+  // rotation sync), so hold the account lock while it runs.
+  const preIdx = loadIdx();
+  const authState = preIdx.current_account_id
+    ? await withAccountLock(preIdx.current_account_id, async () => inspectAuthState())
+    : inspectAuthState();
   if (authState.requiresResolution) {
     return { switched: false, reason: "auth_conflict", authState };
   }
@@ -78,22 +83,37 @@ async function autoSwitchTick(cfg, options = {}) {
   if (!cur) return { switched: false, reason: "current_not_found" };
 
   if (isCancelled()) return cancelled();
-  try {
-    await withAccountLock(cur.id, async () => {
-      if (isCancelled()) return;
-      const fresh = loadAcct(cur.id);
-      if (!fresh) { cur = null; return; }
-      if (isCancelled()) return;
-      await refreshQuota(fresh, { force: false });
-      if (isCancelled()) return;
-      cur = loadAcct(fresh.id) || fresh;
-    });
-  } catch (error) {
-    return {
-      switched: false,
-      reason: "current_quota_refresh_failed",
-      error: error.message || String(error),
-    };
+  // The daemon refreshes the current account right before this tick runs;
+  // only request usage again when the cached quota is missing or stale, so
+  // each tick does not hit the endpoint twice for the same account.
+  const quotaIsFresh = (account) => !!account?.quota
+    && !account.quota_error
+    && (ts() - (account.usage_updated_at || 0) <= 600);
+  if (!quotaIsFresh(cur)) {
+    try {
+      await withAccountLock(cur.id, async () => {
+        if (isCancelled()) return;
+        const fresh = loadAcct(cur.id);
+        if (!fresh) { cur = null; return; }
+        if (isCancelled()) return;
+        await refreshQuota(fresh, { force: false });
+        if (isCancelled()) return;
+        cur = loadAcct(fresh.id) || fresh;
+      });
+    } catch (error) {
+      // A failed refresh (e.g. retry backoff) with fresh-enough cached data
+      // should not stall automatic switching for the whole backoff window.
+      const cached = loadAcct(curId);
+      if (quotaIsFresh(cached)) {
+        cur = cached;
+      } else {
+        return {
+          switched: false,
+          reason: "current_quota_refresh_failed",
+          error: error.message || String(error),
+        };
+      }
+    }
   }
   if (isCancelled()) return cancelled();
   if (!cur) return { switched: false, reason: "current_not_found" };

@@ -33,6 +33,10 @@ async function defaultListProcesses(runCommand = execFileAsync) {
     "$codex = @($items | Where-Object { $_.Name -eq 'Codex.exe' -and (($_.ExecutablePath -like '*WindowsApps*OpenAI.Codex*') -or ($_.CommandLine -like '*OpenAI.Codex*')) })",
     "$ids = New-Object 'System.Collections.Generic.HashSet[int]'",
     "$codex | ForEach-Object { [void]$ids.Add([int]$_.ProcessId) }",
+    // Orphaned helpers (parent Codex.exe already exited) never join the
+    // ancestor closure; seed them directly by their own identity so they
+    // cannot survive a switch and rewrite auth.json with stale tokens.
+    "$items | Where-Object { $_.Name -eq 'node_repl.exe' -and (($_.ExecutablePath -like '*WindowsApps*OpenAI.Codex*') -or ($_.CommandLine -like '*OpenAI.Codex*')) } | ForEach-Object { [void]$ids.Add([int]$_.ProcessId) }",
     "do { $changed = $false; foreach ($item in $items) { if ($ids.Contains([int]$item.ParentProcessId) -and -not $ids.Contains([int]$item.ProcessId)) { [void]$ids.Add([int]$item.ProcessId); $changed = $true } } } while ($changed)",
     "@($items | Where-Object { $ids.Contains([int]$_.ProcessId) } | Select-Object Name,ProcessId,ParentProcessId,ExecutablePath) | ConvertTo-Json -Compress",
   ].join("; ");
@@ -183,13 +187,26 @@ async function startCodex(options = {}) {
   await runtime.launch();
   if (options.verify === false) return true;
   const deadline = Date.now() + (options.timeoutMs || 10000);
+  let lastEnumerationError = null;
   while (Date.now() < deadline) {
-    const processes = await runtime.listProcesses();
-    if (processes.some((item) => String(item.name).toLowerCase() === "codex.exe")) {
-      logInfo("Official Codex process started");
-      return true;
+    try {
+      const processes = await runtime.listProcesses();
+      lastEnumerationError = null;
+      if (processes.some((item) => String(item.name).toLowerCase() === "codex.exe")) {
+        logInfo("Official Codex process started");
+        return true;
+      }
+    } catch (error) {
+      // A transient enumeration failure (slow PowerShell, AV scan) must not
+      // fail the whole switch: the launch itself may already have succeeded,
+      // and rolling back then leaves the running app on different credentials.
+      lastEnumerationError = error;
     }
     await runtime.sleep(250);
+  }
+  if (lastEnumerationError) {
+    logWarn(`Codex start verification skipped (process enumeration unavailable): ${lastEnumerationError.message}`);
+    return true;
   }
   throw new Error("Official Codex did not start within the expected time");
 }

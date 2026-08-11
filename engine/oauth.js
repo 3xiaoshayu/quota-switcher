@@ -152,6 +152,7 @@ async function exchangeCode(pending, code) {
     method: "POST",
     body: formBody,
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    idempotent: false,
   });
   if (response.status >= 400) {
     const codeValue = extractErrorCode(response.body);
@@ -171,20 +172,32 @@ function accountFromTokens(tokens, existing = null) {
   const payload = jwtPayload(tokens.id_token) || jwtPayload(tokens.access_token);
   if (!payload) throw new Error("The OAuth identity token could not be parsed");
   const auth = payload["https://api.openai.com/auth"] || {};
-  const email = String(payload.email || "");
+  // Keep known identity/profile fields when the new token carries thinner
+  // claims; losing account_id would break the ChatGPT-Account-Id header.
+  const email = String(payload.email || "") || String(existing?.email || "");
   // Prefer the access token claims (newer key names), then the id_token claim,
   // then any account id carried alongside the token payload.
   const accountId = extractChatgptAccountId(tokens.access_token)
     || (auth.chatgpt_account_id ? String(auth.chatgpt_account_id) : null)
     || (auth.account_id ? String(auth.account_id) : null)
-    || (tokens.account_id || null);
-  const userId = auth.user_id ? String(auth.user_id) : (auth.chatgpt_user_id ? String(auth.chatgpt_user_id) : null);
-  const plan = auth.chatgpt_plan_type ? String(auth.chatgpt_plan_type) : null;
-  const subscriptionUntil = auth.chatgpt_subscription_active_until
+    || (tokens.account_id || null)
+    || existing?.account_id
+    || existing?.tokens?.account_id
+    || null;
+  const userId = (auth.user_id ? String(auth.user_id) : (auth.chatgpt_user_id ? String(auth.chatgpt_user_id) : null))
+    || existing?.user_id
+    || null;
+  const plan = (auth.chatgpt_plan_type ? String(auth.chatgpt_plan_type) : null)
+    || existing?.plan_type
+    || null;
+  const subscriptionUntil = (auth.chatgpt_subscription_active_until
     ? String(auth.chatgpt_subscription_active_until)
-    : null;
+    : null)
+    || existing?.subscription_active_until
+    || null;
   const organizationId = extractChatgptOrganizationId(tokens.access_token)
     || extractChatgptOrganizationId(tokens.id_token)
+    || existing?.organization_id
     || null;
   const id = buildId(email, accountId, organizationId);
   const now = ts();
@@ -228,42 +241,45 @@ function sameAccountIdentity(left, right) {
   return !!leftEmail && leftEmail === rightEmail;
 }
 
-function upsert(tokens, options = {}) {
+// Merge into an existing record for the same identity so identity-hash
+// changes (e.g. improved organization extraction) cannot split an account.
+function findSameIdentityId(preview) {
+  if (loadAcct(preview.id)) return preview.id;
+  const existingMatch = listAccts().find((account) => sameAccountIdentity(preview, account));
+  return existingMatch?.id || preview.id;
+}
+
+async function upsert(tokens, options = {}) {
   const preview = accountFromTokens(tokens);
   const targetAccountId = options.targetAccountId || null;
   const targetAccount = targetAccountId ? loadAcct(targetAccountId) : null;
   const mismatch = !!targetAccountId && (!targetAccount || !sameAccountIdentity(preview, targetAccount));
-  let saveId;
-  if (mismatch) {
-    saveId = preview.id;
-  } else if (targetAccountId) {
-    saveId = targetAccountId;
-  } else {
-    // Merge into an existing record for the same identity so identity-hash
-    // changes (e.g. improved organization extraction) cannot split an account.
-    const existingMatch = loadAcct(preview.id)
-      ? null
-      : listAccts().find((account) => sameAccountIdentity(preview, account));
-    saveId = existingMatch?.id || preview.id;
-  }
-  const existing = loadAcct(saveId);
-  const account = accountFromTokens(tokens, existing);
-  account.id = saveId;
-  saveAcct(account);
+  const saveId = !mismatch && targetAccountId ? targetAccountId : findSameIdentityId(preview);
 
-  const index = loadIdx();
-  const summary = {
-    id: account.id,
-    email: account.email,
-    plan_type: account.plan_type,
-    subscription_active_until: account.subscription_active_until,
-    created_at: account.created_at,
-    last_used: account.last_used,
-  };
-  const position = index.accounts.findIndex((item) => item.id === account.id);
-  if (position >= 0) index.accounts[position] = summary;
-  else index.accounts.push(summary);
-  saveIdx(index);
+  // Hold the account lock while merging so an in-flight token refresh cannot
+  // overwrite this login with a stale snapshot (and vice versa).
+  const { withAccountLock } = require("./operation-locks");
+  const account = await withAccountLock(saveId, async () => {
+    const existing = loadAcct(saveId);
+    const merged = accountFromTokens(tokens, existing);
+    merged.id = saveId;
+    saveAcct(merged);
+
+    const index = loadIdx();
+    const summary = {
+      id: merged.id,
+      email: merged.email,
+      plan_type: merged.plan_type,
+      subscription_active_until: merged.subscription_active_until,
+      created_at: merged.created_at,
+      last_used: merged.last_used,
+    };
+    const position = index.accounts.findIndex((item) => item.id === merged.id);
+    if (position >= 0) index.accounts[position] = summary;
+    else index.accounts.push(summary);
+    saveIdx(index);
+    return merged;
+  });
 
   return { account, mismatch, targetAccountId };
 }
@@ -307,7 +323,8 @@ async function handleAuthorizationCode(pending, code) {
   try {
     const tokens = await session.exchangeCode(pending, code);
     if (active !== session || session.settled) return;
-    const result = upsert(tokens, { targetAccountId: pending.targetAccountId });
+    const result = await upsert(tokens, { targetAccountId: pending.targetAccountId });
+    if (active !== session || session.settled) return;
     settleActive(null, result);
   } catch (error) {
     if (active !== session || session.settled) return;
@@ -358,6 +375,9 @@ function startPendingSession(pending, options = {}) {
     };
 
     server.once("error", (error) => {
+      // A stale server error (e.g. late bind failure after cancellation)
+      // must not settle a newer session that owns `active` now.
+      if (!active || active.server !== server) return;
       const wrapped = new Error(`OAuth callback port ${CALLBACK_PORT} is unavailable: ${error.message}`);
       wrapped.code = "oauth_port_unavailable";
       settleActive(wrapped);

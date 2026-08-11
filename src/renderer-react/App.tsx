@@ -198,7 +198,7 @@ export default function App() {
   }, []);
 
   const addLogEntry = useCallback((message: string, type: LogEntry['type']) => {
-    const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const timestamp = new Date().toLocaleString('sv-SE');
     const newLog: LogEntry = {
       id: `l_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
       timestamp,
@@ -211,7 +211,7 @@ export default function App() {
 
   const runAccountOperation = useCallback(async <T,>(id: string, task: () => Promise<T>): Promise<T> => {
     if (accountOperationIds.current.has(id)) {
-      throw new Error('This account already has an operation in progress.');
+      throw new Error('该账号已有操作正在进行，请稍候重试。');
     }
     accountOperationIds.current.add(id);
     try {
@@ -220,6 +220,12 @@ export default function App() {
       accountOperationIds.current.delete(id);
     }
   }, []);
+
+  // Discard out-of-order dashboard snapshots: a slow older load must never
+  // overwrite state written by a newer one (or reset the config write-base
+  // refs to stale values).
+  const dashboardLoadSeqRef = useRef(0);
+  const wasOAuthPendingRef = useRef(false);
 
   const applyDashboardState = useCallback((snapshot: Awaited<ReturnType<typeof desktopApi.loadDashboardState>>) => {
     setAccounts(snapshot.accounts);
@@ -231,7 +237,8 @@ export default function App() {
     setAuthState(snapshot.authState);
     authStateRef.current = snapshot.authState;
     setOAuthStatus(snapshot.oauthStatus);
-    if (snapshot.oauthStatus.pending) setActiveTab('accounts');
+    if (snapshot.oauthStatus.pending && !wasOAuthPendingRef.current) setActiveTab('accounts');
+    wasOAuthPendingRef.current = !!snapshot.oauthStatus.pending;
     setSettings(settingsFromDesktopState(snapshot.config, snapshot.appInfo, snapshot.codexStatus, snapshot.updateStatus));
     setDaemonState({
       status: snapshot.daemonRunning ? 'Running' : 'Stopped',
@@ -257,18 +264,21 @@ export default function App() {
 
   const loadDashboardState = useCallback(async (showLoading = false) => {
     if (!desktopBridgeAvailable) return null;
+    const seq = ++dashboardLoadSeqRef.current;
     if (showLoading && !hasLoadedDashboard.current) {
       setDashboardLoadState('loading');
       setDashboardLoadError(null);
     }
     try {
       const snapshot = await desktopApi.loadDashboardState();
+      if (seq !== dashboardLoadSeqRef.current) return null;
       applyDashboardState(snapshot);
       hasLoadedDashboard.current = true;
       setDashboardLoadState('ready');
       setDashboardLoadError(null);
       return snapshot;
     } catch (error) {
+      if (seq !== dashboardLoadSeqRef.current) return null;
       const message = error instanceof Error ? error.message : String(error);
       addToast(message, 'error');
       addLogEntry(message, 'error');
@@ -319,9 +329,6 @@ export default function App() {
       hasLoadedDashboard.current = false;
       setDashboardLoadState('loading');
       setDashboardLoadError(null);
-      loadDashboardState(true).then((snapshot) => {
-        if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-      });
     }
   };
 
@@ -343,6 +350,7 @@ export default function App() {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
+      if (authStateRef.current.requiresResolution) return;
       if (deleteTarget) {
         if (!isDeletingAccount) setDeleteTarget(null);
         return;
@@ -424,6 +432,12 @@ export default function App() {
           await loadDashboardState(false);
           if (status.status === 'error' || status.status === 'expired') {
             addToast(status.message || 'OAuth 授权结束，未添加账号。', 'warning');
+          } else if (status.status === 'completed' && status.result) {
+            if (status.result.mismatch) {
+              addToast(`浏览器授权了另一个账号，${status.result.email || '它'}已单独保存。`, 'warning');
+            } else {
+              addToast(status.result.email ? `已添加 ${status.result.email}` : '账号已添加', 'success');
+            }
           }
         }
       } catch {}
@@ -598,10 +612,9 @@ export default function App() {
       addToast('正在打开 OAuth 授权...', 'info');
       addLogEntry('正在为新账号打开 OAuth 授权流程。', 'info');
       try {
-        const result = await desktopApi.addAccount();
+        await desktopApi.addAccount();
         const snapshot = await loadDashboardState(false);
         if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-        addToast(result.account?.email ? `已添加 ${result.account.email}` : '账号已添加', 'success');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         addToast(message, 'error');
@@ -623,12 +636,11 @@ export default function App() {
     const result = await desktopApi.reauthorizeAccount(id);
     const snapshot = await loadDashboardState(false);
     if (snapshot) queueQuotaAutoSync(snapshot.accounts);
+    // Toasts come from the OAuth status poller (single reporting point).
     if (result.mismatch) {
-      addToast(`浏览器授权了另一个账号，${result.account?.email || '它'}已单独保存。`, 'warning');
       addLogEntry(`重新授权身份与 ${target?.email || id} 不符，新账号已单独保存。`, 'warning');
       return;
     }
-    addToast(`${target?.email || id} 已重新授权`, 'success');
     addLogEntry(`账号已重新授权：${target?.email || id}`, 'success');
   };
 
@@ -639,15 +651,13 @@ export default function App() {
   };
 
   const handleCompleteOAuthManually = async (callbackUrl: string) => {
+    // Reporting and reloads are owned by the add-account waiter and the OAuth
+    // status poller; doing them here as well produced duplicate toasts.
     const result = await desktopApi.completeOAuthManually(callbackUrl);
-    const snapshot = await loadDashboardState(false);
-    if (snapshot) queueQuotaAutoSync(snapshot.accounts);
     if (result.mismatch) {
-      addToast(`浏览器授权了另一个账号，${result.account?.email || '它'}已单独保存。`, 'warning');
       addLogEntry('手动 OAuth 回调完成，另一账号已单独保存。', 'warning');
       return;
     }
-    addToast(result.account?.email ? `已添加 ${result.account.email}` : 'OAuth 账号已添加', 'success');
     addLogEntry('手动 OAuth 回调已完成。', 'success');
   };
 
@@ -757,10 +767,10 @@ export default function App() {
     setSelectedAccountIds(prev => {
       const isSelected = prev.includes(id);
       if (isSelected) {
-        addLogEntry(`Removed ${selected?.name} from auto-switch active rotation pool.`, 'warning');
+        addLogEntry(`已将 ${selected?.name} 移出自动切号轮换范围。`, 'warning');
         return prev.filter(item => item !== id);
       } else {
-        addLogEntry(`Added ${selected?.name} into auto-switch active rotation pool.`, 'info');
+        addLogEntry(`已将 ${selected?.name} 加入自动切号轮换范围。`, 'info');
         return [...prev, id];
       }
     });
@@ -797,7 +807,7 @@ export default function App() {
       setSettings(prev => {
         const updated = !prev.globalSwitch;
         addToast(`全局切号已${updated ? '启用' : '禁用'}`, updated ? 'success' : 'warning');
-        addLogEntry(`Global automated switching pool state modified to: ${updated ? 'ON' : 'OFF'}`, 'info');
+        addLogEntry(`全局自动切号已${updated ? '启用' : '禁用'}。`, 'info');
         return { ...prev, globalSwitch: updated };
       });
       return;
@@ -1000,7 +1010,7 @@ export default function App() {
         />
 
         {/* Dashboard Content Scroller with Transition animations */}
-        <main className="flex-1 overflow-hidden flex flex-col position-relative" id="main-content">
+        <main className="flex-1 overflow-hidden flex flex-col relative" id="main-content">
           <motion.div
             key={activeTab}
             initial={{ opacity: 0, scale: 0.988, y: 6 }}
