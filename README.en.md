@@ -2,9 +2,7 @@
 
 # Codex Account Manager
 
-A local-first multi-account control panel for Codex on Windows.
-
-See each account's 5-hour and weekly quota, token health, and active Codex identity in one place.
+Juggling multiple Codex accounts on Windows? See every quota at a glance and switch identities in one click.
 
 [![Release](https://img.shields.io/github/v/release/3xiaoshayu/codex-account-manager?include_prereleases&sort=semver&label=release)](https://github.com/3xiaoshayu/codex-account-manager/releases)
 [![CI](https://github.com/3xiaoshayu/codex-account-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/3xiaoshayu/codex-account-manager/actions/workflows/ci.yml)
@@ -21,98 +19,85 @@ See each account's 5-hour and weekly quota, token health, and active Codex ident
 ![Codex Account Manager account cards with synthetic demo accounts](docs/images/account-dashboard.png)
 
 > [!IMPORTANT]
-> The current Windows x64 release is a prerelease and is not code-signed.
-> Windows SmartScreen may show an unknown-publisher warning. Download builds
-> only from this repository and verify their SHA-256 checksum.
+> This is a prerelease and the installer is not code-signed yet, so Windows
+> SmartScreen may warn about an unknown publisher. Only download builds from
+> this repository's Releases page and check the SHA-256.
 
-## Why this project
+## What this is
 
-Codex Account Manager is deliberately focused: make multiple Codex accounts
-easy to inspect and safe to switch.
+If you keep more than one Codex account around, you know the drill: log into
+each one just to see what's left of the quota, then hand-edit the auth file
+and restart Codex whenever you want to switch. With a few accounts, that gets
+old fast.
 
-| Capability | What it does |
-| --- | --- |
-| Quota on every card | Shows the 5-hour and weekly windows actually returned upstream, with reset times |
-| Background sync | Refreshes missing or stale quota data without removing manual control |
-| One-click switching | Updates local Codex auth state and restarts the official Codex app |
-| Token health | Shows expiry state and refreshes one or all saved accounts |
-| Automatic switching | Uses local thresholds, account scope, and a local daemon |
-| Account maintenance | OAuth add and reauthorization, delete, subscription refresh, and reset-credit controls |
-| Local-first storage | Runs without a project-operated cloud service or token sync |
+This app tidies all of that up:
 
-The app does not create, bypass, or modify account limits. Automatic switching
-only selects among accounts that you explicitly saved.
+- One card per account, with the 5-hour window, weekly window, and reset times right on it
+- One-click switching — it stops Codex, writes the new auth state, and restarts the client for you
+- Tokens refresh before they expire; you can also refresh one account or all of them by hand
+- Once an account hits the threshold you set, a local daemon can rotate to the next usable one
+- Everything stays on your machine, with tokens encrypted via Windows DPAPI
+
+To be clear: it does not (and cannot) change any account's limits. Automatic
+switching just picks among the accounts you saved. That's all it does.
 
 ## Install
 
-### Requirements
+You'll need Windows 10 or 11 (x64) and the official Codex app from the
+Microsoft Store.
 
-- Windows 10 or Windows 11, x64
-- The official Codex app from the Microsoft Store
-- Network access to OpenAI OAuth, ChatGPT, and GitHub Releases
+1. Grab the latest `Codex-Account-Manager-Setup-<version>-x64.exe` from [Releases](https://github.com/3xiaoshayu/codex-account-manager/releases)
+2. Install and launch it
+3. Click **Add account** and finish the OAuth login in your browser
+4. Back in the app, your account card and quota should be there
 
-### Download and first run
+The ZIP runs without installing, but app data still lives in your user
+profile, so it isn't truly portable — the installer is the way to go for most
+people. Betas update manually; stable releases will update in the background.
 
-1. Open [GitHub Releases](https://github.com/3xiaoshayu/codex-account-manager/releases).
-2. Download `Codex-Account-Manager-Setup-<version>-x64.exe` from the newest release.
-3. Install and launch the app.
-4. Select **Add account** and complete OAuth in your browser.
-5. Return to the app and confirm the account card, quota, and active-account state.
+### Verifying a download
 
-The ZIP asset can run without installation, but application data is still
-stored in the Windows user profile; it is not a fully portable build.
-The Setup executable is recommended for most users.
-
-Beta releases update manually. Future stable versions without a prerelease
-suffix will download updates in the background and ask before restarting.
-
-### Verify a download
-
-Each release includes `SHA256SUMS.txt`:
+Every release ships with a `SHA256SUMS.txt`. In PowerShell:
 
 ```powershell
 Get-FileHash ".\Codex-Account-Manager-Setup-<version>-x64.exe" -Algorithm SHA256
 ```
 
-Compare the output with the matching line in `SHA256SUMS.txt`.
+If the output matches the corresponding line in `SHA256SUMS.txt`, you're good.
 
-## Data and privacy
+## Where your data lives
 
-- Manager data lives under `%USERPROFILE%\.codex-switch`.
-- OAuth tokens are encrypted with Windows DPAPI and can only be decrypted by
-  the same Windows login.
-- The active Codex identity is written to `%USERPROFILE%\.codex\auth.json`.
-- Account switching first preserves `%USERPROFILE%\.codex\auth.json.bak`.
-- The app contains no telemetry, advertising, or project-operated account-sync service.
-- OAuth, token refresh, quota, subscription, and update checks contact the
-  relevant OpenAI, ChatGPT, and GitHub services.
+- The manager keeps its own data under `%USERPROFILE%\.codex-switch`
+- OAuth tokens are encrypted with Windows DPAPI, so only your Windows login can decrypt them
+- Switching writes `%USERPROFILE%\.codex\auth.json`, saving an `auth.json.bak` first
+- No telemetry, no ads, no cloud service of any kind — your account list and tokens never leave your machine
+- The only network calls go to OpenAI / ChatGPT (OAuth, token refresh, quota reads) and GitHub (update checks)
 
-DPAPI does not protect against malware or an administrator that already
-controls the current Windows user session. See [Privacy](docs/privacy.md) for
-the full data inventory, network behavior, and uninstall notes.
+One caveat: DPAPI won't protect you from malware or an admin that already
+controls your Windows session. The full data inventory, network behavior, and
+uninstall notes are in [Privacy](docs/privacy.md).
 
 > [!WARNING]
-> Switching accounts stops the official Codex process tree, writes the new
-> authentication state, and restarts Codex. Let active work finish before
-> switching.
+> Switching stops the running Codex process tree and restarts it. Let any
+> in-flight work finish before you switch.
 
 ## How it works
 
-1. After OAuth, account metadata and DPAPI-encrypted tokens are stored locally.
-2. Quota sync uses that account's local auth state to read 5-hour and weekly windows.
-3. A switch backs up and atomically replaces Codex's `auth.json`.
-4. The local auto-switch daemon evaluates configured thresholds and uses the
-   same switch path when a change is required.
+Nothing fancy: after OAuth, account metadata and encrypted tokens are stored
+locally. Quota reads use each account's own credentials. A switch backs up and
+atomically replaces Codex's `auth.json`, then relaunches the official client.
+The auto-switch daemon evaluates your thresholds locally and goes through the
+exact same switch path.
 
-Quota and reset-credit data depend on authenticated ChatGPT backend endpoints.
-Those endpoints can change. When a read fails, the app keeps an explicit error
-state instead of presenting missing data as zero quota.
+Quota data comes from ChatGPT backend endpoints, which can change upstream at
+any time. When a read fails, the UI shows an explicit error instead of
+dressing up missing data as zero quota.
 
-See [Architecture](docs/architecture.md) for module boundaries and data flow.
+Module boundaries and data flow are covered in [Architecture](docs/architecture.md).
 
-## Run from source
+## Running from source
 
-Node.js 22 or newer is required; CI and release builds use Node.js 24 LTS.
+Node.js 22 or newer (CI and release builds use 24 LTS):
 
 ```powershell
 git clone https://github.com/3xiaoshayu/codex-account-manager.git
@@ -122,58 +107,47 @@ npm test
 npm start
 ```
 
-Build an unpacked Windows application:
+Package with `npm run build:dir` (unpacked directory) or
+`npm run build:windows` (NSIS installer + ZIP).
 
-```powershell
-npm run build:dir
-```
-
-Build the NSIS installer and ZIP:
-
-```powershell
-npm run build:windows
-```
-
-If an electron-builder helper download times out:
+If an electron-builder helper download times out, set a mirror first:
 
 ```powershell
 $env:ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"
 npm run build:windows
 ```
 
-## Documentation
+## More docs
 
-- [Architecture](docs/architecture.md)
-- [Privacy](docs/privacy.md)
-- [Troubleshooting](docs/troubleshooting.md)
-- [Contributing](CONTRIBUTING.md)
-- [Security policy](SECURITY.md)
-- [Release process](docs/releasing.md)
-- [Changelog](CHANGELOG.md)
-- [Support](SUPPORT.md)
+[Architecture](docs/architecture.md) ·
+[Privacy](docs/privacy.md) ·
+[Troubleshooting](docs/troubleshooting.md) ·
+[Contributing](CONTRIBUTING.md) ·
+[Security policy](SECURITY.md) ·
+[Release process](docs/releasing.md) ·
+[Changelog](CHANGELOG.md) ·
+[Support](SUPPORT.md)
 
-## Project status
+## The fine print
 
-The current build supports Windows x64 and the official Microsoft Store Codex
-app only. Prereleases may change local storage migrations, endpoint parsing,
-and automatic-switching policy.
+This is an independent community project with no affiliation, authorization,
+or endorsement from OpenAI. OpenAI, Codex, and ChatGPT are trademarks of their
+respective owners.
 
-## Responsibility and trademarks
+Only manage accounts you own or are explicitly authorized to use, and follow
+the applicable terms of service and organization policies. If you're running
+production or commercial API workloads, use the OpenAI Platform API — account
+rotation is not the answer there.
 
-This is an independent community project. It is not affiliated with,
-authorized by, or endorsed by OpenAI. OpenAI, Codex, and ChatGPT are
-trademarks of their respective owners.
-
-Only manage accounts that you own or are explicitly authorized to use, and
-follow applicable service terms and organization policies. Production or
-commercial API workloads should use the OpenAI Platform API rather than
-account rotation through this application.
+Right now this supports Windows x64 with the official Microsoft Store Codex
+only. While in prerelease, local storage formats, endpoint parsing, and the
+auto-switch policy may still change. Please skim
+[Troubleshooting](docs/troubleshooting.md) before filing an issue.
 
 ## License
 
-Source code is available under the [MIT License](LICENSE). Runtime backgrounds
-retain their respective third-party licenses; see
-[ASSET_LICENSE.md](ASSET_LICENSE.md). Third-party notices are listed in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+The code is [MIT](LICENSE). Background images keep their original third-party
+licenses — see [ASSET_LICENSE.md](ASSET_LICENSE.md) — and third-party notices
+are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-All emails, quota values, and dates in repository screenshots are synthetic.
+Every email, quota figure, and date in the screenshots is made up.

@@ -2,9 +2,7 @@
 
 # Codex Account Manager
 
-面向 Windows 的本地优先 Codex 多账号控制台。
-
-在一处查看每个账号的 5 小时与周额度、Token 状态，并安全切换当前 Codex 身份。
+Windows 上的 Codex 多账号管理器：额度一目了然，切号一键完成。
 
 [![Release](https://img.shields.io/github/v/release/3xiaoshayu/codex-account-manager?include_prereleases&sort=semver&label=release)](https://github.com/3xiaoshayu/codex-account-manager/releases)
 [![CI](https://github.com/3xiaoshayu/codex-account-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/3xiaoshayu/codex-account-manager/actions/workflows/ci.yml)
@@ -21,88 +19,75 @@
 ![Codex Account Manager 账号卡片界面，使用虚构演示账号](docs/images/account-dashboard.png)
 
 > [!IMPORTANT]
-> 当前版本为 Windows x64 预发布版，安装包尚未进行代码签名。Windows SmartScreen
-> 可能显示“未知发布者”，请只从本仓库 Releases 下载并核对 SHA-256。
+> 目前是预发布版本，安装包还没有做代码签名，Windows SmartScreen 可能提示
+> "未知发布者"。请只从本仓库的 Releases 页面下载，并核对 SHA-256。
 
-## 为什么使用它
+## 这是什么
 
-Codex Account Manager 专注于一个具体工作流：让多个 Codex 账号的状态清楚、切换可控。
+手上有几个 Codex 账号的人大概都熟悉这套流程：想知道哪个号还有额度，得挨个登录看；
+要换号，得手动改登录文件，改完还得重启 Codex。号一多，这些琐事就很磨人。
 
-| 能力 | 说明 |
-| --- | --- |
-| 卡片式额度 | 在账号卡片中显示上游实际提供的 5 小时、周额度窗口和重置时间 |
-| 后台同步 | 自动更新缺失或过期的额度数据，同时保留手动刷新 |
-| 一键切换 | 更新本机 Codex 登录状态并重新启动官方 Codex 客户端 |
-| Token 健康 | 显示过期状态、剩余时间，并支持单账号或批量刷新 |
-| 自动切号 | 可配置额度阈值、候选范围和本地守护进程 |
-| 账号维护 | OAuth 添加与重新授权、删除、订阅刷新和可用重置额度管理 |
-| 本地优先 | 不提供项目自建云服务，不上传账号列表或 Token |
+这个工具把这些事收拾干净了：
 
-本工具不会增加、绕过或修改任何账号额度。自动切号只会在你明确保存的账号之间，
-依据本地配置选择可用账号。
+- 每个账号一张卡片，5 小时额度、周额度、重置时间直接摆在面前
+- 一键切换当前 Codex 身份，关进程、写登录态、重启客户端全部自动完成
+- Token 快过期会自动续，也可以手动刷新单个或全部账号
+- 额度用到你设定的阈值时，本地守护进程可以自动切到下一个可用的号
+- 所有数据只存在本机，token 用 Windows DPAPI 加密
+
+需要说清楚的一点：它不会也不能修改任何账号的额度。自动切号只是在你自己保存的
+账号之间做选择，仅此而已。
 
 ## 安装
 
-### 系统要求
+需要 Windows 10 / 11（x64），以及 Microsoft Store 里的官方 Codex 应用。
 
-- Windows 10 或 Windows 11，x64
-- 已安装 Microsoft Store 提供的官方 Codex 应用
-- 可访问 OpenAI OAuth、ChatGPT 与 GitHub Releases
+1. 打开 [Releases](https://github.com/3xiaoshayu/codex-account-manager/releases)，下载最新的 `Codex-Account-Manager-Setup-<版本>-x64.exe`
+2. 安装并启动
+3. 点"添加账号"，浏览器里完成 OAuth 登录
+4. 回到应用，账号卡片和额度就出来了
 
-### 下载与首次使用
+ZIP 包解压即用，但数据仍然存在用户目录里，并不是真正的便携版，一般用安装包就好。
+Beta 阶段需要手动更新，正式版会支持后台自动更新。
 
-1. 打开 [GitHub Releases](https://github.com/3xiaoshayu/codex-account-manager/releases)。
-2. 下载最新的 `Codex-Account-Manager-Setup-<version>-x64.exe`。
-3. 完成安装并启动应用。
-4. 点击“添加账号”，在浏览器中完成 OAuth 登录。
-5. 返回应用后确认账号卡片、额度和当前账号状态。
+### 校验安装包
 
-ZIP 包提供免安装运行方式，但运行数据仍保存在 Windows 用户目录中，并不是完全便携版。
-普通用户推荐使用 Setup 安装包。
-
-Beta 版本采用手动更新；未来不含预发布标识的稳定版本会在后台下载更新，并在安装前提示重启。
-
-### 校验下载
-
-每个 Release 都包含 `SHA256SUMS.txt`。在 PowerShell 中运行：
+每个 Release 都附带 `SHA256SUMS.txt`。PowerShell 里跑：
 
 ```powershell
-Get-FileHash ".\Codex-Account-Manager-Setup-<version>-x64.exe" -Algorithm SHA256
+Get-FileHash ".\Codex-Account-Manager-Setup-<版本>-x64.exe" -Algorithm SHA256
 ```
 
-将输出与 `SHA256SUMS.txt` 中对应文件的哈希值比较。
+输出和 `SHA256SUMS.txt` 里对应的那行一致就没问题。
 
-## 数据与隐私
+## 数据放在哪，隐私怎么处理
 
-- 管理器数据位于 `%USERPROFILE%\.codex-switch`。
-- OAuth Token 使用 Windows DPAPI 加密，只能由同一 Windows 登录用户解密。
-- 当前 Codex 登录状态写入 `%USERPROFILE%\.codex\auth.json`。
-- 切换前会保留 `%USERPROFILE%\.codex\auth.json.bak`。
-- 应用不包含遥测、广告或项目自建账号同步服务。
-- OAuth、Token 刷新、额度、订阅和更新检查会访问相应的 OpenAI、ChatGPT 与 GitHub 服务。
+- 管理器自己的数据在 `%USERPROFILE%\.codex-switch`
+- OAuth token 用 Windows DPAPI 加密，只有当前这个 Windows 用户能解开
+- 切号时写入 `%USERPROFILE%\.codex\auth.json`，写之前先备份一份 `auth.json.bak`
+- 没有遥测，没有广告，没有任何自建云服务——账号列表和 token 不会离开你的电脑
+- 网络请求只发给 OpenAI / ChatGPT（OAuth 登录、刷新 token、读额度）和 GitHub（检查更新）
 
-DPAPI 不能防御已经控制当前 Windows 用户会话的恶意软件或管理员。完整的数据清单、
-网络请求和卸载说明见 [隐私说明](docs/privacy.md)。
+要提醒的是，DPAPI 防不住已经控制了你 Windows 会话的恶意软件或管理员。完整的数据
+清单、网络行为和卸载说明见[隐私说明](docs/privacy.md)。
 
 > [!WARNING]
-> 切换账号会关闭官方 Codex 进程树，写入新的认证状态后重新启动 Codex。
-> 切换前请等待正在执行的任务完成。
+> 切换账号会先关掉正在运行的 Codex 进程再重启。切换前记得等手头的任务跑完。
 
 ## 工作原理
 
-1. OAuth 登录完成后，应用将账号元数据和经 DPAPI 加密的 Token 保存在本机。
-2. 配额同步使用该账号的本地认证状态读取 5 小时和周额度窗口。
-3. 切换账号时，应用备份并原子更新 Codex 的 `auth.json`。
-4. 自动切号守护进程在本地评估阈值，满足条件时执行同一套切换流程。
+流程不复杂：OAuth 登录后，账号元数据和加密后的 token 落在本地；读额度用的是各账号
+自己的凭证；切号时先备份、再原子替换 Codex 的 `auth.json`，然后拉起官方客户端；
+自动切号守护进程在本地按你设的阈值走同一条切换路径。
 
-配额与重置额度依赖已认证的 ChatGPT 后端接口。这些接口可能发生变化；读取失败时，
-应用会保留明确的错误状态，而不会把缺失数据伪装成零额度。
+额度数据来自 ChatGPT 的后端接口，上游说改就改。读不到的时候界面会明确显示错误，
+不会把"没数据"伪装成"零额度"。
 
-更详细的模块边界与数据流见 [架构说明](docs/architecture.md)。
+模块边界和数据流的细节见[架构说明](docs/architecture.md)。
 
-## 从源码运行
+## 从源码跑
 
-需要 Node.js 22 或更高版本；CI 和 Release 使用 Node.js 24 LTS。
+需要 Node.js 22 或更高（CI 和发布构建用 24 LTS）：
 
 ```powershell
 git clone https://github.com/3xiaoshayu/codex-account-manager.git
@@ -112,53 +97,41 @@ npm test
 npm start
 ```
 
-构建未安装目录：
+打包用 `npm run build:dir`（免安装目录）或 `npm run build:windows`（NSIS 安装包 + ZIP）。
 
-```powershell
-npm run build:dir
-```
-
-生成 NSIS 安装包与 ZIP：
-
-```powershell
-npm run build:windows
-```
-
-如果 electron-builder 辅助包下载超时，可临时设置镜像：
+electron-builder 的辅助包下载超时的话，先设个镜像再跑：
 
 ```powershell
 $env:ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"
 npm run build:windows
 ```
 
-## 项目文档
+## 更多文档
 
-- [架构说明](docs/architecture.md)
-- [隐私说明](docs/privacy.md)
-- [故障排查](docs/troubleshooting.md)
-- [贡献指南](CONTRIBUTING.md)
-- [安全策略](SECURITY.md)
-- [发布流程](docs/releasing.md)
-- [版本记录](CHANGELOG.md)
-- [支持渠道](SUPPORT.md)
+[架构说明](docs/architecture.md) ·
+[隐私说明](docs/privacy.md) ·
+[故障排查](docs/troubleshooting.md) ·
+[贡献指南](CONTRIBUTING.md) ·
+[安全策略](SECURITY.md) ·
+[发布流程](docs/releasing.md) ·
+[版本记录](CHANGELOG.md) ·
+[支持渠道](SUPPORT.md)
 
-## 项目状态
+## 几句要紧的话
 
-当前仅支持 Windows x64 与 Microsoft Store 官方 Codex。预发布版本可能调整本地存储格式、
-接口解析和自动切号策略。提交问题前请先阅读 [故障排查](docs/troubleshooting.md)。
+这是个独立的社区项目，和 OpenAI 没有任何隶属、授权或背书关系。OpenAI、Codex、
+ChatGPT 是各自权利人的商标。
 
-## 责任与商标
+请只管理你自己的、或明确授权给你的账号，并遵守相应的服务条款和组织政策。生产或
+商业 API 负载请走 OpenAI Platform API，别指望靠切号解决。
 
-本项目是独立的社区工具，与 OpenAI 没有隶属、授权或背书关系。OpenAI、Codex 与
-ChatGPT 是其各自权利人的商标。
-
-请仅管理你本人拥有或被明确授权使用的账号，并遵守适用的服务条款与组织政策。
-生产或商业 API 工作负载应使用 OpenAI Platform API，而不是依赖本工具进行账号轮换。
+目前只支持 Windows x64 和 Microsoft Store 官方 Codex。预发布阶段，本地存储格式、
+接口解析和自动切号策略都可能调整。提交 issue 前建议先翻一下[故障排查](docs/troubleshooting.md)。
 
 ## 许可证
 
-源代码使用 [MIT License](LICENSE)。背景图片采用其各自的第三方许可，见
-[ASSET_LICENSE.md](ASSET_LICENSE.md)。第三方组件许可见
+代码用 [MIT License](LICENSE)。背景图片按其原始第三方许可分发，见
+[ASSET_LICENSE.md](ASSET_LICENSE.md)；第三方组件许可见
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-README 截图中的邮箱、额度和日期均为虚构演示数据。
+截图里的邮箱、额度、日期都是编出来的演示数据。
