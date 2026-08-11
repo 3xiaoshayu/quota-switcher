@@ -5,7 +5,7 @@ All notable changes to Codex Account Manager are documented here.
 The project follows [Semantic Versioning](https://semver.org/) once a stable
 release is published.
 
-## [Unreleased]
+## [0.1.0-beta.12] - 2026-08-12
 
 - Track current upstream Codex client behavior: narrow OAuth scopes to
   `openid profile email offline_access`, send token refresh requests as
@@ -66,6 +66,13 @@ release is published.
   action rhythm are consistent across pages, the header avatar joins the
   letter-avatar system, the session switch counter moved next to the daemon
   capsule, and the settings cards align naturally without fixed heights.
+- Remember the window size, position, and maximize state across restarts,
+  falling back to the centered default when the saved position is no longer
+  on a visible display.
+- Close the topmost overlay with the Escape key (delete confirmation,
+  notification drawer, support and release dialogs, and the add-account
+  modal outside OAuth waiting); the authentication conflict dialog still
+  requires an explicit decision.
 
 ## [0.1.0-beta.11] - 2026-07-04
 
