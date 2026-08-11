@@ -5,6 +5,18 @@ All notable changes to Codex Account Manager are documented here.
 The project follows [Semantic Versioning](https://semver.org/) once a stable
 release is published.
 
+## [0.1.0-beta.13] - 2026-08-12
+
+- Classify quota windows by their duration instead of their position in the
+  upstream response. OpenAI currently ships only the weekly window and places
+  it in the primary slot, which the app previously mislabeled as the 5-hour
+  quota - affecting both the account cards and automatic-switching decisions.
+- Re-derive the classification for already-saved quota records from their raw
+  payload, so existing caches display correctly without waiting for a sync.
+- Keep the 5-hour quota row visible when upstream omits the window, showing
+  an explicit "not currently provided" state instead of hiding the row or
+  borrowing the weekly numbers.
+
 ## [0.1.0-beta.12] - 2026-08-12
 
 - Track current upstream Codex client behavior: narrow OAuth scopes to
