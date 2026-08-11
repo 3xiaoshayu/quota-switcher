@@ -41,6 +41,29 @@ This app tidies all of that up:
 To be clear: it does not (and cannot) change any account's limits. Automatic
 switching just picks among the accounts you saved. That's all it does.
 
+## A quick look
+
+<table>
+  <tr>
+    <td align="center"><sub><b>Quota overview</b></sub></td>
+    <td align="center"><sub><b>Automatic switching</b></sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/quota-overview.png" alt="Quota overview across all accounts" /></td>
+    <td><img src="docs/images/auto-switch.png" alt="Automatic switching thresholds and account scope" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Settings</b></sub></td>
+    <td align="center"><sub><b>Login</b></sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/settings.png" alt="Settings with daemon controls and update channel" /></td>
+    <td><img src="docs/images/login.png" alt="Login screen with the DPAPI protection note" /></td>
+  </tr>
+</table>
+
+All screenshots use synthetic demo data.
+
 ## Install
 
 You'll need Windows 10 or 11 (x64) and the official Codex app from the

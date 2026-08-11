@@ -15,8 +15,8 @@ License:
 
 The corresponding files are stored under `src/renderer-react/assets/` and are
 included in release packages so the interface does not make runtime image
-requests. `docs/images/account-dashboard.png` is a product screenshot
-containing a rendered view of the first background.
+requests. The screenshots under `docs/images/` are product screenshots
+containing rendered views of these backgrounds.
 
 ## Application icon
 

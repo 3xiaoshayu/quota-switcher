@@ -191,31 +191,31 @@ export const INITIAL_LOGS: LogEntry[] = [
   {
     id: 'l1',
     timestamp: '2026-06-30 10:40:15',
-    message: 'Current quota sufficient. Automatic rotation paused.',
+    message: '当前额度充足，自动轮换暂停。',
     type: 'success',
   },
   {
     id: 'l2',
     timestamp: '2026-06-30 10:35:02',
-    message: 'Global Auto-Switch activated successfully.',
+    message: '全局自动切号已启用。',
     type: 'info',
   },
   {
     id: 'l3',
     timestamp: '2026-06-30 10:30:11',
-    message: 'Daemon sync interval adjusted to 10 minutes.',
+    message: 'Daemon 同步间隔调整为 10 分钟。',
     type: 'info',
   },
   {
     id: 'l4',
     timestamp: '2026-06-30 10:25:44',
-    message: 'Warning: work@codex.com 5h quota threshold exceeded (5% remaining).',
+    message: '警告：work@codex.com 的 5 小时额度低于阈值（剩余 5%）。',
     type: 'warning',
   },
   {
     id: 'l5',
     timestamp: '2026-06-30 10:15:22',
-    message: 'Account api-v1-fallback@codex.local marked as EXPIRED.',
+    message: '账号 api-v1-fallback@codex.local 已标记为 EXPIRED。',
     type: 'error',
   },
 ];

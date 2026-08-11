@@ -38,6 +38,29 @@ Windows 上的 Codex 多账号管理器：额度一目了然，切号一键完�
 需要说清楚的一点：它不会也不能修改任何账号的额度。自动切号只是在你自己保存的
 账号之间做选择，仅此而已。
 
+## 界面一览
+
+<table>
+  <tr>
+    <td align="center"><sub><b>配额总览</b></sub></td>
+    <td align="center"><sub><b>自动切号</b></sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/quota-overview.png" alt="配额总览界面，展示全部账号的额度概况" /></td>
+    <td><img src="docs/images/auto-switch.png" alt="自动切号界面，展示阈值与生效范围配置" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>系统设置</b></sub></td>
+    <td align="center"><sub><b>登录界面</b></sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/settings.png" alt="系统设置界面，展示守护进程与更新通道" /></td>
+    <td><img src="docs/images/login.png" alt="登录界面，展示 DPAPI 本地加密说明" /></td>
+  </tr>
+</table>
+
+截图均为虚构演示数据。
+
 ## 安装
 
 需要 Windows 10 / 11（x64），以及 Microsoft Store 里的官方 Codex 应用。
