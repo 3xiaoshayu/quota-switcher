@@ -105,12 +105,6 @@ standard Codex service.
 Back up advanced Codex configuration before switching if you depend on a
 custom endpoint.
 
-## Reset-credit controls are unavailable
-
-The manager can only display or consume reset credits returned for the
-authenticated account. It cannot create credits. If the upstream response does
-not expose credits, the consume action remains disabled.
-
 ## Build downloads time out
 
 Retry the release build with an electron-builder mirror:

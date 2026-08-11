@@ -50,7 +50,7 @@ third-party image requests at runtime.
 | Destination | Purpose |
 | --- | --- |
 | `auth.openai.com` | OAuth authorization and token refresh |
-| `chatgpt.com` | Quota, subscription, account, and reset-credit reads or actions |
+| `chatgpt.com` | Quota and account profile reads |
 | `github.com` and GitHub release endpoints | Release downloads and stable update checks |
 
 No account list or token is sent to a server operated by this project.

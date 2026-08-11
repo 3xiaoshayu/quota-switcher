@@ -66,8 +66,8 @@ For UI changes, also verify:
 - current, attention, expired-token, and missing-quota accounts;
 - no horizontal overflow or clipped action controls.
 
-Actions that switch a real account, delete data, or consume a reset credit
-should be tested only with dedicated test accounts.
+Actions that switch a real account or delete data should be tested only with
+dedicated test accounts.
 
 ## Pull requests
 

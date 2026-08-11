@@ -120,5 +120,5 @@ npm test
 npm run build:dir
 ```
 
-Actions that change a real account, consume a reset credit, or remove account
-data must be tested with synthetic or dedicated test accounts.
+Actions that change a real account or remove account data must be tested with
+synthetic or dedicated test accounts.
