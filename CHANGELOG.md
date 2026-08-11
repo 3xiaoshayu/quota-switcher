@@ -5,6 +5,78 @@ All notable changes to Codex Account Manager are documented here.
 The project follows [Semantic Versioning](https://semver.org/) once a stable
 release is published.
 
+## [0.1.0-beta.14] - 2026-08-12
+
+A five-angle audit of the whole codebase (auth and token flows, storage and
+the switch transaction, quota and auto-switching, the main process and IPC,
+and the renderer) surfaced 57 findings. This release fixes everything that
+can lose data plus the correctness and interaction issues behind them.
+
+Data safety:
+
+- Never retry or replay the OAuth token refresh and code-exchange requests:
+  after a timeout the server may already have rotated the refresh token, and
+  replaying the old one killed healthy accounts with `refresh_token_reused`.
+- Treat transiently locked files (antivirus, indexers) as retryable IO
+  errors. They were previously handled as JSON corruption, which could
+  quarantine a perfectly healthy account file forever and drop the current
+  account from the index.
+- Make account decoding a pure read. The legacy plaintext migration used to
+  fire inside the backup recovery chain, copying the corrupt primary over
+  the good backup; in the worst case the account's tokens were lost. The
+  migration also stops leaving plaintext tokens in `.bak` files.
+- Hold per-account locks in every write path: OAuth completion, adopting the
+  official login, reapplying managed auth (which now also takes the switch
+  transaction locks), official-token rotation sync, and the current-account
+  sync after batch refreshes. A reauthorization finishing during an in-flight
+  refresh could previously be overwritten by stale data and flagged
+  requires_reauth again with the new refresh token lost.
+- Discard out-of-order dashboard snapshots in the renderer so a slow older
+  load can no longer overwrite newer state or silently revert configuration
+  edits made in between.
+
+Correctness:
+
+- Carry fetch-time quota reset times through the cache correction introduced
+  in beta.13; reset countdowns no longer drift on every read.
+- The daemon leaves reauth-required current accounts alone (their self-heal
+  marker used to be destroyed), no longer double-refreshes the current
+  account every tick, and a retry backoff no longer counts as a failure or
+  stalls automatic switching while fresh cached data is available.
+- Enabling automatic switching now starts the daemon immediately instead of
+  waiting for the next app restart.
+- Startup failures show an error dialog and exit instead of leaving a
+  windowless process holding the single-instance lock.
+- Window state: the maximize flag survives closing from the taskbar while
+  minimized, and restored positions are clamped to a reachable strip of a
+  visible display.
+- OAuth identity merging keeps known profile fields when new tokens carry
+  thinner claims, and a mismatched reauthorization merges into an existing
+  record for the same identity instead of duplicating the account.
+- The switch transaction terminates orphaned helper processes, tolerates
+  transient process-enumeration failures during launch verification instead
+  of rolling back a switch that already succeeded, and locks the outgoing
+  account so token rotation cannot be destroyed by a rollback.
+- Auto-switch configuration recovery no longer resurrects stale backups
+  after an intentional reset, validates backups before restoring them, and
+  quarantines double corruption instead of silently reverting to defaults.
+
+Interface:
+
+- Accounts whose access token expired but whose refresh token still works
+  keep their refresh affordances instead of being locked down as SUSPENDED.
+- Notification timestamps use local time (they were UTC, eight hours off).
+- Per-card refreshes track concurrency correctly, card menus close when
+  clicking anywhere outside, OAuth waits no longer yank you back to the
+  accounts tab on every sync, completions report exactly one toast, and a
+  failed authorization keeps its error visible instead of closing the modal.
+- Assorted polish: the "1h 60m" duration carry bug, the average-remaining
+  stat shows `--` without data, Escape no longer operates overlays hidden
+  under the auth-conflict dialog, and the remaining English copy in toasts,
+  tooltips, and notification logs is localized.
+
+The reliability suite grew from 40 to 48 tests.
+
 ## [0.1.0-beta.13] - 2026-08-12
 
 - Classify quota windows by their duration instead of their position in the
