@@ -14,6 +14,7 @@ interface AutoSwitchProps {
   logs: LogEntry[];
   settings: SystemSettings;
   daemonState: DaemonState;
+  sessionSwitchCount: number;
   onToggleGlobalSwitch: () => void | Promise<void>;
   onPreviewThreshold: (type: '5h' | 'weekly', val: number) => void;
   onUpdateThreshold: (type: '5h' | 'weekly', val: number) => void;
@@ -29,36 +30,36 @@ function manualCheckLog(result: AutoSwitchRunResult | void): {
   message: string;
   type: 'success' | 'info' | 'warning' | 'error';
 } {
-  if (!result) return { message: 'Manual quota check completed.', type: 'success' };
+  if (!result) return { message: '手动额度检查已完成。', type: 'success' };
   if (result.switched) {
     return {
-      message: `Manual check switched to ${result.to?.email || 'another account'}.`,
+      message: `手动检查已切换至 ${result.to?.email || '另一账号'}。`,
       type: 'success',
     };
   }
 
   switch (result.reason) {
     case 'quota_sufficient':
-      return { message: 'Manual check complete. Current quota is sufficient.', type: 'success' };
+      return { message: '手动检查完成，当前额度充足。', type: 'success' };
     case 'no_monitored':
-      return { message: 'Manual check skipped: select at least one account or use All Accounts.', type: 'warning' };
+      return { message: '已跳过：请至少选择一个账号，或使用全部账号范围。', type: 'warning' };
     case 'current_not_monitored':
-      return { message: 'Manual check skipped: the current account is outside the selected scope.', type: 'warning' };
+      return { message: '已跳过：当前账号不在选定范围内。', type: 'warning' };
     case 'no_candidates':
-      return { message: 'Manual check complete: no eligible replacement account is available.', type: 'warning' };
+      return { message: '检查完成：暂无可用的替换账号。', type: 'warning' };
     case 'no_accounts':
-      return { message: 'Manual check skipped: no managed accounts are available.', type: 'warning' };
+      return { message: '已跳过：没有可用的管理账号。', type: 'warning' };
     case 'no_quota_data':
-      return { message: 'Manual check could not find quota data for the current account.', type: 'warning' };
+      return { message: '未能获取当前账号的额度数据。', type: 'warning' };
     case 'auth_conflict':
-      return { message: 'Manual check paused until the official Codex login conflict is resolved.', type: 'error' };
+      return { message: '手动检查已暂停：请先处理官方 Codex 登录冲突。', type: 'error' };
     case 'current_quota_refresh_failed':
-      return { message: `Manual check failed: ${result.error || 'current quota refresh failed'}.`, type: 'error' };
+      return { message: `手动检查失败：${result.error || '当前账号额度刷新失败'}。`, type: 'error' };
     case 'cancelled':
-      return { message: 'Manual check was cancelled.', type: 'warning' };
+      return { message: '手动检查已取消。', type: 'warning' };
     default:
       return {
-        message: `Manual check completed${result.reason ? `: ${result.reason}` : '.'}`,
+        message: `手动检查完成${result.reason ? `：${result.reason}` : '。'}`,
         type: 'info',
       };
   }
@@ -69,6 +70,7 @@ export default function AutoSwitchView({
   logs,
   settings,
   daemonState,
+  sessionSwitchCount,
   onToggleGlobalSwitch,
   onPreviewThreshold,
   onUpdateThreshold,
@@ -88,17 +90,12 @@ export default function AutoSwitchView({
   }, [scopeMode]);
 
   const scopeAccounts = accounts;
-  const rotationCount = logs.filter((log) => /switch|rotation/i.test(log.message)).length;
-  const attentionCount = accounts.filter((account) => ['WARNING', 'EXPIRED', 'SUSPENDED', 'LOW_QUOTA'].includes(account.status)).length;
-  const selectedAccounts = accounts.filter((account) => selectedAccountIds.includes(account.id));
-  const visibleAvatars = selectedAccounts.slice(0, 3);
-  const hiddenAvatarCount = Math.max(0, selectedAccounts.length - visibleAvatars.length);
   const currentAccount = accounts.find((account) => account.isCurrent);
   const currentQuotaSufficient = !!currentAccount && currentAccount.status === 'ACTIVE';
 
   const handleCheckNow = async () => {
     setIsCheckingNow(true);
-    onAddLog('Initiating manual quota scanning protocol...', 'info');
+    onAddLog('正在执行手动额度检查...', 'info');
     if (onRunCheckNow) {
       try {
         const result = await onRunCheckNow();
@@ -113,7 +110,7 @@ export default function AutoSwitchView({
     }
     setTimeout(() => {
       setIsCheckingNow(false);
-      onAddLog('Manual quota scanning complete. All selected accounts checked.', 'success');
+      onAddLog('手动额度检查完成。', 'success');
     }, 1500);
   };
 
@@ -172,7 +169,7 @@ export default function AutoSwitchView({
     if (priority === 'High') colors = "text-blue-400";
     if (priority === 'Normal') colors = "text-slate-300";
     if (priority === 'Low') colors = "text-slate-500";
-    return <span className={`text-[10px] ${colors} font-semibold font-mono`}>Priority: {priority}</span>;
+    return <span className={`text-[10px] ${colors} font-semibold tabular-nums`}>优先级: {priority}</span>;
   };
 
   return (
@@ -193,8 +190,14 @@ export default function AutoSwitchView({
           {/* Daemon active widget */}
           <div className="flex items-center gap-2 px-4 py-2 bg-slate-900/40 border border-white/5 rounded-2xl text-xs font-semibold" id="daemon-capsule-autoswitch">
             <span className={`w-2 h-2 rounded-full ${daemonState.status === 'Running' ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
-            <span className="text-slate-400">Daemon Status</span>
-            <span className={`${daemonState.status === 'Running' ? 'text-emerald-400' : 'text-rose-400'} font-bold uppercase tracking-wide`}>{daemonState.status}</span>
+            <span className="text-slate-400">Daemon 状态</span>
+            <span className={`${daemonState.status === 'Running' ? 'text-emerald-400' : 'text-rose-400'} font-bold uppercase tracking-wide`}>{daemonState.status === 'Running' ? '运行中' : '已停止'}</span>
+          </div>
+
+          {/* Session switch counter */}
+          <div className="flex items-center gap-2 px-4 py-2 bg-slate-900/40 border border-white/5 rounded-2xl text-xs font-semibold" id="autoswitch-session-capsule">
+            <span className="text-slate-400">本次切换</span>
+            <span className="text-blue-400 font-bold tabular-nums">{sessionSwitchCount}</span>
           </div>
 
           <motion.button
@@ -203,11 +206,11 @@ export default function AutoSwitchView({
             whileHover={{ scale: 1.04 }}
             whileTap={{ scale: 0.96 }}
             transition={{ type: 'spring', stiffness: 400, damping: 20 }}
-            className="flex items-center gap-2 px-5 py-3 rounded-2xl bg-blue-500/10 hover:bg-blue-500/15 border border-blue-500/25 disabled:opacity-50 text-blue-300 hover:text-blue-200 text-xs font-bold transition-all"
+            className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-blue-500/10 hover:bg-blue-500/15 border border-blue-500/25 disabled:opacity-50 text-blue-300 hover:text-blue-200 text-xs font-bold transition-all"
             id="autoswitch-btn-checknow"
           >
-            <Zap className={`w-3.5 h-3.5 ${isCheckingNow ? 'animate-bounce text-cyan-300' : ''}`} />
-            Check Now
+            <Zap className={`w-3.5 h-3.5 ${isCheckingNow ? 'animate-pulse text-cyan-300' : ''}`} />
+            立即检查
           </motion.button>
         </div>
       </div>
@@ -217,7 +220,7 @@ export default function AutoSwitchView({
         {/* Left Side: Control Settings & Switch Config (5 cols) */}
         <div className="lg:col-span-5 flex flex-col gap-6" id="autoswitch-left-panel">
           {/* Controls Card */}
-          <div className="backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col shadow-xl" id="autoswitch-control-card">
+          <div className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col shadow-xl" id="autoswitch-control-card">
             {/* Global Switch row */}
             <div className="flex items-center justify-between pb-6 border-b border-white/5" id="autoswitch-global-row">
               <div className="flex flex-col" id="autoswitch-global-text">
@@ -247,13 +250,13 @@ export default function AutoSwitchView({
 
             {/* Threshold Sliders */}
             <div className="pt-6 space-y-6" id="autoswitch-sliders-container">
-              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider font-mono">阈值设定</h4>
+              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider tabular-nums">阈值设定</h4>
 
               {/* 5h Quota Threshold */}
               <div className="space-y-2" id="threshold-5h-container">
                 <div className="flex items-center justify-between text-xs font-semibold" id="threshold-5h-labels">
-                  <span className="text-slate-300">5h Quota Threshold</span>
-                  <span className="text-blue-400 font-bold font-mono">{settings.fiveHourThreshold}%</span>
+                  <span className="text-slate-300">5 小时额度阈值</span>
+                  <span className="text-blue-400 font-bold tabular-nums">{settings.fiveHourThreshold}%</span>
                 </div>
                 <input
                   type="range"
@@ -272,8 +275,8 @@ export default function AutoSwitchView({
               {/* Weekly Quota Threshold */}
               <div className="space-y-2" id="threshold-weekly-container">
                 <div className="flex items-center justify-between text-xs font-semibold" id="threshold-weekly-labels">
-                  <span className="text-slate-300">Weekly Quota Threshold</span>
-                  <span className="text-blue-400 font-bold font-mono">{settings.weeklyThreshold}%</span>
+                  <span className="text-slate-300">周额度阈值</span>
+                  <span className="text-blue-400 font-bold tabular-nums">{settings.weeklyThreshold}%</span>
                 </div>
                 <input
                   type="range"
@@ -292,18 +295,18 @@ export default function AutoSwitchView({
           </div>
 
           {/* Status Log & Banner Panel */}
-          <div className="backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col shadow-xl" id="autoswitch-logs-card">
-            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider font-mono mb-4">状态日志</h4>
+          <div className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col shadow-xl" id="autoswitch-logs-card">
+            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider tabular-nums mb-4">状态日志</h4>
 
             {/* Green banner */}
             <div className={`p-4 border rounded-2xl flex items-start gap-3 mb-4 ${currentQuotaSufficient ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-amber-500/10 border-amber-500/20'}`} id="autoswitch-log-banner">
-              <CheckCircle2 className={`w-5 h-5 shrink-0 mt-0.5 animate-pulse ${currentQuotaSufficient ? 'text-emerald-400' : 'text-amber-400'}`} />
+              <CheckCircle2 className={`w-5 h-5 shrink-0 mt-0.5 ${currentQuotaSufficient ? 'text-emerald-400' : 'text-amber-400'}`} />
               <div className="flex flex-col" id="autoswitch-banner-text">
                 <span className={`text-xs font-bold ${currentQuotaSufficient ? 'text-emerald-300' : 'text-amber-300'}`}>
-                  {currentAccount ? (currentQuotaSufficient ? 'Current quota sufficient' : 'Current account needs attention') : 'No current account'}
+                  {currentAccount ? (currentQuotaSufficient ? '当前额度充足' : '当前账号需要关注') : '暂无当前账号'}
                 </span>
                 <span className={`text-[11px] mt-0.5 ${currentQuotaSufficient ? 'text-emerald-400/80' : 'text-amber-400/80'}`}>
-                  {settings.globalSwitch ? 'Automatic rotation enabled' : 'Automatic rotation disabled'}
+                  {settings.globalSwitch ? '自动轮换已启用' : '自动轮换已禁用'}
                 </span>
               </div>
             </div>
@@ -311,7 +314,7 @@ export default function AutoSwitchView({
             {/* Checked time banner */}
             <div className="flex items-center gap-2 text-xs text-slate-400 mb-4 px-1" id="autoswitch-lastcheck-row">
               <Clock className="w-3.5 h-3.5 text-slate-400" />
-              <span>Last checked: {daemonState.lastChecked}</span>
+              <span>最近检查：{daemonState.lastChecked}</span>
             </div>
 
             {/* Log Scroll Container */}
@@ -328,7 +331,7 @@ export default function AutoSwitchView({
                     <span className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${badgeColor}`} />
                     <div className="flex flex-col" id={`log-item-desc-${log.id}`}>
                       <span className="text-slate-300 font-medium leading-normal">{log.message}</span>
-                      <span className="text-[9px] text-slate-500 font-mono mt-0.5">{log.timestamp}</span>
+                      <span className="text-[9px] text-slate-500 tabular-nums mt-0.5">{log.timestamp}</span>
                     </div>
                   </div>
                 );
@@ -338,16 +341,16 @@ export default function AutoSwitchView({
         </div>
 
         {/* Right Side: Scope Selection (7 cols) */}
-        <div className="lg:col-span-7 backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col shadow-xl" id="autoswitch-right-panel">
+        <div className="lg:col-span-7 glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col shadow-xl" id="autoswitch-right-panel">
           {/* Card header and tab selector */}
           <div className="flex items-center justify-between pb-5 border-b border-white/5 mb-5" id="scope-header-row">
-            <h4 className="text-sm font-bold text-slate-100 tracking-wide font-sans">Scope Selection</h4>
+            <h4 className="text-sm font-bold text-slate-100 tracking-wide font-sans">生效范围</h4>
             <div className="flex bg-slate-950/40 p-1 rounded-xl border border-white/5 text-xs font-semibold relative" id="scope-tabs-capsule">
               <button
                 onClick={() => {
                   setActiveScopeTab('all');
                   onScopeModeChange?.('all');
-                  onAddLog('Scope filter toggled to All Accounts.', 'info');
+                  onAddLog('生效范围已切换为全部账号。', 'info');
                 }}
                 className={`px-4 py-2 rounded-lg transition-all relative cursor-pointer z-10 ${
                   activeScopeTab === 'all' ? 'text-white font-bold' : 'text-slate-400 hover:text-slate-300'
@@ -361,13 +364,13 @@ export default function AutoSwitchView({
                     transition={{ type: 'spring', stiffness: 450, damping: 25 }}
                   />
                 )}
-                All Accounts
+                全部账号
               </button>
               <button
                 onClick={() => {
                   setActiveScopeTab('specific');
                   onScopeModeChange?.('selected');
-                  onAddLog('Scope filter toggled to Specific Accounts.', 'info');
+                  onAddLog('生效范围已切换为指定账号。', 'info');
                 }}
                 className={`px-4 py-2 rounded-lg transition-all relative cursor-pointer z-10 ${
                   activeScopeTab === 'specific' ? 'text-white font-bold' : 'text-slate-400 hover:text-slate-300'
@@ -381,7 +384,7 @@ export default function AutoSwitchView({
                     transition={{ type: 'spring', stiffness: 450, damping: 25 }}
                   />
                 )}
-                Specific Accounts
+                指定账号
               </button>
             </div>
           </div>
@@ -425,8 +428,8 @@ export default function AutoSwitchView({
                     {/* Title and details */}
                     <div className="flex flex-col text-left" id={`scope-titles-${account.id}`}>
                       <span className="font-bold text-slate-100 text-sm font-sans">{account.name}</span>
-                      <span className="text-[11px] text-slate-400 font-mono mt-0.5">
-                        5H Remaining: {account.fiveHourQuotaRemaining == null
+                      <span className="text-[11px] text-slate-400 tabular-nums mt-0.5">
+                        5 小时剩余: {account.fiveHourQuotaRemaining == null
                           ? '--'
                           : `${Math.round((account.fiveHourQuotaRemaining / account.fiveHourQuotaTotal) * 100)}%`}
                       </span>
@@ -440,54 +443,6 @@ export default function AutoSwitchView({
                 </motion.div>
               );
             })}
-          </div>
-        </div>
-      </div>
-
-      {/* Bottom Horizontal statistics bar */}
-      <div 
-        className="backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 grid grid-cols-1 md:grid-cols-4 gap-6 items-center shadow-md select-none"
-        id="autoswitch-stats-bar"
-      >
-        {/* Rotation Count */}
-        <div className="flex flex-col" id="stat-col-rotation">
-          <span className="text-[10px] font-bold text-slate-400 tracking-wider font-mono">SESSION SWITCH EVENTS</span>
-          <span className="text-2xl font-bold text-blue-400 mt-1 font-mono">{rotationCount}</span>
-        </div>
-
-        {/* Average Uptime */}
-        <div className="flex flex-col" id="stat-col-uptime">
-          <span className="text-[10px] font-bold text-slate-400 tracking-wider font-mono">DAEMON STATUS</span>
-          <span className={`text-2xl font-bold mt-1 font-mono ${daemonState.status === 'Running' ? 'text-emerald-400' : 'text-rose-400'}`}>
-            {daemonState.status}
-          </span>
-        </div>
-
-        {/* Blocked Threads */}
-        <div className="flex flex-col" id="stat-col-blocked">
-          <span className="text-[10px] font-bold text-slate-400 tracking-wider font-mono">ACCOUNTS NEEDING ACTION</span>
-          <span className="text-2xl font-bold text-slate-200 mt-1 font-mono">{attentionCount}</span>
-        </div>
-
-        {/* User Badges Avatar Bubbles */}
-        <div className="flex flex-col items-start md:items-end" id="stat-col-avatars">
-          <div className="flex items-center -space-x-2" id="avatars-overlap-container">
-            {visibleAvatars.map((account, index) => (
-              <div
-                key={account.id}
-                className={`w-8 h-8 rounded-full border-2 border-slate-900 flex items-center justify-center text-white text-[10px] font-bold shadow-lg ${
-                  index === 0 ? 'bg-gradient-to-r from-blue-500 to-cyan-500' : index === 1 ? 'bg-gradient-to-r from-purple-500 to-pink-500' : 'bg-gradient-to-r from-amber-500 to-orange-500'
-                }`}
-                title={account.email}
-              >
-                {account.name.charAt(0).toUpperCase() || '?'}
-              </div>
-            ))}
-            {hiddenAvatarCount > 0 && (
-              <div className="w-10 h-8 rounded-full bg-slate-800 border-2 border-slate-900 flex items-center justify-center text-slate-300 text-[10px] font-bold px-2 shadow-lg">
-                +{hiddenAvatarCount}
-              </div>
-            )}
           </div>
         </div>
       </div>

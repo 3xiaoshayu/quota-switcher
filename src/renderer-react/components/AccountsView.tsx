@@ -1,13 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import { 
   Users, 
   Award, 
-  RefreshCw, 
   Plus, 
   Search, 
   User, 
-  Briefcase, 
   AlertTriangle, 
   ArrowLeftRight, 
   Trash2, 
@@ -15,9 +13,11 @@ import {
   X,
   Mail,
   KeyRound,
-  Link
+  Link,
+  RefreshCw
 } from 'lucide-react';
 import { AccountQuota, DesktopOAuthStatus } from '../types';
+import { avatarGradient } from '../api/desktop';
 
 interface AccountsProps {
   accounts: AccountQuota[];
@@ -26,7 +26,6 @@ interface AccountsProps {
   onSwitchCurrentAccount: (id: string) => void | Promise<void>;
   onRefreshAccount: (id: string) => void | Promise<void>;
   onAddLog: (msg: string, type: 'success' | 'info' | 'warning' | 'error') => void;
-  onReloadAccounts?: () => void | Promise<void>;
   onReauthorizeAccount?: (id: string) => void | Promise<void>;
   onCancelOAuth?: () => void | Promise<void>;
   onCompleteOAuthManually?: (callbackUrl: string) => void | Promise<void>;
@@ -41,7 +40,6 @@ export default function AccountsView({
   onSwitchCurrentAccount,
   onRefreshAccount,
   onAddLog,
-  onReloadAccounts,
   onReauthorizeAccount,
   onCancelOAuth,
   onCompleteOAuthManually,
@@ -52,7 +50,6 @@ export default function AccountsView({
   const [filterTab, setFilterTab] = useState<'all' | 'current' | 'warning'>('all');
   const [showAddModal, setShowAddModal] = useState(false);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
-  const [isReloading, setIsReloading] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
   const [reauthorizeId, setReauthorizeId] = useState<string | null>(null);
   const [manualCallbackUrl, setManualCallbackUrl] = useState('');
@@ -85,6 +82,19 @@ export default function AccountsView({
     setFormError('');
   }, [isRecoveredOAuth, oauthMode, oauthStatus?.pending, oauthStatus?.targetAccountId]);
 
+  // Escape closes the add-account modal, except while an OAuth authorization
+  // is pending (cancelling that must be an explicit choice).
+  useEffect(() => {
+    if (!showAddModal) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || isAdding) return;
+      setShowAddModal(false);
+      setReauthorizeId(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showAddModal, isAdding]);
+
   // Handle single card refresh animation
   const handleSingleRefresh = async (id: string, name: string) => {
     setRefreshingId(id);
@@ -96,19 +106,6 @@ export default function AccountsView({
       onAddLog(error instanceof Error ? error.message : String(error), 'error');
     } finally {
       setRefreshingId(null);
-    }
-  };
-
-  const handleReloadAccounts = async () => {
-    setIsReloading(true);
-    onAddLog('Re-reading local configurations from node instances...', 'info');
-    try {
-      await onReloadAccounts?.();
-      onAddLog('Local account configurations reloaded.', 'success');
-    } catch (error) {
-      onAddLog(error instanceof Error ? error.message : String(error), 'error');
-    } finally {
-      setIsReloading(false);
     }
   };
 
@@ -213,9 +210,9 @@ export default function AccountsView({
           <div className="flex items-center gap-4 mt-2.5 text-xs text-slate-300 font-medium font-sans" id="accounts-meta-labels">
             <span className="flex items-center gap-1.5 text-slate-200">
               <Users className="w-3.5 h-3.5 text-blue-400" />
-              总账号: {accounts.length}
+              账号总数: {accounts.length}
             </span>
-            <span className="text-slate-400">|</span>
+            <span className="text-slate-500">·</span>
             <span className="flex items-center gap-1.5 text-amber-300 font-bold">
               <Award className="w-3.5 h-3.5 text-amber-400" />
               当前套餐: {currentPlan}
@@ -226,17 +223,6 @@ export default function AccountsView({
         {/* Action button triggers */}
         <div className="flex items-center gap-3 shrink-0" id="accounts-actions-group">
           <motion.button
-            onClick={handleReloadAccounts}
-            disabled={isReloading}
-            whileHover={{ scale: 1.03 }}
-            whileTap={{ scale: 0.97 }}
-            transition={{ type: 'spring', stiffness: 400, damping: 20 }}
-            className="px-5 py-3 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 text-white text-xs font-semibold transition-all cursor-pointer shadow-lg"
-            id="btn-re-read-accounts"
-          >
-            重新读取本地账号
-          </motion.button>
-          <motion.button
             onClick={() => {
               setReauthorizeId(null);
               setFormError('');
@@ -245,7 +231,7 @@ export default function AccountsView({
             whileHover={{ scale: 1.04 }}
             whileTap={{ scale: 0.96 }}
             transition={{ type: 'spring', stiffness: 400, damping: 20 }}
-            className="flex items-center gap-1.5 px-5 py-3 rounded-2xl bg-blue-500/10 hover:bg-blue-500/15 border border-blue-500/25 text-blue-300 hover:text-blue-200 text-xs font-bold transition-all cursor-pointer shadow-lg"
+            className="flex items-center gap-1.5 px-5 py-2.5 rounded-2xl bg-blue-500/10 hover:bg-blue-500/15 border border-blue-500/25 text-blue-300 hover:text-blue-200 text-xs font-bold transition-all cursor-pointer shadow-lg"
             id="btn-add-account-modal-trigger"
           >
             <Plus className="w-4 h-4" />
@@ -256,7 +242,7 @@ export default function AccountsView({
 
       {/* Filters & Search Control Bar */}
       <div 
-        className="backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8 shadow-md"
+        className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8 shadow-md"
         id="accounts-search-filter-row"
       >
         {/* Search input with icon */}
@@ -332,8 +318,36 @@ export default function AccountsView({
         </div>
       </div>
 
+      {/* Empty state */}
+      {filteredAccounts.length === 0 && (
+        <div className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl px-8 py-16 flex flex-col items-center text-center shadow-xl" id="accounts-empty-state">
+          <div className="w-14 h-14 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 mb-4">
+            <Users className="w-6 h-6" />
+          </div>
+          <h3 className="text-sm font-bold text-white">{accounts.length === 0 ? '还没有账号' : '没有匹配的账号'}</h3>
+          <p className="mt-2 max-w-xs text-xs leading-5 text-slate-400">
+            {accounts.length === 0 ? '通过 OAuth 授权添加你的第一个 Codex 账号。' : '换个关键词，或切换筛选条件再试试。'}
+          </p>
+          {accounts.length === 0 && (
+            <button
+              onClick={() => {
+                setReauthorizeId(null);
+                setFormError('');
+                setShowAddModal(true);
+              }}
+              className="mt-6 flex items-center gap-1.5 px-5 py-3 rounded-2xl bg-blue-500/10 hover:bg-blue-500/15 border border-blue-500/25 text-blue-300 hover:text-blue-200 text-xs font-bold transition-all cursor-pointer"
+              id="accounts-empty-add"
+            >
+              <Plus className="w-4 h-4" />
+              添加账号
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Cards Double Column Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6" id="accounts-cards-grid">
+        <AnimatePresence initial={false}>
         {filteredAccounts.map((account) => {
           const isCardRefreshing = refreshingId === account.id;
           const fiveHourPct = account.fiveHourQuotaRemaining == null
@@ -365,9 +379,12 @@ export default function AccountsView({
             <motion.div
               layout
               key={account.id}
+              initial={{ opacity: 0, scale: 0.97 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.97 }}
               whileHover={{ y: -4, borderColor: 'rgba(255,255,255,0.12)' }}
-              transition={{ type: 'spring', stiffness: 350, damping: 25 }}
-              className="backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col shadow-2xl relative overflow-hidden transition-all duration-300 group"
+              transition={{ type: 'spring', stiffness: 350, damping: 28 }}
+              className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col shadow-2xl relative overflow-hidden group"
               id={`account-manage-card-${account.id}`}
             >
               {/* Highlight glass background on hover */}
@@ -376,15 +393,9 @@ export default function AccountsView({
               {/* Card Title Area */}
               <div className="flex items-start justify-between mb-5" id={`account-m-header-${account.id}`}>
                 <div className="flex items-center gap-3.5" id={`account-m-user-${account.id}`}>
-                  {account.plan === 'Standard' ? (
-                    <div className="w-11 h-11 rounded-2xl bg-slate-500/10 border border-slate-500/20 flex items-center justify-center text-slate-400">
-                      <Briefcase className="w-5 h-5" />
-                    </div>
-                  ) : (
-                    <div className="w-11 h-11 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
-                      <User className="w-5 h-5" />
-                    </div>
-                  )}
+                  <div className={`w-11 h-11 rounded-2xl flex items-center justify-center bg-gradient-to-br ${avatarGradient(account.id)} text-white font-bold text-base shadow-md`}>
+                    {(account.name.charAt(0) || '?').toUpperCase()}
+                  </div>
 
                   <div className="flex flex-col text-left select-all" id={`account-m-titles-${account.id}`}>
                     <div className="flex items-center gap-2">
@@ -393,17 +404,21 @@ export default function AccountsView({
                       </span>
                       {account.isCurrent && (
                         <span className="px-2.5 py-0.5 bg-blue-500/20 border border-blue-500/30 text-blue-300 text-[9px] font-bold rounded-full uppercase tracking-wider" id="current-account-badge">
-                          Current
+                          当前
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center gap-2 mt-0.5" id={`account-m-badges-${account.id}`}>
-                      <span className={`w-1.5 h-1.5 rounded-full ${
-                        account.status === 'ACTIVE' ? 'bg-emerald-400' : account.status === 'WARNING' ? 'bg-amber-400' : 'bg-rose-400'
-                      }`} />
-                      <span className="text-[10px] text-slate-400 font-semibold">{account.status}</span>
-                      <span className="text-slate-600">•</span>
-                      <span className="text-[10px] text-blue-400 font-bold uppercase tracking-wider">{account.plan}</span>
+                    <div className="flex items-center gap-1.5 mt-1" id={`account-m-badges-${account.id}`}>
+                      <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider border ${
+                        account.status === 'ACTIVE'
+                          ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                          : account.status === 'WARNING'
+                            ? 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                            : account.status === 'READY'
+                              ? 'bg-teal-500/10 border-teal-500/20 text-teal-400'
+                              : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
+                      }`}>{account.status}</span>
+                      <span className="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider bg-blue-500/10 border border-blue-500/20 text-blue-300">{account.plan}</span>
                     </div>
                   </div>
                 </div>
@@ -415,8 +430,8 @@ export default function AccountsView({
                   <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
                   <span className="font-medium">
                     {account.warning || (account.weeklyBlocksFiveHour
-                      ? 'Weekly quota is exhausted, so the 5-hour quota is unavailable.'
-                      : 'Quota needs attention.')}
+                      ? '周额度已用尽，5 小时额度暂不可用。'
+                      : '额度状态需要关注。')}
                   </span>
                 </div>
               )}
@@ -426,11 +441,14 @@ export default function AccountsView({
                 {/* TOKEN VALIDITY Row */}
                 <div className="space-y-1.5" id={`token-validity-row-${account.id}`}>
                   <div className="flex items-center justify-between text-xs font-semibold">
-                    <span className="text-slate-400 uppercase tracking-wider text-[10px] font-mono">TOKEN VALIDITY</span>
+                    <span className="text-slate-400 uppercase tracking-wider text-[10px] tabular-nums">TOKEN 有效期</span>
                     <span className="text-slate-300 font-semibold">{account.tokenValidity}</span>
                   </div>
-                  <div className="h-[3px] bg-slate-950/40 border border-white/[0.03] shadow-[inset_0_1px_1px_rgba(0,0,0,0.5)] rounded-full overflow-hidden">
-                    <div className="h-full bg-gradient-to-r from-blue-500/40 via-cyan-400/50 to-indigo-500/40 rounded-full w-4/5" />
+                  <div className="h-1.5 bg-slate-950/50 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-blue-500/40 via-cyan-400/50 to-indigo-500/40 rounded-full"
+                      style={{ width: `${Math.round(account.tokenValidityPct ?? 0)}%` }}
+                    />
                   </div>
                 </div>
 
@@ -438,38 +456,38 @@ export default function AccountsView({
                 <div className={`grid ${fiveHourPct !== null && weeklyPct !== null ? 'grid-cols-2' : 'grid-cols-1'} gap-4 select-none`} id={`quotas-boxes-grid-${account.id}`}>
                   {/* 5H QUOTA */}
                   {fiveHourPct !== null && (
-                  <div className="bg-slate-950/20 border border-white/5 rounded-2xl p-4 text-left" id={`quota-box-5h-${account.id}`}>
-                    <span className="text-[10px] font-bold text-slate-500 tracking-wider uppercase font-mono">5H QUOTA</span>
-                    <span className={`text-2xl font-bold block mt-1.5 tracking-tight font-mono ${
+                  <div className="bg-slate-950/35 rounded-2xl p-4 text-left" id={`quota-box-5h-${account.id}`}>
+                    <span className="text-[10px] font-bold text-slate-500 tracking-wider uppercase tabular-nums">5 小时额度</span>
+                    <span className={`text-2xl font-bold block mt-1.5 tracking-tight tabular-nums ${
                       fiveHourPct <= 25 ? 'text-rose-400' : fiveHourPct >= 70 ? 'text-emerald-400' : 'text-amber-300'
                     }`}>{fiveHourPct}%</span>
-                    <div className="h-[3px] bg-slate-950/40 border border-white/[0.03] shadow-[inset_0_1px_1px_rgba(0,0,0,0.5)] rounded-full overflow-hidden mt-3">
+                    <div className="h-1.5 bg-slate-950/50 rounded-full overflow-hidden mt-3">
                       <div className={`h-full rounded-full ${color5h}`} style={{ width: `${fiveHourPct}%` }} />
                     </div>
-                    <span className="text-[10px] text-slate-500 mt-2 block font-medium">Reset in {account.resetInFiveHour}</span>
+                    <span className="text-[10px] text-slate-500 mt-2 block font-medium">重置: {account.resetInFiveHour}</span>
                   </div>
                   )}
 
                   {/* WEEKLY QUOTA */}
                   {weeklyPct !== null && (
-                  <div className="bg-slate-950/20 border border-white/5 rounded-2xl p-4 text-left" id={`quota-box-weekly-${account.id}`}>
-                    <span className="text-[10px] font-bold text-slate-500 tracking-wider uppercase font-mono">WEEKLY</span>
-                    <span className={`text-2xl font-bold block mt-1.5 tracking-tight font-mono ${
+                  <div className="bg-slate-950/35 rounded-2xl p-4 text-left" id={`quota-box-weekly-${account.id}`}>
+                    <span className="text-[10px] font-bold text-slate-500 tracking-wider uppercase tabular-nums">周额度</span>
+                    <span className={`text-2xl font-bold block mt-1.5 tracking-tight tabular-nums ${
                       weeklyPct !== null && weeklyPct <= 25 ? 'text-rose-400' : weeklyPct !== null && weeklyPct >= 70 ? 'text-emerald-400' : 'text-amber-300'
                     }`}>
                       {weeklyPct !== null ? `${weeklyPct}%` : '--'}
                     </span>
-                    <div className="h-[3px] bg-slate-950/40 border border-white/[0.03] shadow-[inset_0_1px_1px_rgba(0,0,0,0.5)] rounded-full overflow-hidden mt-3">
+                    <div className="h-1.5 bg-slate-950/50 rounded-full overflow-hidden mt-3">
                       <div className={`h-full rounded-full ${colorWeekly}`} style={{ width: `${weeklyPct || 0}%` }} />
                     </div>
                     <span className="text-[10px] text-slate-500 mt-2 block font-medium">
-                      {weeklyPct !== null ? `Reset in ${account.resetInWeekly}` : 'No history'}
+                      {weeklyPct !== null ? `重置: ${account.resetInWeekly}` : '暂无数据'}
                     </span>
                   </div>
                   )}
                   {fiveHourPct === null && weeklyPct === null && (
-                    <div className="bg-slate-950/20 border border-white/5 rounded-2xl p-4 text-left text-xs text-slate-400">
-                      No quota windows were returned for this account.
+                    <div className="bg-slate-950/35 rounded-2xl p-4 text-left text-xs text-slate-400">
+                      该账号未返回额度窗口数据。
                     </div>
                   )}
                 </div>
@@ -489,7 +507,7 @@ export default function AccountsView({
                   id={`action-refresh-${account.id}`}
                 >
             <RefreshCw className={`w-3.5 h-3.5 ${isCardRefreshing ? 'animate-spin text-blue-400' : ''}`} />
-                  {account.status === 'SUSPENDED' ? 'Reauthorize first' : 'Refresh'}
+                  {account.status === 'SUSPENDED' ? '请先重新授权' : '刷新'}
                 </motion.button>
 
                 {account.status === 'SUSPENDED' && onReauthorizeAccount && (
@@ -506,7 +524,7 @@ export default function AccountsView({
                     id={`action-reauthorize-${account.id}`}
                   >
                     <KeyRound className="w-3.5 h-3.5" />
-                    Reauthorize
+                    重新授权
                   </motion.button>
                 )}
 
@@ -518,14 +536,14 @@ export default function AccountsView({
                     id={`action-current-${account.id}`}
                   >
                     <Star className="w-3.5 h-3.5 fill-blue-300" />
-                    Current
+                    当前
                   </motion.button>
                 ) : (
                   <motion.button
                     onClick={() => void handleSwitchAccount(account.id)}
                     disabled={account.status === 'SUSPENDED' || switchingId !== null || deletingId === account.id}
                     aria-busy={switchingId === account.id}
-                    title={account.status === 'SUSPENDED' ? 'Reauthorize this account before switching' : 'Switch to this account'}
+                    title={account.status === 'SUSPENDED' ? '该账号需要重新授权后才能切换' : '切换到此账号'}
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.95 }}
                     transition={{ type: 'spring', stiffness: 450, damping: 20 }}
@@ -533,7 +551,7 @@ export default function AccountsView({
                     id={`action-switch-${account.id}`}
                   >
                     <ArrowLeftRight className={`w-3.5 h-3.5 ${switchingId === account.id ? 'animate-pulse' : ''}`} />
-                    {switchingId === account.id ? 'Switching...' : account.status === 'SUSPENDED' ? 'Unavailable' : 'Switch'}
+                    {switchingId === account.id ? '切换中...' : account.status === 'SUSPENDED' ? '不可用' : '切换'}
                   </motion.button>
                 )}
 
@@ -565,18 +583,26 @@ export default function AccountsView({
             </motion.div>
           );
         })}
+        </AnimatePresence>
       </div>
 
       {/* Add Account Modal Overlay */}
+      <AnimatePresence>
       {showAddModal && (
-          <div
+          <motion.div
             className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4"
             id="add-account-modal-overlay"
+            initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.15 }}
           >
             <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
+              initial={{ scale: 0.94, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              className="backdrop-blur-2xl bg-slate-900/90 border border-white/10 rounded-3xl p-8 w-full max-w-lg shadow-2xl relative text-white select-none"
+              exit={{ scale: 0.96, opacity: 0 }}
+              transition={{ duration: 0.16, ease: 'easeOut' }}
+              className="glass-card backdrop-blur-2xl bg-slate-900/90 border border-white/10 rounded-3xl p-8 w-full max-w-lg shadow-2xl relative text-white select-none"
               id="add-account-modal"
               role="dialog"
               aria-modal="true"
@@ -605,7 +631,7 @@ export default function AccountsView({
               <form onSubmit={handleAddSubmit} className="space-y-5" id="add-account-form">
                 {/* Email input */}
                 <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-300 tracking-wider uppercase font-mono block ml-1">
+                  <label className="text-xs font-bold text-slate-300 tracking-wider uppercase tabular-nums block ml-1">
                     电子邮箱 (Email Address)
                   </label>
                   <div className="relative">
@@ -626,7 +652,7 @@ export default function AccountsView({
 
                 {/* Name input */}
                 <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-300 tracking-wider uppercase font-mono block ml-1">
+                  <label className="text-xs font-bold text-slate-300 tracking-wider uppercase tabular-nums block ml-1">
                     展示名称 (Display Name)
                   </label>
                   <div className="relative">
@@ -648,7 +674,7 @@ export default function AccountsView({
                 {/* Plan select */}
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-300 tracking-wider uppercase font-mono block ml-1">
+                    <label className="text-xs font-bold text-slate-300 tracking-wider uppercase tabular-nums block ml-1">
                       {oauthMode ? '套餐（OAuth 自动识别）' : '选择方案 / 套餐 (Plan)'}
                     </label>
                     {oauthMode ? (
@@ -675,7 +701,7 @@ export default function AccountsView({
 
                   {/* Priority Select */}
                   <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-300 tracking-wider uppercase font-mono block ml-1">
+                    <label className="text-xs font-bold text-slate-300 tracking-wider uppercase tabular-nums block ml-1">
                       {oauthMode ? '轮转优先级（自动计算）' : '轮转优先级 (Priority)'}
                     </label>
                     {oauthMode ? (
@@ -764,8 +790,9 @@ export default function AccountsView({
                 </div>
               </form>
             </motion.div>
-          </div>
+          </motion.div>
       )}
+      </AnimatePresence>
     </div>
   );
 }

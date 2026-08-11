@@ -1,5 +1,55 @@
 @import "tailwindcss";
 
+/* Inter for Latin glyphs (closest open-source match to SF Pro); CJK falls
+   back to the best system font per platform. */
+@theme {
+  --font-sans: "Inter", "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Frameless-window drag regions. */
+.app-drag {
+  -webkit-app-region: drag;
+}
+
+.app-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/*
+ * iOS-style glass finish: a 1px hairline ring that is lit from above
+ * (bright top edge, faint sides, subtle bottom reflection) instead of a
+ * flat uniform border. Follows the element's own border radius.
+ */
+.glass-card {
+  position: relative;
+}
+
+.glass-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.22),
+    rgba(255, 255, 255, 0.055) 28%,
+    rgba(255, 255, 255, 0.015) 62%,
+    rgba(255, 255, 255, 0.08)
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
 /* Custom scrollbars for a beautiful, premium dark theme aesthetic */
 ::-webkit-scrollbar {
   width: 6px;

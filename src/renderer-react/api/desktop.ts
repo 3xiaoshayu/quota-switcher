@@ -24,8 +24,6 @@ interface DesktopQuota {
   weekly_window_minutes?: number | null;
   weekly_window_present?: boolean;
   weekly_blocks_hourly?: boolean;
-  reset_credits_available?: number | null;
-  reset_credits_next_expires_at?: string | number | null;
   plan_type?: string | null;
 }
 
@@ -43,14 +41,13 @@ interface DesktopAccount {
   reauth_reason?: string | null;
   quota?: DesktopQuota | null;
   quota_error?: { code?: string | null; message?: string | null; timestamp?: string | number | null } | null;
-  reset_credits?: { available_count?: number | null; next_expires_at?: string | number | null } | null;
-  reset_credits_error?: { message?: string | null; timestamp?: string | number | null } | null;
   quota_next_retry_at?: string | number | null;
   token_status?: {
     accessAvailable?: boolean;
     refreshAvailable?: boolean;
     expired?: boolean;
     expiryDate?: string | number | null;
+    issuedAt?: number | null;
     timeLeft?: number | null;
   };
 }
@@ -68,19 +65,6 @@ type DesktopOAuthResult = {
   account: DesktopAccount | null;
   mismatch?: boolean;
   targetAccountId?: string | null;
-};
-
-type DesktopSubscriptionRefreshResult = {
-  changed?: boolean;
-  plan_type?: string | null;
-  subscription_active_until?: string | number | null;
-};
-
-type DesktopResetConsumeResult = {
-  consumed: boolean;
-  balance_refreshed: boolean;
-  refresh_error?: string | null;
-  reset_credits?: { available_count?: number | null; next_expires_at?: string | number | null } | null;
 };
 
 type DesktopTokenRefreshResult = {
@@ -114,6 +98,9 @@ interface DesktopBridge {
   openExternal: (url: string) => Promise<ApiResponse<boolean>>;
   openLogs: () => Promise<ApiResponse<boolean>>;
   getStorageDiagnostics: () => Promise<ApiResponse<StorageDiagnostic[]>>;
+  minimizeWindow: () => Promise<ApiResponse<boolean>>;
+  toggleMaximizeWindow: () => Promise<ApiResponse<boolean>>;
+  closeWindow: () => Promise<ApiResponse<boolean>>;
   listAccounts: () => Promise<ApiResponse<DesktopAccount[]>>;
   getCurrentAccount: () => Promise<ApiResponse<DesktopAccount | null>>;
   addAccount: () => Promise<ApiResponse<DesktopOAuthResult>>;
@@ -137,8 +124,6 @@ interface DesktopBridge {
   }>>>;
   refreshToken: (id: string) => Promise<ApiResponse<DesktopTokenRefreshResult>>;
   refreshAllTokens: (force?: boolean) => Promise<ApiResponse<DesktopTokenRefreshAllResult>>;
-  consumeResetCredit: (id: string) => Promise<ApiResponse<DesktopResetConsumeResult>>;
-  refreshSubscription: (id: string, force?: boolean) => Promise<ApiResponse<DesktopSubscriptionRefreshResult>>;
   getAutoSwitchConfig: () => Promise<ApiResponse<DesktopAutoSwitchConfig>>;
   saveAutoSwitchConfig: (cfg: DesktopAutoSwitchConfig) => Promise<ApiResponse<boolean>>;
   runAutoSwitchTick: () => Promise<ApiResponse<AutoSwitchRunResult>>;
@@ -286,7 +271,7 @@ function toDate(value: string | number | null | undefined): Date | null {
 
 export function formatDateTime(value: string | number | null | undefined): string {
   const date = toDate(value);
-  if (!date) return 'Unknown';
+  if (!date) return '未知';
   return new Intl.DateTimeFormat('zh-CN', {
     month: '2-digit',
     day: '2-digit',
@@ -298,8 +283,8 @@ export function formatDateTime(value: string | number | null | undefined): strin
 
 export function formatDuration(seconds: unknown): string {
   const value = Number(seconds);
-  if (!Number.isFinite(value)) return 'Unknown';
-  if (value <= 0) return 'Expired';
+  if (!Number.isFinite(value)) return '未知';
+  if (value <= 0) return '已过期';
   if (value < 3600) return `${Math.max(1, Math.ceil(value / 60))}m`;
   if (value < 86400) return `${Math.floor(value / 3600)}h ${Math.ceil((value % 3600) / 60)}m`;
   return `${Math.floor(value / 86400)}d ${Math.floor((value % 86400) / 3600)}h`;
@@ -307,9 +292,27 @@ export function formatDuration(seconds: unknown): string {
 
 function formatReset(value: string | number | null | undefined): string {
   const date = toDate(value);
-  if (!date) return 'Waiting';
+  if (!date) return '等待中';
   const seconds = Math.floor((date.getTime() - Date.now()) / 1000);
   return formatDuration(seconds);
+}
+
+// Deterministic gradient per account for the letter avatars.
+const AVATAR_GRADIENTS = [
+  'from-blue-500 to-cyan-400',
+  'from-violet-500 to-purple-400',
+  'from-emerald-500 to-teal-400',
+  'from-amber-500 to-orange-400',
+  'from-rose-500 to-pink-400',
+  'from-indigo-500 to-blue-400',
+  'from-fuchsia-500 to-pink-400',
+  'from-sky-500 to-cyan-400',
+];
+
+export function avatarGradient(id: string): string {
+  let hash = 0;
+  for (let i = 0; i < id.length; i += 1) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  return AVATAR_GRADIENTS[hash % AVATAR_GRADIENTS.length];
 }
 
 function planForUi(planType: string | null | undefined): AccountQuota['plan'] {
@@ -363,13 +366,21 @@ export function mapAccountForUi(
   const hasPresence = account.quota?.hourly_window_present !== undefined || account.quota?.weekly_window_present !== undefined;
   const hourlyPresent = !hasPresence || account.quota?.hourly_window_present === true;
   const weeklyPresent = !hasPresence || account.quota?.weekly_window_present === true;
-  const resetCredits = Number(
-    account.reset_credits?.available_count
-    ?? account.quota?.reset_credits_available
-    ?? 0,
-  );
   const quotaError = account.quota_error?.message || account.quota_error?.code || null;
   const tokenStatus = account.token_status || {};
+  const expirySeconds = typeof tokenStatus.expiryDate === 'number' ? tokenStatus.expiryDate : null;
+  const issuedSeconds = typeof tokenStatus.issuedAt === 'number' ? tokenStatus.issuedAt : null;
+  let tokenValidityPct: number | null = null;
+  if (tokenStatus.expired) {
+    tokenValidityPct = 0;
+  } else if (
+    typeof tokenStatus.timeLeft === 'number'
+    && expirySeconds !== null
+    && issuedSeconds !== null
+    && expirySeconds > issuedSeconds
+  ) {
+    tokenValidityPct = Math.max(0, Math.min(100, (tokenStatus.timeLeft / (expirySeconds - issuedSeconds)) * 100));
+  }
 
   return {
     id: account.id,
@@ -385,18 +396,16 @@ export function mapAccountForUi(
     weeklyBlocksFiveHour: !!account.quota?.weekly_blocks_hourly,
     priority: priorityForUi(account),
     plan: planForUi(account.plan_type || account.quota?.plan_type),
-    tokenValidity: tokenStatus.expired ? 'Expired' : `${formatDuration(tokenStatus.timeLeft)} left`,
+    tokenValidity: tokenStatus.expired ? '已过期' : `剩余 ${formatDuration(tokenStatus.timeLeft)}`,
+    tokenValidityPct,
     resetInFiveHour: formatReset(account.quota?.hourly_reset_time),
     resetInWeekly: formatReset(account.quota?.weekly_reset_time),
     warning: account.requires_reauth
-      ? 'Account requires reauthorization before tokens can be refreshed.'
+      ? '该账号需要重新授权后才能刷新 Token。'
       : account.reauth_reason || quotaError,
     isCurrent: !!currentAccount && currentAccount.id === account.id,
     quotaUpdatedAt: account.usage_updated_at,
     quotaNextRetryAt: account.quota_next_retry_at,
-    subscriptionActiveUntil: account.subscription_active_until,
-    resetCreditsAvailable: resetCredits,
-    resetCreditsNextExpiresAt: account.reset_credits?.next_expires_at || account.quota?.reset_credits_next_expires_at || null,
     quotaError,
     tokenExpired: !!tokenStatus.expired,
     tokenAccessAvailable: !!tokenStatus.accessAvailable,
@@ -528,14 +537,6 @@ export const desktopApi = {
     return expectData(await bridge().switchAccount(id), 'Switch account');
   },
 
-  async consumeResetCredit(id: string) {
-    return expectData(await bridge().consumeResetCredit(id), 'Consume reset credit');
-  },
-
-  async refreshSubscription(id: string, force = true) {
-    return expectData(await bridge().refreshSubscription(id, force), 'Refresh subscription');
-  },
-
   async saveAutoSwitchConfig(config: DesktopAutoSwitchConfig) {
     return expectData(await bridge().saveAutoSwitchConfig(config), 'Save auto-switch config');
   },
@@ -570,6 +571,18 @@ export const desktopApi = {
 
   async openLogs() {
     return expectData(await bridge().openLogs(), 'Open log folder');
+  },
+
+  async minimizeWindow() {
+    return expectData(await bridge().minimizeWindow(), 'Minimize window');
+  },
+
+  async toggleMaximizeWindow() {
+    return expectData(await bridge().toggleMaximizeWindow(), 'Toggle maximize');
+  },
+
+  async closeWindow() {
+    return expectData(await bridge().closeWindow(), 'Close window');
   },
 
   subscribe(events: {

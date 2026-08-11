@@ -4,41 +4,39 @@ import {
   Users, 
   Bell, 
   BarChart3, 
-  Cloud, 
-  Database, 
-  AlertTriangle, 
   MoreHorizontal, 
   RefreshCw, 
-  RotateCcw,
-  Sparkles,
   Activity
 } from 'lucide-react';
 import { AccountQuota } from '../types';
+import { avatarGradient, formatDateTime } from '../api/desktop';
 
 interface QuotasProps {
   accounts: AccountQuota[];
   onRefreshAccount: (id: string) => void | Promise<void>;
-  onResetAccount: (id: string) => void | Promise<void>;
   onRefreshToken?: (id: string) => void | Promise<void>;
-  onRefreshSubscription?: (id: string) => void | Promise<void>;
   onRefreshAll: () => void | Promise<void>;
   isRefreshingAll: boolean;
+}
+
+function toEpochMs(value: string | number | null | undefined): number | null {
+  if (value == null || value === '') return null;
+  const numeric = typeof value === 'number' ? value : Number(value);
+  if (Number.isFinite(numeric)) return numeric < 1e12 ? numeric * 1000 : numeric;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.getTime();
 }
 
 export default function QuotasView({
   accounts,
   onRefreshAccount,
-  onResetAccount,
   onRefreshToken,
-  onRefreshSubscription,
   onRefreshAll,
   isRefreshingAll,
 }: QuotasProps) {
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
   const [refreshingCardId, setRefreshingCardId] = useState<string | null>(null);
-  const [refreshingSubscriptionId, setRefreshingSubscriptionId] = useState<string | null>(null);
   const [refreshingTokenId, setRefreshingTokenId] = useState<string | null>(null);
-  const [resettingId, setResettingId] = useState<string | null>(null);
 
   const gridAccounts = accounts;
 
@@ -66,6 +64,11 @@ export default function QuotasView({
   );
 
   const syncedCount = accounts.filter(acc => acc.quotaUpdatedAt && !acc.quotaError).length;
+  const lastUpdatedAtMs = accounts.reduce<number | null>((latest, account) => {
+    const updated = toEpochMs(account.quotaUpdatedAt);
+    if (updated === null) return latest;
+    return latest === null || updated > latest ? updated : latest;
+  }, null);
 
   const handleCardRefresh = async (id: string) => {
     setRefreshingCardId(id);
@@ -78,16 +81,6 @@ export default function QuotasView({
     }
   };
 
-  const handleSubscriptionRefresh = async (id: string) => {
-    if (!onRefreshSubscription) return;
-    setRefreshingSubscriptionId(id);
-    try {
-      await onRefreshSubscription(id);
-    } finally {
-      setRefreshingSubscriptionId(null);
-    }
-  };
-
   const handleTokenRefresh = async (id: string) => {
     if (!onRefreshToken || refreshingTokenId) return;
     setRefreshingTokenId(id);
@@ -95,16 +88,6 @@ export default function QuotasView({
       await onRefreshToken(id);
     } finally {
       setRefreshingTokenId(null);
-    }
-  };
-
-  const handleReset = async (id: string) => {
-    if (resettingId) return;
-    setResettingId(id);
-    try {
-      await onResetAccount(id);
-    } finally {
-      setResettingId(null);
     }
   };
 
@@ -148,35 +131,11 @@ export default function QuotasView({
     }
   };
 
-  const getAccountIcon = (id: string) => {
-    const baseClasses = "w-11 h-11 rounded-2xl flex items-center justify-center border shadow-md";
-    if (id === '1') {
-      return (
-        <div className={`${baseClasses} bg-blue-500/15 border-blue-500/25 text-blue-400`}>
-          <Cloud className="w-5 h-5" />
-        </div>
-      );
-    }
-    if (id === '2') {
-      return (
-        <div className={`${baseClasses} bg-amber-500/15 border-amber-500/25 text-amber-400`}>
-          <Database className="w-5 h-5" />
-        </div>
-      );
-    }
-    if (id === '3') {
-      return (
-        <div className={`${baseClasses} bg-rose-500/15 border-rose-500/25 text-rose-400`}>
-          <AlertTriangle className="w-5 h-5 animate-bounce-slow" />
-        </div>
-      );
-    }
-    return (
-      <div className={`${baseClasses} bg-cyan-500/15 border-cyan-500/25 text-cyan-400`}>
-        <Sparkles className="w-5 h-5" />
-      </div>
-    );
-  };
+  const getAccountIcon = (account: AccountQuota) => (
+    <div className={`w-11 h-11 rounded-2xl flex items-center justify-center bg-gradient-to-br ${avatarGradient(account.id)} text-white font-bold text-base shadow-md`}>
+      {(account.name.charAt(0) || '?').toUpperCase()}
+    </div>
+  );
 
   return (
     <div className="flex-1 p-8 overflow-y-auto" id="quotas-view-container">
@@ -188,11 +147,13 @@ export default function QuotasView({
           </h2>
           <div className="flex items-center gap-3 mt-1.5 text-xs text-slate-300 font-medium font-sans" id="quotas-meta-row">
             <span className="flex items-center gap-1 text-slate-200">
-              <RefreshCw className="w-3.5 h-3.5 text-blue-400 animate-spin-slow" />
+              <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
               已同步 {syncedCount}/{accounts.length}
             </span>
-            <span className="text-slate-400">|</span>
-            <span className="text-slate-400">Last updated: {syncedCount ? 'Synced' : 'Waiting for sync'}</span>
+            <span className="text-slate-500">·</span>
+            <span className="text-slate-400">
+              最近同步：{lastUpdatedAtMs !== null ? formatDateTime(lastUpdatedAtMs) : '等待同步'}
+            </span>
           </div>
         </div>
 
@@ -206,79 +167,79 @@ export default function QuotasView({
           id="quotas-btn-refresh-all-secondary"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingAll ? 'animate-spin text-blue-400' : ''}`} />
-          Refresh All
+          全部刷新
         </motion.button>
       </div>
 
       {/* Top 3 Metric Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8 select-none" id="quotas-metrics-grid">
         {/* Total Accounts */}
-        <motion.div 
-          whileHover={{ y: -4, scale: 1.02, borderColor: 'rgba(255,255,255,0.1)' }}
-          whileTap={{ scale: 0.98 }}
-          transition={{ type: 'spring', stiffness: 450, damping: 25 }}
-          className="backdrop-blur-xl bg-slate-900/40 border border-white/5 rounded-3xl p-5 flex items-center gap-4 hover:border-white/10 transition-all shadow-xl group cursor-pointer"
+        <div 
+          className="glass-card backdrop-blur-xl bg-slate-900/40 border border-white/5 rounded-3xl p-5 flex items-center gap-4 shadow-xl group"
           id="quota-stat-card-total"
         >
-          <div className="w-12 h-12 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 group-hover:scale-105 transition-all">
+          <div className="w-12 h-12 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
             <Users className="w-5 h-5" />
           </div>
           <div className="flex flex-col">
-            <span className="text-[10px] font-bold text-slate-400 tracking-wider uppercase font-mono">TOTAL ACCOUNTS</span>
+            <span className="text-[10px] font-bold text-slate-400 tracking-wider uppercase tabular-nums">账号总数</span>
             <span className="text-2xl font-bold text-white mt-0.5 tracking-tight">{totalAccounts}</span>
           </div>
-        </motion.div>
+        </div>
 
         {/* Action Required */}
-        <motion.div 
-          whileHover={{ y: -4, scale: 1.02, borderColor: 'rgba(255,255,255,0.1)' }}
-          whileTap={{ scale: 0.98 }}
-          transition={{ type: 'spring', stiffness: 450, damping: 25 }}
-          className="backdrop-blur-xl bg-slate-900/40 border border-white/5 rounded-3xl p-5 flex items-center gap-4 hover:border-white/10 transition-all shadow-xl group cursor-pointer"
+        <div 
+          className="glass-card backdrop-blur-xl bg-slate-900/40 border border-white/5 rounded-3xl p-5 flex items-center gap-4 shadow-xl group"
           id="quota-stat-card-action"
         >
-          <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400 group-hover:scale-105 transition-all">
+          <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
             <Bell className="w-5 h-5" />
           </div>
           <div className="flex flex-col">
-            <span className="text-[10px] font-bold text-slate-400 tracking-wider uppercase font-mono">ACTION REQUIRED</span>
+            <span className="text-[10px] font-bold text-slate-400 tracking-wider uppercase tabular-nums">需要处理</span>
             <span className="text-2xl font-bold text-white mt-0.5 tracking-tight">{actionRequiredCount}</span>
           </div>
-        </motion.div>
+        </div>
 
         {/* Avg Remaining */}
-        <motion.div 
-          whileHover={{ y: -4, scale: 1.02, borderColor: 'rgba(255,255,255,0.1)' }}
-          whileTap={{ scale: 0.98 }}
-          transition={{ type: 'spring', stiffness: 450, damping: 25 }}
-          className="backdrop-blur-xl bg-slate-900/40 border border-white/5 rounded-3xl p-5 flex items-center gap-4 hover:border-white/10 transition-all shadow-xl group cursor-pointer"
+        <div 
+          className="glass-card backdrop-blur-xl bg-slate-900/40 border border-white/5 rounded-3xl p-5 flex items-center gap-4 shadow-xl group"
           id="quota-stat-card-remaining"
         >
-          <div className="w-12 h-12 rounded-2xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center text-teal-400 group-hover:scale-105 transition-all">
+          <div className="w-12 h-12 rounded-2xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center text-teal-400">
             <BarChart3 className="w-5 h-5" />
           </div>
           <div className="flex flex-col">
-            <span className="text-[10px] font-bold text-slate-400 tracking-wider uppercase font-mono">AVG REMAINING</span>
+            <span className="text-[10px] font-bold text-slate-400 tracking-wider uppercase tabular-nums">平均剩余</span>
             <span className="text-2xl font-bold text-white mt-0.5 tracking-tight">{avgRemaining}%</span>
           </div>
-        </motion.div>
+        </div>
       </div>
+
+      {/* Empty state */}
+      {accounts.length === 0 && (
+        <div className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl px-8 py-16 flex flex-col items-center text-center shadow-xl" id="quotas-empty-state">
+          <div className="w-14 h-14 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 mb-4">
+            <Users className="w-6 h-6" />
+          </div>
+          <h3 className="text-sm font-bold text-white">还没有账号</h3>
+          <p className="mt-2 max-w-xs text-xs leading-5 text-slate-400">前往“账号管理”页面添加你的第一个 Codex 账号，额度状态会在这里展示。</p>
+        </div>
+      )}
 
       {/* Grid of Main 4 Account Cards */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6" id="quotas-accounts-grid">
+        <AnimatePresence initial={false}>
         {gridAccounts.map((account) => {
           const isCardRefreshing = refreshingCardId === account.id;
-          const isSubscriptionRefreshing = refreshingSubscriptionId === account.id;
           const fiveHourPercentage = account.fiveHourQuotaRemaining == null
             ? null
             : Math.min((account.fiveHourQuotaRemaining / account.fiveHourQuotaTotal) * 100, 100);
           const weeklyPercentage = account.weeklyQuotaRemaining == null
             ? null
             : Math.min((account.weeklyQuotaRemaining / account.weeklyQuotaTotal) * 100, 100);
-          const isExceeded = account.status === 'EXPIRED';
           const fiveHourExceeded = fiveHourPercentage === 0;
           const weeklyExceeded = weeklyPercentage === 0;
-          const hasResetCredits = Number(account.resetCreditsAvailable || 0) > 0;
           const tokenRefreshUnavailable = account.status === 'SUSPENDED' || account.tokenRefreshAvailable === false;
           const accountRequiresReauthorization = account.status === 'SUSPENDED';
 
@@ -303,9 +264,12 @@ export default function QuotasView({
             <motion.div
               layout
               key={account.id}
+              initial={{ opacity: 0, scale: 0.97 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.97 }}
               whileHover={{ y: -4, borderColor: 'rgba(255,255,255,0.12)' }}
-              transition={{ type: 'spring', stiffness: 350, damping: 25 }}
-              className="backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col shadow-2xl relative overflow-hidden transition-all duration-300 group"
+              transition={{ type: 'spring', stiffness: 350, damping: 28 }}
+              className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col shadow-2xl relative overflow-hidden group"
               id={`quota-account-card-${account.id}`}
             >
               {/* Highlight Overlay on hover */}
@@ -314,7 +278,7 @@ export default function QuotasView({
               {/* Card Header Row */}
               <div className="flex items-start justify-between mb-6" id={`quota-card-header-${account.id}`}>
                 <div className="flex items-center gap-4" id={`quota-card-meta-${account.id}`}>
-                  {getAccountIcon(account.id)}
+                  {getAccountIcon(account)}
                   <div className="flex flex-col select-all" id={`quota-card-titles-${account.id}`}>
                     <h3 className="font-bold text-slate-100 tracking-wide text-sm font-sans">{account.name}</h3>
                     <span className="text-xs text-slate-400 mt-0.5">{account.email}</span>
@@ -329,12 +293,12 @@ export default function QuotasView({
                 {fiveHourPercentage !== null && (
                 <div className="space-y-1.5" id={`quota-5h-row-${account.id}`}>
                   <div className="flex items-center justify-between text-xs font-semibold" id={`quota-5h-labels-${account.id}`}>
-                    <span className="text-slate-400">5h Quota</span>
-                    <span className="text-slate-300 font-mono">
-                      {fiveHourExceeded ? 'EXCEEDED' : `${Math.round(fiveHourPercentage)}% remaining`}
+                    <span className="text-slate-400">5 小时额度</span>
+                    <span className="text-slate-300 tabular-nums">
+                      {fiveHourExceeded ? '已用尽' : `剩余 ${Math.round(fiveHourPercentage)}%`}
                     </span>
                   </div>
-                  <div className="h-1 bg-slate-950/40 border border-white/[0.03] shadow-[inset_0_1px_1px_rgba(0,0,0,0.5)] rounded-full overflow-hidden relative" id={`quota-5h-bar-bg-${account.id}`}>
+                  <div className="h-1.5 bg-slate-950/50 rounded-full overflow-hidden relative" id={`quota-5h-bar-bg-${account.id}`}>
                     <motion.div 
                       initial={{ width: 0 }}
                       animate={{ width: `${fiveHourPercentage}%` }}
@@ -349,12 +313,12 @@ export default function QuotasView({
                 {weeklyPercentage !== null && (
                 <div className="space-y-1.5 animate-pulse-slow" id={`quota-weekly-row-${account.id}`}>
                   <div className="flex items-center justify-between text-xs font-semibold" id={`quota-weekly-labels-${account.id}`}>
-                    <span className="text-slate-400">Weekly Quota</span>
-                    <span className="text-slate-300 font-mono">
-                      {weeklyExceeded ? 'EXCEEDED' : `${Math.round(weeklyPercentage)}% remaining`}
+                    <span className="text-slate-400">周额度</span>
+                    <span className="text-slate-300 tabular-nums">
+                      {weeklyExceeded ? '已用尽' : `剩余 ${Math.round(weeklyPercentage)}%`}
                     </span>
                   </div>
-                  <div className="h-1 bg-slate-950/40 border border-white/[0.03] shadow-[inset_0_1px_1px_rgba(0,0,0,0.5)] rounded-full overflow-hidden relative" id={`quota-weekly-bar-bg-${account.id}`}>
+                  <div className="h-1.5 bg-slate-950/50 rounded-full overflow-hidden relative" id={`quota-weekly-bar-bg-${account.id}`}>
                     <motion.div 
                       initial={{ width: 0 }}
                       animate={{ width: `${weeklyPercentage}%` }}
@@ -365,43 +329,27 @@ export default function QuotasView({
                 </div>
                 )}
                 {fiveHourPercentage === null && weeklyPercentage === null && (
-                  <div className="rounded-xl border border-white/5 bg-slate-950/20 px-3 py-4 text-xs text-slate-400">
-                    No quota windows were returned for this account.
+                  <div className="rounded-xl bg-slate-950/35 px-3 py-4 text-xs text-slate-400">
+                    该账号未返回额度窗口数据。
                   </div>
                 )}
               </div>
 
               {/* Action Buttons Row */}
               <div className="flex items-center gap-3 mt-6 pt-4 border-t border-white/5" id={`quota-actions-row-${account.id}`}>
-                {isExceeded && hasResetCredits ? (
-                  <motion.button
-                    onClick={() => void handleReset(account.id)}
-                    disabled={resettingId !== null}
-                    aria-busy={resettingId === account.id}
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.96 }}
-                    transition={{ type: 'spring', stiffness: 400, damping: 20 }}
-                    className="flex-1 py-3 bg-rose-500/10 hover:bg-rose-500/15 border border-rose-500/25 text-rose-300 hover:text-rose-200 text-xs font-bold rounded-2xl flex items-center justify-center gap-2 cursor-pointer transition-all"
-                    id={`quota-btn-reset-${account.id}`}
-                  >
-                    <RotateCcw className={`w-3.5 h-3.5 ${resettingId === account.id ? 'animate-spin' : ''}`} />
-                    {resettingId === account.id ? 'Resetting...' : 'Reset Account'}
-                  </motion.button>
-                ) : (
-                  <motion.button
-                    onClick={() => handleCardRefresh(account.id)}
-                    disabled={isCardRefreshing || accountRequiresReauthorization}
-                    title={accountRequiresReauthorization ? 'Reauthorize this account before refreshing quotas' : 'Refresh quota'}
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.96 }}
-                    transition={{ type: 'spring', stiffness: 400, damping: 20 }}
-                    className="flex-1 py-3 bg-blue-500/10 hover:bg-blue-500/15 border border-blue-500/25 disabled:bg-white/5 disabled:border-white/5 disabled:text-slate-500 disabled:cursor-not-allowed text-blue-300 hover:text-blue-200 text-xs font-bold rounded-2xl flex items-center justify-center gap-2 cursor-pointer transition-all"
-                    id={`quota-btn-refresh-${account.id}`}
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isCardRefreshing ? 'animate-spin' : ''}`} />
-                    {isCardRefreshing ? 'Refreshing...' : accountRequiresReauthorization ? 'Reauthorize to refresh' : 'Quick Refresh'}
-                  </motion.button>
-                )}
+                <motion.button
+                  onClick={() => handleCardRefresh(account.id)}
+                  disabled={isCardRefreshing || accountRequiresReauthorization}
+                  title={accountRequiresReauthorization ? '该账号需要重新授权后才能刷新额度' : '刷新额度'}
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.96 }}
+                  transition={{ type: 'spring', stiffness: 400, damping: 20 }}
+                  className="flex-1 py-3 bg-blue-500/10 hover:bg-blue-500/15 border border-blue-500/25 disabled:bg-white/5 disabled:border-white/5 disabled:text-slate-500 disabled:cursor-not-allowed text-blue-300 hover:text-blue-200 text-xs font-bold rounded-xl flex items-center justify-center gap-2 cursor-pointer transition-all"
+                  id={`quota-btn-refresh-${account.id}`}
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isCardRefreshing ? 'animate-spin' : ''}`} />
+                  {isCardRefreshing ? '刷新中...' : accountRequiresReauthorization ? '重新授权后刷新' : '快速刷新'}
+                </motion.button>
 
                 {/* More Action Popover Toggle */}
                 <div className="relative" id={`quota-more-wrapper-${account.id}`}>
@@ -410,7 +358,7 @@ export default function QuotasView({
                     whileHover={{ scale: 1.06 }}
                     whileTap={{ scale: 0.94 }}
                     transition={{ type: 'spring', stiffness: 400, damping: 15 }}
-                    className="p-3 bg-white/5 hover:bg-white/10 rounded-2xl border border-white/5 text-slate-300 hover:text-white transition-all cursor-pointer"
+                    className="p-3 bg-white/5 hover:bg-white/10 rounded-xl border border-white/5 text-slate-300 hover:text-white transition-all cursor-pointer"
                     id={`quota-btn-more-${account.id}`}
                   >
                     <MoreHorizontal className="w-4 h-4" />
@@ -433,58 +381,12 @@ export default function QuotasView({
                           <button
                             onClick={() => {
                               setActiveMenuId(null);
-                              handleCardRefresh(account.id);
-                            }}
-                            disabled={isCardRefreshing || accountRequiresReauthorization}
-                            aria-busy={isCardRefreshing}
-                            title={accountRequiresReauthorization ? 'Reauthorize this account before refreshing quotas' : 'Sync quota now'}
-                            id={`quota-menu-sync-${account.id}`}
-                            className="w-full px-3 py-2 hover:bg-white/5 rounded-xl text-left text-xs flex items-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                          >
-                            <RefreshCw className={`w-3.5 h-3.5 text-blue-400 ${isCardRefreshing ? 'animate-spin' : ''}`} />
-                            立即同步
-                          </button>
-                          {onRefreshSubscription && (
-                            <button
-                            onClick={() => {
-                              setActiveMenuId(null);
-                              handleSubscriptionRefresh(account.id);
-                            }}
-                            disabled={isSubscriptionRefreshing || accountRequiresReauthorization}
-                            aria-busy={isSubscriptionRefreshing}
-                            title={accountRequiresReauthorization ? 'Reauthorize this account before refreshing the subscription' : 'Refresh subscription'}
-                            id={`quota-menu-refresh-subscription-${account.id}`}
-                            className="w-full px-3 py-2 hover:bg-white/5 rounded-xl text-left text-xs flex items-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                          >
-                              <Sparkles className={`w-3.5 h-3.5 text-cyan-400 ${isSubscriptionRefreshing ? 'animate-pulse' : ''}`} />
-                              刷新订阅/套餐
-                            </button>
-                          )}
-                          {hasResetCredits && (
-                            <button
-                              onClick={() => {
-                                setActiveMenuId(null);
-                                void handleReset(account.id);
-                              }}
-                              disabled={resettingId !== null}
-                              aria-busy={resettingId === account.id}
-                              id={`quota-menu-reset-credit-${account.id}`}
-                              className="w-full px-3 py-2 hover:bg-white/5 rounded-xl text-left text-xs flex items-center gap-2 cursor-pointer"
-                            >
-                              <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
-                              消耗重置额度
-                            </button>
-                          )}
-                          <div className="h-[1px] bg-white/5 my-1" />
-                          <button
-                            onClick={() => {
-                              setActiveMenuId(null);
                               void handleTokenRefresh(account.id);
                             }}
                             disabled={!onRefreshToken || refreshingTokenId !== null || tokenRefreshUnavailable}
                             aria-busy={refreshingTokenId === account.id}
                             id={`quota-menu-refresh-token-${account.id}`}
-                            title={tokenRefreshUnavailable ? 'Reauthorize this account before refreshing tokens' : 'Refresh token'}
+                            title={tokenRefreshUnavailable ? '该账号需要重新授权后才能刷新 Token' : '刷新 Token'}
                             className="w-full px-3 py-2 hover:bg-white/5 rounded-xl text-left text-xs text-rose-400 hover:text-rose-300 flex items-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           >
                             <Activity className={`w-3.5 h-3.5 ${refreshingTokenId === account.id ? 'animate-spin' : ''}`} />
@@ -499,6 +401,7 @@ export default function QuotasView({
             </motion.div>
           );
         })}
+        </AnimatePresence>
       </div>
     </div>
   );

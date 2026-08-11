@@ -42,12 +42,28 @@ import {
   Info, 
   ShieldAlert, 
   HelpCircle,
+  Trash2,
   Activity,
   RefreshCw,
   LoaderCircle
 } from 'lucide-react';
 
 const desktopBridgeAvailable = hasDesktopBridge();
+
+// Decode both dashboard backdrops up front so the first tab switch never
+// stalls on JPEG decoding.
+if (typeof Image !== 'undefined') {
+  for (const src of [japanBackground, settingsBackground]) {
+    const img = new Image();
+    img.src = src;
+  }
+}
+
+// Same gradients and images as before; rendered as two persistent layers so
+// switching tabs only animates GPU-composited opacity instead of a full
+// background-image cross-fade repaint.
+const JAPAN_BACKDROP = `linear-gradient(to bottom, rgba(15, 23, 42, 0.45), rgba(15, 23, 42, 0.7)), url('${japanBackground}')`;
+const FUJI_BACKDROP = `linear-gradient(to bottom, rgba(15, 23, 42, 0.45), rgba(15, 23, 42, 0.75)), url('${settingsBackground}')`;
 
 const DEFAULT_CONFIG: DesktopAutoSwitchConfig = {
   enabled: false,
@@ -75,12 +91,12 @@ function updateChannelForUi(status: DesktopUpdateStatus | null): SystemSettings[
 }
 
 function latestStatusForUi(status: DesktopUpdateStatus | null): string {
-  if (!status) return 'Unknown';
-  if (status.status === 'error') return status.error || 'Update check failed';
-  if (status.status === 'downloaded') return 'Ready to install';
-  if (status.status === 'checking') return 'Checking';
-  if (status.status === 'disabled') return status.message || 'Updates disabled';
-  return status.message || 'Up to date';
+  if (!status) return '未知';
+  if (status.status === 'error') return status.error || '检查更新失败';
+  if (status.status === 'downloaded') return '可安装';
+  if (status.status === 'checking') return '检查中';
+  if (status.status === 'disabled') return status.message || '更新已禁用';
+  return status.message || '已是最新';
 }
 
 function settingsFromDesktopState(
@@ -115,7 +131,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'accounts' | 'quotas' | 'autoswitch' | 'settings'>('quotas');
   const [accounts, setAccounts] = useState<AccountQuota[]>(desktopBridgeAvailable ? [] : INITIAL_ACCOUNTS);
   const [daemonState, setDaemonState] = useState<DaemonState>(
-    desktopBridgeAvailable ? { status: 'Stopped', syncInterval: 10, lastChecked: 'Not checked yet' } : INITIAL_DAEMON_STATE,
+    desktopBridgeAvailable ? { status: 'Stopped', syncInterval: 10, lastChecked: '尚未检查' } : INITIAL_DAEMON_STATE,
   );
   const [settings, setSettings] = useState<SystemSettings>(INITIAL_SETTINGS);
   const [logs, setLogs] = useState<LogEntry[]>(desktopBridgeAvailable ? [] : INITIAL_LOGS);
@@ -163,6 +179,12 @@ export default function App() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showSupport, setShowSupport] = useState(false);
   const [showUpdates, setShowUpdates] = useState(false);
+  // Real switch counter for this session (manual switches, manual checks, and
+  // daemon auto-switches all increment it).
+  const [sessionSwitchCount, setSessionSwitchCount] = useState(0);
+  // In-app delete confirmation (replaces the native window.confirm).
+  const [deleteTarget, setDeleteTarget] = useState<AccountQuota | null>(null);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
 
   // Custom Toast notifications array
   const [toasts, setToasts] = useState<{ id: string; msg: string; type: 'success' | 'info' | 'warning' | 'error' }[]>([]);
@@ -183,7 +205,8 @@ export default function App() {
       message,
       type,
     };
-    setLogs(prev => [newLog, ...prev]);
+    // Cap the in-memory feed so long sessions cannot grow it without bound.
+    setLogs(prev => [newLog, ...prev].slice(0, 500));
   }, []);
 
   const runAccountOperation = useCallback(async <T,>(id: string, task: () => Promise<T>): Promise<T> => {
@@ -213,7 +236,7 @@ export default function App() {
     setDaemonState({
       status: snapshot.daemonRunning ? 'Running' : 'Stopped',
       syncInterval: snapshot.daemonSyncInterval,
-      lastChecked: snapshot.daemonLastRunAt ? formatDateTime(snapshot.daemonLastRunAt) : 'Not checked yet',
+      lastChecked: snapshot.daemonLastRunAt ? formatDateTime(snapshot.daemonLastRunAt) : '尚未检查',
       lastSuccessAt: snapshot.daemonLastSuccessAt,
       lastError: snapshot.daemonLastError,
       pausedReason: snapshot.daemonPausedReason,
@@ -291,7 +314,7 @@ export default function App() {
     
     // Add toast and log
     addToast('登录成功，欢迎回来！', 'success');
-    addLogEntry(`User ${email} signed into the console panel successfully.`, 'success');
+    addLogEntry(`用户 ${email} 已进入控制中心。`, 'success');
     if (desktopBridgeAvailable) {
       hasLoadedDashboard.current = false;
       setDashboardLoadState('loading');
@@ -314,6 +337,23 @@ export default function App() {
     }
     addToast('已安全退出登录', 'info');
   };
+
+  // Escape closes the topmost dismissible overlay. The auth-conflict dialog
+  // intentionally ignores Escape: it requires an explicit decision.
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (deleteTarget) {
+        if (!isDeletingAccount) setDeleteTarget(null);
+        return;
+      }
+      if (showNotifications) { setShowNotifications(false); return; }
+      if (showSupport) { setShowSupport(false); return; }
+      if (showUpdates) { setShowUpdates(false); }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [deleteTarget, isDeletingAccount, showNotifications, showSupport, showUpdates]);
 
   useEffect(() => {
     if (!desktopBridgeAvailable) return;
@@ -349,7 +389,8 @@ export default function App() {
       },
       onAutoSwitch: (result) => {
         if (result?.switched) {
-          addToast(`Auto-switched to ${result.to?.email || 'new account'}`, 'warning');
+          setSessionSwitchCount(count => count + 1);
+          addToast(`已自动切换至 ${result.to?.email || '新账号'}`, 'warning');
         }
         loadDashboardState(false);
       },
@@ -360,7 +401,7 @@ export default function App() {
       onAuthConflict: (state) => {
         setAuthState(state);
         authStateRef.current = state;
-        addToast(state.message || 'Official Codex authentication changed.', 'warning');
+        addToast(state.message || '官方 Codex 登录状态已变更。', 'warning');
       },
     });
 
@@ -382,7 +423,7 @@ export default function App() {
         if (!status.pending) {
           await loadDashboardState(false);
           if (status.status === 'error' || status.status === 'expired') {
-            addToast(status.message || 'OAuth authorization ended without an account.', 'warning');
+            addToast(status.message || 'OAuth 授权结束，未添加账号。', 'warning');
           }
         }
       } catch {}
@@ -400,8 +441,8 @@ export default function App() {
   const handleRefreshAll = async () => {
     if (desktopBridgeAvailable) {
       setIsRefreshingAll(true);
-      addToast('Refreshing all account quotas...', 'info');
-      addLogEntry('Initiating global quota synchronization across all endpoints...', 'info');
+      addToast('正在刷新全部账号额度...', 'info');
+      addLogEntry('开始同步全部账号额度...', 'info');
       try {
         const results = await desktopApi.refreshAllQuotas();
         const failed = results.filter((item) => item.error).length;
@@ -410,14 +451,14 @@ export default function App() {
         const snapshot = await loadDashboardState(false);
         if (snapshot) queueQuotaAutoSync(snapshot.accounts);
         if (failed) {
-          addToast(`${refreshed} refreshed, ${skipped} need reauthorization, ${failed} failed`, 'warning');
-          addLogEntry(`Quota refresh completed with ${skipped} account(s) skipped and ${failed} failed.`, 'warning');
+          addToast(`已刷新 ${refreshed} 个，${skipped} 个需重新授权，${failed} 个失败`, 'warning');
+          addLogEntry(`额度刷新完成：跳过 ${skipped} 个，失败 ${failed} 个。`, 'warning');
         } else if (skipped) {
-          addToast(`${refreshed} refreshed; ${skipped} need reauthorization`, 'info');
-          addLogEntry(`Quota refresh completed; ${skipped} account(s) require reauthorization.`, 'info');
+          addToast(`已刷新 ${refreshed} 个；${skipped} 个需重新授权`, 'info');
+          addLogEntry(`额度刷新完成；${skipped} 个账号需要重新授权。`, 'info');
         } else {
-          addToast(`${refreshed} account quotas refreshed`, 'success');
-          addLogEntry('Global accounts quota synchronization complete. Status OK.', 'success');
+          addToast(`已刷新 ${refreshed} 个账号额度`, 'success');
+          addLogEntry('全部账号额度同步完成。', 'success');
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -430,7 +471,7 @@ export default function App() {
     }
     setIsRefreshingAll(true);
     addToast('正在刷新同步所有账号配额...', 'info');
-    addLogEntry('Initiating global quota synchronization across all endpoints...', 'info');
+    addLogEntry('开始同步全部账号额度...', 'info');
 
     setTimeout(() => {
       setAccounts(prev => prev.map(acc => {
@@ -447,7 +488,7 @@ export default function App() {
       }));
       setIsRefreshingAll(false);
       addToast('所有账号配额已刷新完成！', 'success');
-      addLogEntry('Global accounts quota synchronization complete. Status OK.', 'success');
+      addLogEntry('全部账号额度同步完成。', 'success');
     }, 1500);
   };
 
@@ -459,8 +500,8 @@ export default function App() {
         await runAccountOperation(id, () => desktopApi.refreshQuota(id));
         const snapshot = await loadDashboardState(false);
         if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-        addToast(`${account?.email || id} quota refreshed`, 'success');
-        addLogEntry(`Account quota refreshed: ${account?.email || id}`, 'success');
+        addToast(`${account?.email || id} 额度已刷新`, 'success');
+        addLogEntry(`账号额度已刷新：${account?.email || id}`, 'success');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         addToast(message, 'error');
@@ -482,61 +523,6 @@ export default function App() {
     }));
   };
 
-  // Reset expired account back to active
-  const handleResetAccount = async (id: string) => {
-    if (desktopBridgeAvailable) {
-      const account = accountsRef.current.find(item => item.id === id);
-      if (!account) return;
-      if (!account.resetCreditsAvailable) {
-        addToast(`${account.email} has no reset credits available`, 'warning');
-        addLogEntry(`${account.email} reset credit unavailable.`, 'warning');
-        return;
-      }
-      const confirmed = window.confirm(`Consume one reset credit for ${account.email}?`);
-      if (!confirmed) return;
-      try {
-        const result = await runAccountOperation(id, async () => {
-          const consumption = await desktopApi.consumeResetCredit(id);
-          let quotaRefreshError: string | null = null;
-          try {
-            await desktopApi.refreshQuota(id);
-          } catch (error) {
-            quotaRefreshError = error instanceof Error ? error.message : String(error);
-          }
-          return { consumption, quotaRefreshError };
-        });
-        const snapshot = await loadDashboardState(false);
-        if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-        if (!result.consumption.balance_refreshed || result.quotaRefreshError) {
-          const detail = result.consumption.refresh_error || result.quotaRefreshError || 'Latest status is unavailable.';
-          addToast(`${account.email} reset credit was consumed, but status refresh failed. Do not consume another credit; refresh later.`, 'warning');
-          addLogEntry(`Consumed one reset credit for ${account.email}; status refresh pending: ${detail}`, 'warning');
-        } else {
-          addToast(`${account.email} reset credit consumed`, 'success');
-          addLogEntry(`Consumed one reset credit for ${account.email}.`, 'success');
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        addToast(message, 'error');
-        addLogEntry(message, 'error');
-      }
-      return;
-    }
-    setAccounts(prev => prev.map(acc => {
-      if (acc.id === id) {
-        addToast(`账号 ${acc.name} 配额统计已重置`, 'success');
-        addLogEntry(`Manually reset statistics & status for endpoint: ${acc.email}`, 'info');
-        return {
-          ...acc,
-          fiveHourQuotaRemaining: acc.fiveHourQuotaTotal,
-          weeklyQuotaRemaining: acc.weeklyQuotaTotal,
-          status: 'ACTIVE',
-        };
-      }
-      return acc;
-    }));
-  };
-
   const handleRefreshToken = async (id: string) => {
     if (!desktopBridgeAvailable) return;
     const account = accountsRef.current.find(item => item.id === id);
@@ -544,29 +530,8 @@ export default function App() {
       const result = await runAccountOperation(id, () => desktopApi.refreshToken(id));
       if (!result.ok) throw new Error(result.error || 'Token refresh failed');
       await loadDashboardState(false);
-      addToast(result?.skipped ? `${account?.email || id} Token is still valid` : `${account?.email || id} Token refreshed`, 'success');
-      addLogEntry(`Token check completed: ${account?.email || id}`, 'success');
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      addToast(message, 'error');
-      addLogEntry(message, 'error');
-    }
-  };
-
-  const handleRefreshSubscription = async (id: string) => {
-    if (!desktopBridgeAvailable) return;
-    const account = accountsRef.current.find(item => item.id === id);
-    try {
-      const result = await runAccountOperation(id, () => desktopApi.refreshSubscription(id, true));
-      const snapshot = await loadDashboardState(false);
-      if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-      addToast(
-        result?.changed
-          ? `${account?.email || id} subscription updated`
-          : `${account?.email || id} subscription already current`,
-        'success',
-      );
-      addLogEntry(`Subscription refreshed: ${account?.email || id}`, 'success');
+      addToast(result?.skipped ? `${account?.email || id} 的 Token 仍然有效` : `${account?.email || id} 的 Token 已刷新`, 'success');
+      addLogEntry(`Token 检查完成：${account?.email || id}`, 'success');
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       addToast(message, 'error');
@@ -582,8 +547,8 @@ export default function App() {
         if (nextAction === 'stop') await desktopApi.stopDaemon();
         else await desktopApi.startDaemon();
         await loadDashboardState(false);
-        addToast(`Daemon ${nextAction === 'stop' ? 'stopped' : 'started'}`, nextAction === 'stop' ? 'warning' : 'success');
-        addLogEntry(`Daemon ${nextAction === 'stop' ? 'stopped' : 'started'}.`, nextAction === 'stop' ? 'warning' : 'success');
+        addToast(`守护进程已${nextAction === 'stop' ? '停止' : '启动'}`, nextAction === 'stop' ? 'warning' : 'success');
+        addLogEntry(`守护进程已${nextAction === 'stop' ? '停止' : '启动'}。`, nextAction === 'stop' ? 'warning' : 'success');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         addToast(message, 'error');
@@ -624,19 +589,19 @@ export default function App() {
       return;
     }
     addToast(`同步间隔已调整为 ${val} 分钟`, 'info');
-    addLogEntry(`Daemon sync interval adjusted to ${syncInterval} minutes.`, 'info');
+    addLogEntry(`同步间隔已调整为 ${syncInterval} 分钟。`, 'info');
   };
 
   // Add new account
   const handleAddAccount = async (acc: Omit<AccountQuota, 'id'>) => {
     if (desktopBridgeAvailable) {
-      addToast('Opening OAuth login...', 'info');
-      addLogEntry('Opening OAuth login flow for a new account.', 'info');
+      addToast('正在打开 OAuth 授权...', 'info');
+      addLogEntry('正在为新账号打开 OAuth 授权流程。', 'info');
       try {
         const result = await desktopApi.addAccount();
         const snapshot = await loadDashboardState(false);
         if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-        addToast(result.account?.email ? `Added ${result.account.email}` : 'Account added', 'success');
+        addToast(result.account?.email ? `已添加 ${result.account.email}` : '账号已添加', 'success');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         addToast(message, 'error');
@@ -659,18 +624,18 @@ export default function App() {
     const snapshot = await loadDashboardState(false);
     if (snapshot) queueQuotaAutoSync(snapshot.accounts);
     if (result.mismatch) {
-      addToast(`The browser used a different account. ${result.account?.email || 'It'} was saved separately.`, 'warning');
-      addLogEntry(`Reauthorization identity did not match ${target?.email || id}; the new account was saved separately.`, 'warning');
+      addToast(`浏览器授权了另一个账号，${result.account?.email || '它'}已单独保存。`, 'warning');
+      addLogEntry(`重新授权身份与 ${target?.email || id} 不符，新账号已单独保存。`, 'warning');
       return;
     }
-    addToast(`${target?.email || id} reauthorized`, 'success');
-    addLogEntry(`Account reauthorized: ${target?.email || id}`, 'success');
+    addToast(`${target?.email || id} 已重新授权`, 'success');
+    addLogEntry(`账号已重新授权：${target?.email || id}`, 'success');
   };
 
   const handleCancelOAuth = async () => {
     await desktopApi.cancelOAuth();
     setOAuthStatus(await desktopApi.getOAuthStatus());
-    addLogEntry('OAuth authorization cancelled.', 'warning');
+    addLogEntry('OAuth 授权已取消。', 'warning');
   };
 
   const handleCompleteOAuthManually = async (callbackUrl: string) => {
@@ -678,12 +643,12 @@ export default function App() {
     const snapshot = await loadDashboardState(false);
     if (snapshot) queueQuotaAutoSync(snapshot.accounts);
     if (result.mismatch) {
-      addToast(`The browser used a different account. ${result.account?.email || 'It'} was saved separately.`, 'warning');
-      addLogEntry('Manual OAuth callback completed with a different account saved separately.', 'warning');
+      addToast(`浏览器授权了另一个账号，${result.account?.email || '它'}已单独保存。`, 'warning');
+      addLogEntry('手动 OAuth 回调完成，另一账号已单独保存。', 'warning');
       return;
     }
-    addToast(result.account?.email ? `Added ${result.account.email}` : 'OAuth account added', 'success');
-    addLogEntry('Manual OAuth callback completed.', 'success');
+    addToast(result.account?.email ? `已添加 ${result.account.email}` : 'OAuth 账号已添加', 'success');
+    addLogEntry('手动 OAuth 回调已完成。', 'success');
   };
 
   const handleResolveAuthConflict = async (action: 'adopt' | 'reapply') => {
@@ -691,10 +656,10 @@ export default function App() {
     try {
       if (action === 'adopt') {
         const account = await desktopApi.adoptOfficialAccount();
-        addToast(`Official Codex account adopted: ${account.email}`, 'success');
+        addToast(`已采用官方 Codex 账号：${account.email}`, 'success');
       } else {
         await desktopApi.reapplyManagedAccount(authState.currentAccountId || null);
-        addToast('Managed account reapplied to official Codex.', 'success');
+        addToast('管理账号已重新应用到官方 Codex。', 'success');
       }
       await loadDashboardState(false);
     } catch (error) {
@@ -706,29 +671,34 @@ export default function App() {
     }
   };
 
-  // Delete account
+  // Delete account (desktop mode opens the in-app confirmation dialog).
   const handleDeleteAccount = async (id: string) => {
     const target = accounts.find(a => a.id === id);
+    if (!target) return;
     if (desktopBridgeAvailable) {
-      if (!target) return;
-      const confirmed = window.confirm(`Delete ${target.email}? This cannot be undone.`);
-      if (!confirmed) return;
-      try {
-        await runAccountOperation(id, () => desktopApi.deleteAccount(id));
-        const snapshot = await loadDashboardState(false);
-        if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-        addToast(`Deleted ${target.email}`, 'warning');
-        addLogEntry(`Deleted account ${target.email} from manager configuration.`, 'warning');
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        addToast(message, 'error');
-        addLogEntry(message, 'error');
-      }
+      setDeleteTarget(target);
       return;
     }
-    if (target) {
-      setAccounts(prev => prev.filter(acc => acc.id !== id));
-      addToast(`已成功移除账号 ${target.email}`, 'warning');
+    setAccounts(prev => prev.filter(acc => acc.id !== id));
+    addToast(`已成功移除账号 ${target.email}`, 'warning');
+  };
+
+  const confirmDeleteAccount = async () => {
+    if (!deleteTarget || isDeletingAccount) return;
+    setIsDeletingAccount(true);
+    try {
+      await runAccountOperation(deleteTarget.id, () => desktopApi.deleteAccount(deleteTarget.id));
+      const snapshot = await loadDashboardState(false);
+      if (snapshot) queueQuotaAutoSync(snapshot.accounts);
+      addToast(`已删除 ${deleteTarget.email}`, 'warning');
+      addLogEntry(`已从管理器中删除账号 ${deleteTarget.email}。`, 'warning');
+      setDeleteTarget(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      addToast(message, 'error');
+      addLogEntry(message, 'error');
+    } finally {
+      setIsDeletingAccount(false);
     }
   };
 
@@ -738,10 +708,11 @@ export default function App() {
       const selected = accountsRef.current.find(a => a.id === id);
       try {
         await runAccountOperation(id, () => desktopApi.switchAccount(id));
+        setSessionSwitchCount(count => count + 1);
         const snapshot = await loadDashboardState(false);
         if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-        addToast(`Current account switched to ${selected?.email || id}`, 'success');
-        addLogEntry(`Switched active context to account: ${selected?.email || id}`, 'success');
+        addToast(`当前账号已切换至 ${selected?.email || id}`, 'success');
+        addLogEntry(`已切换当前账号：${selected?.email || id}`, 'success');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         addToast(message, 'error');
@@ -753,6 +724,7 @@ export default function App() {
       ...acc,
       isCurrent: acc.id === id,
     })));
+    setSessionSwitchCount(count => count + 1);
     const selected = accounts.find(a => a.id === id);
     if (selected) {
       addToast(`当前主账号已切换至 ${selected.email}`, 'success');
@@ -777,7 +749,7 @@ export default function App() {
       void saveAutoSwitchConfig(nextConfig)
         .then((saved) => {
           if (saved) {
-            addLogEntry(`${selected?.email || id} ${nextSelected.includes(id) ? 'added to' : 'removed from'} auto-switch scope.`, 'info');
+            addLogEntry(`${selected?.email || id} 已${nextSelected.includes(id) ? '加入' : '移出'}自动切号范围。`, 'info');
           }
         });
       return;
@@ -872,19 +844,19 @@ export default function App() {
     const passed = summary.results.filter(result => result.ok).length;
     if (failed.length > 0) {
       const reauthorizationText = needsReauthorization.length > 0
-        ? `, ${needsReauthorization.length} require reauthorization`
+        ? `，${needsReauthorization.length} 个需重新授权`
         : '';
-      const message = `Token check completed: ${passed}/${total} passed${reauthorizationText}, ${failed.length} failed.`;
+      const message = `Token 检查完成：${passed}/${total} 通过${reauthorizationText}，${failed.length} 个失败。`;
       addToast(message, 'warning');
       throw new Error(message);
     }
     if (needsReauthorization.length > 0) {
-      const message = `Token check completed: ${passed}/${total} passed, ${needsReauthorization.length} require reauthorization.`;
+      const message = `Token 检查完成：${passed}/${total} 通过，${needsReauthorization.length} 个需重新授权。`;
       addToast(message, 'warning');
       addLogEntry(message, 'warning');
       return;
     }
-    const message = total > 0 ? `${total} account tokens checked` : 'No account tokens to check';
+    const message = total > 0 ? `已检查 ${total} 个账号 Token` : '没有可检查的账号 Token';
     addToast(message, total > 0 ? 'success' : 'info');
     addLogEntry(message, total > 0 ? 'success' : 'info');
   };
@@ -894,14 +866,14 @@ export default function App() {
     const status = await desktopApi.getCodexStatus();
     setCodexStatus(status);
     setSettings(prev => ({ ...prev, clientDetected: !!status?.installed }));
-    addToast(status?.installed ? 'Codex client detected' : 'Codex client not detected', status?.installed ? 'success' : 'warning');
+    addToast(status?.installed ? '已检测到 Codex 客户端' : '未检测到 Codex 客户端', status?.installed ? 'success' : 'warning');
   };
 
   const handleCheckUpdates = async () => {
     if (!desktopBridgeAvailable) return;
     if (!appInfo?.updateEnabled) {
       await handleOpenExternal(`${appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}/releases`);
-      addToast('Opened GitHub Releases', 'info');
+      addToast('已打开 GitHub 发布页', 'info');
       return;
     }
     await desktopApi.checkForUpdates();
@@ -915,8 +887,8 @@ export default function App() {
     if (!desktopBridgeAvailable) return;
     try {
       await desktopApi.installUpdate();
-      addToast('Installing update and restarting...', 'info');
-      addLogEntry('Update installation requested.', 'info');
+      addToast('正在安装更新并重启...', 'info');
+      addLogEntry('已请求安装更新。', 'info');
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       addToast(message, 'error');
@@ -943,9 +915,10 @@ export default function App() {
     const snapshot = await loadDashboardState(false);
     if (snapshot) queueQuotaAutoSync(snapshot.accounts);
     if (result?.switched) {
-      addToast(`Switched to ${result.to?.email || 'new account'}`, 'success');
+      setSessionSwitchCount(count => count + 1);
+      addToast(`已切换至 ${result.to?.email || '新账号'}`, 'success');
     } else {
-      addToast(result?.reason || 'No switch required', 'info');
+      addToast(result?.reason || '无需切换', 'info');
     }
     return result;
   };
@@ -959,18 +932,9 @@ export default function App() {
     await saveAutoSwitchConfig(nextConfig);
   };
 
-  // Shift Background Image to match the screenshots exactly
-  const getBackgroundImage = () => {
-    if (activeTab === 'accounts') {
-      // Pink cherry blossoms (sakura) framing Mt Fuji
-      return `linear-gradient(to bottom, rgba(15, 23, 42, 0.45), rgba(15, 23, 42, 0.7)), url('${japanBackground}')`;
-    }
-    if (activeTab === 'settings') {
-      return `linear-gradient(to bottom, rgba(15, 23, 42, 0.45), rgba(15, 23, 42, 0.7)), url('${japanBackground}')`;
-    }
-    // 'quotas' or 'autoswitch' view: Foggy dawn Mount Fuji
-    return `linear-gradient(to bottom, rgba(15, 23, 42, 0.45), rgba(15, 23, 42, 0.75)), url('${settingsBackground}')`;
-  };
+  // 'accounts'/'settings' show the sakura backdrop; 'quotas'/'autoswitch'
+  // show the foggy dawn backdrop. Same imagery as before.
+  const showsJapanBackdrop = activeTab === 'accounts' || activeTab === 'settings';
 
   if (!isAuthenticated) {
     return <Login onLogin={handleLogin} userEmail={userEmail} appVersion={settings.version} showDemoShortcuts={!desktopBridgeAvailable} />;
@@ -978,10 +942,22 @@ export default function App() {
 
   return (
     <div 
-      className="h-screen w-screen flex overflow-hidden relative bg-cover bg-center transition-all duration-1000 select-none text-slate-100 font-sans"
-      style={{ backgroundImage: getBackgroundImage() }}
+      className="h-screen w-screen flex overflow-hidden relative isolate select-none text-slate-100 font-sans"
       id="dashboard-main-container"
     >
+      {/* Persistent backdrop layers; only opacity animates on tab switches. */}
+      <div
+        aria-hidden
+        className="absolute inset-0 -z-10 bg-cover bg-center transition-opacity duration-1000 pointer-events-none"
+        style={{ backgroundImage: JAPAN_BACKDROP, opacity: showsJapanBackdrop ? 1 : 0 }}
+        id="dashboard-backdrop-japan"
+      />
+      <div
+        aria-hidden
+        className="absolute inset-0 -z-10 bg-cover bg-center transition-opacity duration-1000 pointer-events-none"
+        style={{ backgroundImage: FUJI_BACKDROP, opacity: showsJapanBackdrop ? 0 : 1 }}
+        id="dashboard-backdrop-fuji"
+      />
       {/* Absolute overlay elements */}
       {/* Toast notification Tray */}
       <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 w-80 pointer-events-none" id="toast-tray">
@@ -991,7 +967,7 @@ export default function App() {
               initial={{ opacity: 0, x: 50, scale: 0.9 }}
               animate={{ opacity: 1, x: 0, scale: 1 }}
               exit={{ opacity: 0, x: 50, scale: 0.9 }}
-              className="pointer-events-auto backdrop-blur-xl bg-slate-950/80 border border-white/10 rounded-2xl p-4 flex items-center gap-3 shadow-2xl"
+              className="glass-card pointer-events-auto backdrop-blur-xl bg-slate-950/80 border border-white/10 rounded-2xl p-4 flex items-center gap-3 shadow-2xl"
               key={t.id}
             >
               {t.type === 'success' && <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0" />}
@@ -1017,12 +993,8 @@ export default function App() {
       <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden" id="dashboard-right-wrapper">
         {/* Navigation Utilities Header */}
         <Header 
-          activeTab={activeTab}
-          setActiveTab={setActiveTab}
           currentUserEmail={userEmail}
           onLogout={handleLogout}
-          onRefreshAll={handleRefreshAll}
-          isRefreshing={isRefreshingAll}
           unreadNotificationsCount={logs.filter(l => l.type === 'warning' || l.type === 'error').length}
           onToggleNotifications={() => setShowNotifications(!showNotifications)}
         />
@@ -1044,11 +1016,11 @@ export default function App() {
                   role="status"
                   aria-live="polite"
                 >
-                  <div className="flex w-full max-w-sm flex-col items-center rounded-3xl border border-white/10 bg-slate-950/45 px-8 py-10 text-center shadow-2xl backdrop-blur-xl">
+                  <div className="glass-card flex w-full max-w-sm flex-col items-center rounded-3xl border border-white/10 bg-slate-950/45 px-8 py-10 text-center shadow-2xl backdrop-blur-xl">
                     <LoaderCircle className="mb-4 h-8 w-8 animate-spin text-blue-400" />
-                    <h2 className="text-base font-bold text-white">Loading account data</h2>
+                    <h2 className="text-base font-bold text-white">正在加载账号数据</h2>
                     <p className="mt-2 text-xs leading-5 text-slate-400">
-                      Reading local accounts, quota status, and daemon settings.
+                      正在读取本地账号、额度状态与守护进程设置。
                     </p>
                   </div>
                 </div>
@@ -1062,9 +1034,9 @@ export default function App() {
                 >
                   <div className="flex w-full max-w-md flex-col items-center rounded-3xl border border-rose-500/20 bg-slate-950/55 px-8 py-10 text-center shadow-2xl backdrop-blur-xl">
                     <AlertCircle className="mb-4 h-9 w-9 text-rose-400" />
-                    <h2 className="text-base font-bold text-white">Account data could not be loaded</h2>
+                    <h2 className="text-base font-bold text-white">账号数据加载失败</h2>
                     <p className="mt-2 max-w-sm text-xs leading-5 text-slate-400">
-                      {dashboardLoadError || 'The local account store did not respond.'}
+                      {dashboardLoadError || '本地账号存储未响应。'}
                     </p>
                     <motion.button
                       type="button"
@@ -1075,7 +1047,7 @@ export default function App() {
                       id="dashboard-retry-load"
                     >
                       <RefreshCw className="h-3.5 w-3.5" />
-                      Retry
+                      重试
                     </motion.button>
                   </div>
                 </div>
@@ -1087,9 +1059,7 @@ export default function App() {
                 <QuotasView 
                   accounts={accounts}
                   onRefreshAccount={handleRefreshAccount}
-                  onResetAccount={handleResetAccount}
                   onRefreshToken={desktopBridgeAvailable ? handleRefreshToken : undefined}
-                  onRefreshSubscription={desktopBridgeAvailable ? handleRefreshSubscription : undefined}
                   onRefreshAll={handleRefreshAll}
                   isRefreshingAll={isRefreshingAll}
                 />
@@ -1101,6 +1071,7 @@ export default function App() {
                   logs={logs}
                   settings={settings}
                   daemonState={daemonState}
+                  sessionSwitchCount={sessionSwitchCount}
                   onToggleGlobalSwitch={handleToggleGlobalSwitch}
                   onPreviewThreshold={handlePreviewThreshold}
                   onUpdateThreshold={handleUpdateThreshold}
@@ -1126,10 +1097,6 @@ export default function App() {
                   onAddLog={addLogEntry}
                   oauthMode={desktopBridgeAvailable}
                   oauthStatus={oauthStatus}
-                  onReloadAccounts={desktopBridgeAvailable ? async () => {
-                    const snapshot = await loadDashboardState(true);
-                    if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-                  } : undefined}
                 />
               )}
 
@@ -1164,11 +1131,6 @@ export default function App() {
         >
           <div className="flex items-center gap-1.5" id="footer-left">
             <span>Codex Account Manager {settings.version.startsWith('v') ? settings.version : `v${settings.version}`}</span>
-            <span>•</span>
-            <span className={`${daemonState.status === 'Running' ? 'text-emerald-400' : 'text-rose-400'} font-semibold uppercase tracking-wider flex items-center gap-1`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${daemonState.status === 'Running' ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />
-              System Status: Daemon {daemonState.status}
-            </span>
           </div>
           <div className="flex items-center gap-4" id="footer-right">
             <button 
@@ -1177,23 +1139,73 @@ export default function App() {
               }}
               className="hover:text-slate-200 cursor-pointer"
             >
-              Privacy Policy
-            </button>
-            <button 
-              onClick={() => setShowUpdates(true)} 
-              className="hover:text-slate-200 cursor-pointer"
-            >
-              Release Notes
+              隐私政策
             </button>
           </div>
         </footer>
       </div>
 
-      {authState.requiresResolution && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/85 p-4 backdrop-blur-md">
+      <AnimatePresence>
+      {deleteTarget && (
+        <motion.div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/85 p-4 backdrop-blur-md"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.15 }}
+        >
           <motion.div
-            initial={{ opacity: 0, scale: 0.96 }}
+            initial={{ opacity: 0, scale: 0.94 }}
             animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.96 }}
+            transition={{ duration: 0.16, ease: 'easeOut' }}
+            className="glass-card w-full max-w-sm rounded-3xl border border-rose-500/20 bg-slate-900/95 p-7 text-left shadow-2xl"
+            id="delete-confirm-modal"
+            role="alertdialog"
+            aria-modal="true"
+          >
+            <Trash2 className="mb-4 h-9 w-9 text-rose-400" />
+            <h3 className="text-lg font-bold text-white">删除账号</h3>
+            <p className="mt-2 text-xs leading-relaxed text-slate-300">
+              确定要删除 <strong className="text-white">{deleteTarget.email}</strong> 吗？该操作无法撤销。
+            </p>
+            <div className="mt-6 grid grid-cols-2 gap-3">
+              <button
+                onClick={() => { if (!isDeletingAccount) setDeleteTarget(null); }}
+                disabled={isDeletingAccount}
+                className="rounded-2xl bg-white/5 hover:bg-white/10 px-4 py-3 text-xs font-bold text-slate-200 disabled:opacity-50 cursor-pointer"
+                id="delete-confirm-cancel"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => void confirmDeleteAccount()}
+                disabled={isDeletingAccount}
+                className="rounded-2xl border border-rose-500/30 bg-rose-500/15 px-4 py-3 text-xs font-bold text-rose-200 hover:bg-rose-500/25 disabled:opacity-50 cursor-pointer"
+                id="delete-confirm-accept"
+              >
+                {isDeletingAccount ? '删除中...' : '确认删除'}
+              </button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+      {authState.requiresResolution && (
+        <motion.div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/85 p-4 backdrop-blur-md"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.15 }}
+        >
+          <motion.div
+            initial={{ opacity: 0, scale: 0.94 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.96 }}
+            transition={{ duration: 0.16, ease: 'easeOut' }}
             className="w-full max-w-md rounded-3xl border border-amber-500/20 bg-slate-900/95 p-7 text-left shadow-2xl"
             id="auth-conflict-modal"
             role="alertdialog"
@@ -1202,18 +1214,18 @@ export default function App() {
           >
             <ShieldAlert className="mb-4 h-10 w-10 text-amber-400" />
             <h3 id="auth-conflict-title" className="text-lg font-bold text-white">
-              {authState.status === 'unknown' ? 'Authentication status unavailable' : 'Official Codex login changed'}
+              {authState.status === 'unknown' ? '认证状态不可用' : '官方 Codex 登录已变更'}
             </h3>
             <p className="mt-2 text-xs leading-relaxed text-slate-300">
-              {authState.message || 'The official Codex login no longer matches the account managed by this app.'}
+              {authState.message || '官方 Codex 登录与本管理器记录的当前账号不一致。'}
             </p>
             {authState.officialIdentity?.email && (
               <div className="mt-4 rounded-2xl border border-white/5 bg-slate-950/35 px-4 py-3 text-xs text-slate-300">
-                Official account: <strong className="text-white">{authState.officialIdentity.email}</strong>
+                官方账号：<strong className="text-white">{authState.officialIdentity.email}</strong>
               </div>
             )}
             <p className="mt-4 text-[11px] leading-relaxed text-slate-400">
-              Automatic switching and authentication writes are paused until this is resolved.
+              在处理此冲突之前，自动切号与认证写入将保持暂停。
             </p>
             <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
               {authState.status === 'unknown' && (
@@ -1223,7 +1235,7 @@ export default function App() {
                   className="rounded-2xl border border-blue-500/25 bg-blue-500/10 px-4 py-3 text-xs font-bold text-blue-300 hover:bg-blue-500/15 disabled:opacity-50"
                   id="auth-conflict-reload"
                 >
-                  Reload status
+                  重新加载状态
                 </button>
               )}
               {(authState.status === 'conflict' || authState.status === 'unmanaged_official_auth') && (
@@ -1233,7 +1245,7 @@ export default function App() {
                   className="rounded-2xl border border-blue-500/25 bg-blue-500/10 px-4 py-3 text-xs font-bold text-blue-300 hover:bg-blue-500/15 disabled:opacity-50"
                   id="auth-conflict-adopt"
                 >
-                  Adopt official account
+                  采用官方账号
                 </button>
               )}
               {authState.currentAccountId && (
@@ -1243,24 +1255,36 @@ export default function App() {
                   className="rounded-2xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-xs font-bold text-amber-300 hover:bg-amber-500/15 disabled:opacity-50"
                   id="auth-conflict-reapply"
                 >
-                  Reapply managed account
+                  重写为管理账号
                 </button>
               )}
             </div>
           </motion.div>
-        </div>
+        </motion.div>
       )}
+      </AnimatePresence>
 
       {/* Overlay Notification Center Sidebar panel */}
+      <AnimatePresence>
       {showNotifications && (
           <>
-            <div 
+            <motion.div 
+              key="notifications-backdrop"
               className="fixed inset-0 bg-black/40 z-35" 
               onClick={() => setShowNotifications(false)} 
+              initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.15 }}
             />
             <motion.div
+              key="notifications-panel"
               className="fixed right-0 top-0 bottom-0 w-80 backdrop-blur-2xl bg-slate-900/95 border-l border-white/10 p-6 z-40 shadow-2xl flex flex-col text-slate-200 text-left"
               id="notification-sidebar-center"
+              initial={{ x: 340 }}
+              animate={{ x: 0 }}
+              exit={{ x: 340 }}
+              transition={{ type: 'spring', stiffness: 380, damping: 36 }}
             >
               <div className="flex items-center justify-between pb-4 border-b border-white/10 mb-6">
                 <div className="flex items-center gap-2">
@@ -1284,10 +1308,10 @@ export default function App() {
                   if (log.type === 'error') color = "text-rose-400";
 
                   return (
-                    <div className="p-3 bg-white/5 border border-white/5 rounded-xl text-xs space-y-1" key={log.id}>
+                    <div className="p-3 bg-white/[0.06] rounded-xl text-xs space-y-1" key={log.id}>
                       <div className="flex items-center justify-between">
                         <span className={`font-bold capitalize text-[10px] ${color}`}>{log.type}</span>
-                        <span className="text-[9px] text-slate-500 font-mono">{log.timestamp}</span>
+                        <span className="text-[9px] text-slate-500 tabular-nums">{log.timestamp}</span>
                       </div>
                       <p className="text-slate-300 leading-relaxed text-[11px] font-sans font-medium">{log.message}</p>
                     </div>
@@ -1297,14 +1321,24 @@ export default function App() {
             </motion.div>
           </>
       )}
+      </AnimatePresence>
 
       {/* Support Dialog modal */}
+      <AnimatePresence>
       {showSupport && (
-          <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <motion.div
+            className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4"
+            initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.15 }}
+          >
             <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
+              initial={{ scale: 0.94, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              className="backdrop-blur-2xl bg-slate-900/90 border border-white/10 rounded-3xl p-8 w-full max-w-md shadow-2xl relative text-white text-left select-none"
+              exit={{ scale: 0.96, opacity: 0 }}
+              transition={{ duration: 0.16, ease: 'easeOut' }}
+              className="glass-card backdrop-blur-2xl bg-slate-900/90 border border-white/10 rounded-3xl p-8 w-full max-w-md shadow-2xl relative text-white text-left select-none"
               id="support-modal-popup"
             >
               <button
@@ -1314,18 +1348,18 @@ export default function App() {
                 <X className="w-4 h-4" />
               </button>
 
-              <HelpCircle className="w-12 h-12 text-blue-400 mb-4 animate-pulse" />
+              <HelpCircle className="w-12 h-12 text-blue-400 mb-4" />
               <h3 className="text-lg font-bold tracking-tight mb-2 font-sans">客户服务 / Technical Support</h3>
               <p className="text-xs text-slate-400 leading-relaxed mb-6 font-sans">
                 如果您在使用 Codex 账号管理器时遇到配额验证、客户端连接或服务问题，请通过 GitHub Issues 提交可复现信息。
               </p>
 
               <div className="space-y-3 mb-6" id="support-channels-list">
-                <div className="p-3 bg-white/5 border border-white/5 rounded-2xl flex items-center justify-between text-xs font-semibold">
+                <div className="p-3 bg-white/[0.06] rounded-2xl flex items-center justify-between text-xs font-semibold">
                   <span className="text-slate-400">GitHub Issues</span>
                   <a className="text-blue-400" href={`${appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}/issues`} target="_blank" rel="noopener noreferrer">Open issue tracker</a>
                 </div>
-                <div className="p-3 bg-white/5 border border-white/5 rounded-2xl flex items-center justify-between text-xs font-semibold">
+                <div className="p-3 bg-white/[0.06] rounded-2xl flex items-center justify-between text-xs font-semibold">
                   <span className="text-slate-400">支持方式</span>
                   <span className="text-emerald-400">Community / Best effort</span>
                 </div>
@@ -1338,16 +1372,26 @@ export default function App() {
                 好的，我知道了
               </button>
             </motion.div>
-          </div>
+          </motion.div>
       )}
+      </AnimatePresence>
 
       {/* Release Notes / Updates dialog modal */}
+      <AnimatePresence>
       {showUpdates && (
-          <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <motion.div
+            className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4"
+            initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.15 }}
+          >
             <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
+              initial={{ scale: 0.94, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              className="backdrop-blur-2xl bg-slate-900/90 border border-white/10 rounded-3xl p-8 w-full max-w-md shadow-2xl relative text-white text-left select-none"
+              exit={{ scale: 0.96, opacity: 0 }}
+              transition={{ duration: 0.16, ease: 'easeOut' }}
+              className="glass-card backdrop-blur-2xl bg-slate-900/90 border border-white/10 rounded-3xl p-8 w-full max-w-md shadow-2xl relative text-white text-left select-none"
               id="updates-modal-popup"
             >
               <button
@@ -1357,7 +1401,7 @@ export default function App() {
                 <X className="w-4 h-4" />
               </button>
 
-              <Activity className="w-12 h-12 text-cyan-400 mb-4 animate-bounce-slow" />
+              <Activity className="w-12 h-12 text-cyan-400 mb-4" />
               <h3 className="text-lg font-bold tracking-tight mb-2 font-sans">版本更新详情 / Release Notes</h3>
               <p className="text-xs text-slate-400 mb-6 font-sans">
                 当前版本 <strong>{settings.version.startsWith('v') ? settings.version : `v${settings.version}`}</strong>。
@@ -1389,8 +1433,9 @@ export default function App() {
                 确认版本
               </button>
             </motion.div>
-          </div>
+          </motion.div>
       )}
+      </AnimatePresence>
     </div>
   );
 }

@@ -13,15 +13,13 @@ export interface AccountQuota {
   priority: 'High' | 'Normal' | 'Low' | 'Ultra';
   plan: 'Pro Plan' | 'Standard' | 'Enterprise';
   tokenValidity: string;
+  tokenValidityPct?: number | null;
   resetInFiveHour: string;
   resetInWeekly: string;
   warning?: string | null;
   isCurrent?: boolean;
   quotaUpdatedAt?: string | number | null;
   quotaNextRetryAt?: string | number | null;
-  subscriptionActiveUntil?: string | number | null;
-  resetCreditsAvailable?: number;
-  resetCreditsNextExpiresAt?: string | number | null;
   quotaError?: string | null;
   tokenExpired?: boolean;
   tokenAccessAvailable?: boolean;

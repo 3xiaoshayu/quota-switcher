@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { Key, Mail, Shield, User, ArrowRight, Activity, Cpu } from 'lucide-react';
+import { Mail, Shield, ShieldCheck, User, ArrowRight, Activity, Cpu, X } from 'lucide-react';
 import loginBackground from '../assets/background-login.jpg';
+import { desktopApi, hasDesktopBridge } from '../api/desktop';
 
 interface LoginProps {
   onLogin: (email: string) => void;
@@ -10,9 +11,10 @@ interface LoginProps {
   showDemoShortcuts?: boolean;
 }
 
-export default function Login({ onLogin, userEmail, appVersion = '0.1.0-beta.11', showDemoShortcuts = false }: LoginProps) {
+const windowControlsAvailable = hasDesktopBridge();
+
+export default function Login({ onLogin, userEmail, appVersion = '0.1.0', showDemoShortcuts = false }: LoginProps) {
   const [email, setEmail] = useState(userEmail || '');
-  const [password] = useState('Windows DPAPI protected');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
@@ -47,6 +49,19 @@ export default function Login({ onLogin, userEmail, appVersion = '0.1.0-beta.11'
       }}
       id="login-page-container"
     >
+      {/* Frameless-window drag strip and close control */}
+      <div className="app-drag fixed top-0 left-0 right-0 h-12" id="login-drag-strip" />
+      {windowControlsAvailable && (
+        <button
+          onClick={() => void desktopApi.closeWindow()}
+          className="app-no-drag fixed top-3 right-3 p-2 rounded-lg text-slate-400 hover:bg-rose-500/90 hover:text-white transition-all cursor-pointer z-10"
+          title="关闭"
+          id="login-window-close"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      )}
+
       {/* Decorative Floating ambient lights */}
       <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-cyan-400/10 rounded-full blur-3xl pointer-events-none" />
@@ -55,7 +70,7 @@ export default function Login({ onLogin, userEmail, appVersion = '0.1.0-beta.11'
         initial={{ opacity: 0, y: 30 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.8, ease: 'easeOut' }}
-        className="w-full max-w-md backdrop-blur-xl bg-slate-900/40 border border-white/10 rounded-3xl p-8 shadow-2xl text-white relative overflow-hidden"
+        className="glass-card w-full max-w-md backdrop-blur-xl bg-slate-900/40 border border-white/10 rounded-3xl p-8 shadow-2xl text-white relative overflow-hidden"
         id="login-card"
       >
         {/* Glowing border top */}
@@ -63,7 +78,7 @@ export default function Login({ onLogin, userEmail, appVersion = '0.1.0-beta.11'
 
         <div className="text-center mb-8" id="login-header-group">
           <div className="inline-flex items-center justify-center p-3.5 bg-gradient-to-br from-blue-500/20 to-cyan-400/20 rounded-2xl border border-white/10 mb-4 shadow-lg shadow-cyan-500/5" id="login-icon-box">
-            <Cpu className="w-8 h-8 text-cyan-400 animate-pulse" />
+            <Cpu className="w-8 h-8 text-cyan-400" />
           </div>
           <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-white via-slate-100 to-slate-300 bg-clip-text text-transparent font-sans" id="login-title">
             Codex 账号
@@ -93,23 +108,11 @@ export default function Login({ onLogin, userEmail, appVersion = '0.1.0-beta.11'
             </div>
           </div>
 
-          <div className="space-y-2" id="password-field-group">
-            <label className="text-xs font-semibold text-slate-300 tracking-wider uppercase block ml-1">
-              本地凭证保护
-            </label>
-            <div className="relative">
-              <span className="absolute inset-y-0 left-0 flex items-center pl-4 text-slate-400">
-                <Key className="w-4 h-4" />
-              </span>
-              <input
-                type="text"
-                value={password}
-                readOnly
-                placeholder="Windows DPAPI"
-                className="w-full pl-11 pr-4 py-3 bg-slate-950/40 border border-white/10 rounded-2xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-400/50 transition-all font-mono text-sm"
-                id="login-password-input"
-              />
-            </div>
+          <div className="flex items-start gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3" id="login-dpapi-note">
+            <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+            <span className="text-xs text-slate-300 leading-relaxed">
+              本地凭证由 Windows DPAPI 加密保护，仅当前 Windows 用户可访问。
+            </span>
           </div>
 
           {error && (
@@ -182,8 +185,8 @@ export default function Login({ onLogin, userEmail, appVersion = '0.1.0-beta.11'
         )}
 
         <div className="mt-8 text-center" id="login-footer-credits">
-          <p className="text-[10px] text-slate-500 font-mono tracking-widest">
-            CODEX SECURITY PROTOCOL {appVersion.startsWith('v') ? appVersion : `v${appVersion}`}
+          <p className="text-[10px] text-slate-500 tracking-widest">
+            Codex Account Manager {appVersion.startsWith('v') ? appVersion : `v${appVersion}`}
           </p>
         </div>
       </motion.div>

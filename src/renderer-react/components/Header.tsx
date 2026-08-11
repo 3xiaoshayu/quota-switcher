@@ -1,102 +1,29 @@
-import { RefreshCw, Bell, User, LogOut } from 'lucide-react';
+import { Bell, LogOut, Minus, Square, X } from 'lucide-react';
 import { motion } from 'motion/react';
+import { avatarGradient, desktopApi, hasDesktopBridge } from '../api/desktop';
 
 interface HeaderProps {
-  activeTab: 'accounts' | 'quotas' | 'autoswitch' | 'settings';
-  setActiveTab: (tab: 'accounts' | 'quotas' | 'autoswitch' | 'settings') => void;
   currentUserEmail: string;
   onLogout: () => void;
-  onRefreshAll: () => void;
-  isRefreshing: boolean;
   unreadNotificationsCount: number;
   onToggleNotifications: () => void;
 }
 
+const windowControlsAvailable = hasDesktopBridge();
+
 export default function Header({
-  activeTab,
-  setActiveTab,
   currentUserEmail,
   onLogout,
-  onRefreshAll,
-  isRefreshing,
   unreadNotificationsCount,
   onToggleNotifications,
 }: HeaderProps) {
-  const tabs = [
-    { id: 'accounts', label: 'Accounts' },
-    { id: 'quotas', label: 'Quotas' },
-    { id: 'autoswitch', label: 'Auto-Switch' },
-    { id: 'settings', label: 'Settings' },
-  ] as const;
-
   return (
     <header 
-      className="h-16 border-b border-white/5 backdrop-blur-md bg-slate-950/15 flex items-center justify-between px-8 select-none shrink-0 text-white font-sans"
+      className="app-drag h-16 border-b border-white/5 backdrop-blur-md bg-slate-950/15 flex items-center justify-end px-6 select-none shrink-0 text-white font-sans"
       id="app-header"
     >
-      {/* Brand Logo and Title */}
-      <div className="flex items-center gap-2" id="header-logo-group">
-        <h1 className="text-lg font-bold tracking-tight text-white font-sans">
-          Codex 账号
-        </h1>
-      </div>
-
-      {/* Center Tab Underlines - Match exactly with the image */}
-      <div className="flex items-center gap-6" id="header-nav-tabs">
-        {tabs.map((tab) => {
-          const isActive = activeTab === tab.id;
-          return (
-            <motion.button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              transition={{ type: 'spring', stiffness: 450, damping: 25 }}
-              className={`text-sm font-medium tracking-wide transition-all py-1.5 px-1 relative cursor-pointer ${
-                isActive ? 'text-white' : 'text-slate-400 hover:text-slate-200'
-              }`}
-              id={`header-tab-${tab.id}`}
-            >
-              {tab.label}
-              {isActive && (
-                <motion.div
-                  layoutId="headerActiveUnderline"
-                  className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-500 rounded-full"
-                  transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-                />
-              )}
-            </motion.button>
-          );
-        })}
-      </div>
-
       {/* Right Utility Actions */}
-      <div className="flex items-center gap-4" id="header-utility-actions">
-        {/* User Status Badge */}
-        <div 
-          className="flex items-center gap-1.5 px-3 py-1 bg-white/5 backdrop-blur-md border border-white/5 rounded-full text-xs text-slate-300 font-medium font-sans"
-          id="header-user-status"
-        >
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="opacity-90">User Status: Online</span>
-        </div>
-
-        {/* Global Refresh Trigger */}
-        <motion.button
-          onClick={onRefreshAll}
-          disabled={isRefreshing}
-          whileHover={{ scale: 1.08 }}
-          whileTap={{ scale: 0.9 }}
-          transition={{ type: 'spring', stiffness: 500, damping: 15 }}
-          className={`p-2 hover:bg-white/10 rounded-xl text-slate-300 hover:text-white transition-all cursor-pointer relative ${
-            isRefreshing ? 'opacity-50' : ''
-          }`}
-          title="重新加载所有配额"
-          id="header-btn-refresh-all"
-        >
-          <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-blue-400' : ''}`} />
-        </motion.button>
-
+      <div className="app-no-drag flex items-center gap-4" id="header-utility-actions">
         {/* Notifications Bell */}
         <motion.button
           onClick={onToggleNotifications}
@@ -109,7 +36,7 @@ export default function Header({
         >
           <Bell className="w-4 h-4" />
           {unreadNotificationsCount > 0 && (
-            <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-rose-500 rounded-full ring-2 ring-slate-950 animate-bounce" />
+            <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-rose-500 rounded-full ring-2 ring-slate-950" />
           )}
         </motion.button>
 
@@ -121,8 +48,8 @@ export default function Header({
             className="flex items-center gap-2 max-w-40" 
             title={`已登录账号：${currentUserEmail}`}
           >
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 flex items-center justify-center text-white font-bold text-xs shadow-md border border-white/10">
-              <User className="w-3.5 h-3.5" />
+            <div className={`w-8 h-8 rounded-xl bg-gradient-to-br ${avatarGradient(currentUserEmail)} flex items-center justify-center text-white font-bold text-xs shadow-md border border-white/10`}>
+              {(currentUserEmail.charAt(0) || '?').toUpperCase()}
             </div>
             <span className="text-xs font-medium text-slate-200 truncate hidden sm:inline max-w-[100px]">
               {currentUserEmail.split('@')[0]}
@@ -141,6 +68,39 @@ export default function Header({
             <LogOut className="w-4 h-4" />
           </motion.button>
         </div>
+
+        {/* Window controls */}
+        {windowControlsAvailable && (
+          <>
+            <div className="h-6 w-[1px] bg-white/10" id="header-window-divider" />
+            <div className="flex items-center gap-1" id="header-window-controls">
+              <button
+                onClick={() => void desktopApi.minimizeWindow()}
+                className="p-2 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-all cursor-pointer"
+                title="最小化"
+                id="window-btn-minimize"
+              >
+                <Minus className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => void desktopApi.toggleMaximizeWindow()}
+                className="p-2 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-all cursor-pointer"
+                title="最大化 / 还原"
+                id="window-btn-maximize"
+              >
+                <Square className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => void desktopApi.closeWindow()}
+                className="p-2 hover:bg-rose-500/90 hover:text-white rounded-lg text-slate-400 transition-all cursor-pointer"
+                title="关闭"
+                id="window-btn-close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </header>
   );

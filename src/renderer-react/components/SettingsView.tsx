@@ -74,13 +74,13 @@ export default function SettingsView({
   const handleBatchVerify = async () => {
     if (isVerifyingTokens) return;
     setIsVerifyingTokens(true);
-    onAddLog('Initiating batch token integrity validation scan...', 'info');
+    onAddLog('开始批量校验账号 Token...', 'info');
     try {
       if (onBatchVerifyTokens) {
         await onBatchVerifyTokens();
       } else {
         await new Promise((resolve) => setTimeout(resolve, 1500));
-        onAddLog(`Batch Token Validation successful. ${accountCount} active tokens verified.`, 'success');
+        onAddLog(`批量 Token 校验完成，共 ${accountCount} 个账号。`, 'success');
       }
     } catch (error) {
       onAddLog(error instanceof Error ? error.message : String(error), 'error');
@@ -92,45 +92,45 @@ export default function SettingsView({
   const handleDetectClient = () => {
     if (onDetectClient) {
       setIsDetectingClient(true);
-      onAddLog('Starting Client environment verification scanner...', 'info');
+      onAddLog('正在检测 Codex 客户端环境...', 'info');
       onDetectClient()
-        .then(() => onAddLog('Client environment detection refreshed.', 'success'))
+        .then(() => onAddLog('客户端环境检测已更新。', 'success'))
         .catch((error) => onAddLog(error instanceof Error ? error.message : String(error), 'error'))
         .finally(() => setIsDetectingClient(false));
       return;
     }
 
     setIsDetectingClient(true);
-    onAddLog('Starting Client environment verification scanner...', 'info');
+    onAddLog('正在检测 Codex 客户端环境...', 'info');
     setTimeout(() => {
       setIsDetectingClient(false);
-      onAddLog('Client environment detected. Microsoft Store package valid.', 'success');
+      onAddLog('已检测到客户端环境。', 'success');
     }, 1200);
   };
 
   const handleCheckUpdates = () => {
     if (onCheckUpdates) {
       setIsCheckingUpdates(true);
-      onAddLog('Checking remote repositories for applet updates...', 'info');
+      onAddLog('正在检查更新...', 'info');
       onCheckUpdates()
-        .then(() => onAddLog('Update check completed.', 'success'))
+        .then(() => onAddLog('更新检查完成。', 'success'))
         .catch((error) => onAddLog(error instanceof Error ? error.message : String(error), 'error'))
         .finally(() => setIsCheckingUpdates(false));
       return;
     }
 
     setIsCheckingUpdates(true);
-    onAddLog('Checking remote repositories for applet updates...', 'info');
+    onAddLog('正在检查更新...', 'info');
     setTimeout(() => {
       setIsCheckingUpdates(false);
-      onAddLog('You are running the latest version of Codex Account Manager.', 'success');
+      onAddLog('当前已是最新版本。', 'success');
     }, 1500);
   };
 
   const handleInstallUpdate = () => {
     if (!onInstallUpdate) return;
     setIsInstallingUpdate(true);
-    onAddLog('Installing downloaded update and restarting application...', 'info');
+    onAddLog('正在安装更新并重启应用...', 'info');
     onInstallUpdate()
       .catch((error) => onAddLog(error instanceof Error ? error.message : String(error), 'error'))
       .finally(() => setIsInstallingUpdate(false));
@@ -153,7 +153,7 @@ export default function SettingsView({
         {/* Left Column: Daemon Service config (7 cols) */}
         <div className="lg:col-span-7 flex flex-col gap-6" id="settings-left-col">
           {/* Card 1: Daemon Service */}
-          <div className="backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col shadow-xl" id="card-daemon-settings">
+          <div className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col shadow-xl" id="card-daemon-settings">
             {/* Daemon Card Header */}
             <div className="flex items-start justify-between pb-5 border-b border-white/5" id="daemon-header">
               <div className="flex items-center gap-3.5">
@@ -184,12 +184,12 @@ export default function SettingsView({
                 {daemonState.status === 'Running' ? (
                   <>
                     <Square className={`w-3 h-3 fill-rose-300 ${isTogglingDaemon ? 'animate-pulse' : ''}`} />
-                    {isTogglingDaemon ? 'Stopping...' : 'Stop Service'}
+                    {isTogglingDaemon ? '停止中...' : '停止服务'}
                   </>
                 ) : (
                   <>
                     <Play className={`w-3 h-3 fill-emerald-300 ${isTogglingDaemon ? 'animate-pulse' : ''}`} />
-                    {isTogglingDaemon ? 'Starting...' : 'Start Service'}
+                    {isTogglingDaemon ? '启动中...' : '启动服务'}
                   </>
                 )}
               </motion.button>
@@ -199,17 +199,17 @@ export default function SettingsView({
             <div className="pt-6 grid grid-cols-1 md:grid-cols-2 gap-6 items-center" id="daemon-body">
               {/* Status display */}
               <div className="space-y-1 text-left" id="daemon-status-box">
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider font-mono">当前状态</span>
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider tabular-nums">当前状态</span>
                 <div className="flex items-center gap-2 pt-1">
                   <span className={`w-2 h-2 rounded-full ${
                     daemonState.status === 'Running' ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'
                   }`} />
                   <span className={`font-bold text-sm ${
                     daemonState.status === 'Running' ? 'text-emerald-400' : 'text-rose-400'
-                  }`}>{daemonState.status}</span>
+                  }`}>{daemonState.status === 'Running' ? '运行中' : '已停止'}</span>
                 </div>
                 {daemonState.pausedReason && (
-                  <span className="block text-[10px] text-amber-300">Paused: {daemonState.pausedReason}</span>
+                  <span className="block text-[10px] text-amber-300">已暂停：{daemonState.pausedReason}</span>
                 )}
                 {daemonState.lastError && (
                   <span className="block max-w-xs truncate text-[10px] text-rose-300" title={daemonState.lastError}>
@@ -220,9 +220,9 @@ export default function SettingsView({
 
               {/* Sync Interval Slider */}
               <div className="space-y-2 text-left" id="daemon-interval-box">
-                <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 uppercase tracking-wider font-mono">
-                  <span>同步间隔 (Minutes)</span>
-                  <span className="text-slate-200 font-mono text-xs">{daemonState.syncInterval}</span>
+                <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 uppercase tracking-wider tabular-nums">
+                  <span>同步间隔（分钟）</span>
+                  <span className="text-slate-200 tabular-nums text-xs">{daemonState.syncInterval}</span>
                 </div>
                 <div className="flex items-center gap-4">
                   <input
@@ -237,14 +237,14 @@ export default function SettingsView({
                     className="flex-1 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500 outline-none"
                     id="sync-interval-slider"
                   />
-                  <span className="text-slate-100 font-bold font-mono text-sm">{daemonState.syncInterval}</span>
+                  <span className="text-slate-100 font-bold tabular-nums text-sm">{daemonState.syncInterval}</span>
                 </div>
               </div>
             </div>
           </div>
 
           {/* Card 2: Codex Client environment */}
-          <div className="backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex items-center justify-between shadow-xl" id="card-client-detect">
+          <div className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex items-center justify-between shadow-xl" id="card-client-detect">
             <div className="flex items-center gap-3.5">
               <div className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
                 <Monitor className="w-4 h-4" />
@@ -261,9 +261,9 @@ export default function SettingsView({
                   ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
                   : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
               }`}>
-                Microsoft Store version
+                Microsoft Store 版本
                 <span className="px-1.5 py-0.5 bg-white/5 border border-white/10 rounded text-[9px] font-extrabold ml-1">
-                  {settings.clientDetected ? 'DETECTED' : 'NOT FOUND'}
+                  {settings.clientDetected ? '已检测' : '未找到'}
                 </span>
               </div>
 
@@ -277,7 +277,7 @@ export default function SettingsView({
                 id="btn-re-detect-client"
               >
                 <RotateCw className={`w-3 h-3 ${isDetectingClient ? 'animate-spin text-blue-400' : ''}`} />
-                Re-detect
+                重新检测
               </motion.button>
             </div>
           </div>
@@ -286,7 +286,7 @@ export default function SettingsView({
         {/* Right Column: Tokens integrity & Updates (5 cols) */}
         <div className="lg:col-span-5 flex flex-col gap-6" id="settings-right-col">
           {/* Card 3: Tokens */}
-          <div className="backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col justify-between h-44 shadow-xl" id="card-tokens">
+          <div className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col gap-6 shadow-xl" id="card-tokens">
             <div className="flex items-start justify-between" id="tokens-header">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
@@ -301,8 +301,8 @@ export default function SettingsView({
 
             <div className="flex items-end justify-between" id="tokens-body">
               <div className="flex flex-col text-left" id="tokens-stat-box">
-                <span className="text-3xl font-extrabold text-white tracking-tight font-mono">{accountCount}</span>
-                <span className="text-[10px] text-slate-400 uppercase tracking-widest font-mono font-bold mt-1">Total Managed Accounts</span>
+                <span className="text-3xl font-extrabold text-white tracking-tight tabular-nums">{accountCount}</span>
+                <span className="text-[10px] text-slate-400 uppercase tracking-widest tabular-nums font-bold mt-1">管理账号总数</span>
               </div>
 
               <motion.button
@@ -315,13 +315,13 @@ export default function SettingsView({
                 id="btn-batch-login-check"
               >
                 <ShieldCheck className="w-3.5 h-3.5 text-cyan-300" />
-                {isVerifyingTokens ? 'Checking...' : 'Batch Login Check'}
+                {isVerifyingTokens ? '检查中...' : '批量登录检查'}
               </motion.button>
             </div>
           </div>
 
           {/* Card 4: Update Channels */}
-          <div className="backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col justify-between h-48 shadow-xl" id="card-software-update">
+          <div className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col gap-5 shadow-xl" id="card-software-update">
             <div className="flex items-start justify-between" id="updates-header">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
@@ -336,11 +336,11 @@ export default function SettingsView({
 
             <div className="flex flex-col gap-3" id="updates-body">
               <div className="flex items-center justify-between text-xs font-semibold px-1" id="updates-status-labels">
-                <span className="text-slate-400">Update Channel</span>
-                <span className="px-2.5 py-0.5 bg-blue-500/10 border border-blue-500/20 text-blue-300 rounded-full font-bold uppercase tracking-wider text-[9px]">{settings.updateChannel}</span>
+                <span className="text-slate-400">更新通道</span>
+                <span className="px-2.5 py-0.5 bg-blue-500/10 border border-blue-500/20 text-blue-300 rounded-full font-bold uppercase tracking-wider text-[9px]">{settings.updateChannel.replace('Beta Channel', 'Beta 通道').replace('Stable Channel', '稳定通道').replace('Developer Channel', '开发通道')}</span>
               </div>
               <div className="flex items-center justify-between text-xs font-semibold px-1 pb-1" id="updates-version-labels">
-                <span className="text-slate-400">Latest Status</span>
+                <span className="text-slate-400">最新状态</span>
                 <span className="text-emerald-400/90 font-bold uppercase tracking-wide flex items-center gap-1">
                   <CheckCircle className="w-3 h-3 text-emerald-400" />
                   {settings.latestStatus}
@@ -358,7 +358,7 @@ export default function SettingsView({
                   id="btn-check-for-updates"
                 >
                   <Activity className={`w-3.5 h-3.5 text-blue-400 ${isCheckingUpdates ? 'animate-spin' : ''}`} />
-                  {isCheckingUpdates ? 'Checking...' : (updateEnabled ? 'Check for Updates' : 'Open Releases')}
+                  {isCheckingUpdates ? '检查中...' : (updateEnabled ? '检查更新' : '打开发布页')}
                 </motion.button>
                 {canInstallUpdate && (
                   <motion.button
@@ -371,7 +371,7 @@ export default function SettingsView({
                     id="btn-install-update"
                   >
                     <Download className={`w-3.5 h-3.5 ${isInstallingUpdate ? 'animate-pulse' : ''}`} />
-                    {isInstallingUpdate ? 'Installing...' : 'Install & Restart'}
+                    {isInstallingUpdate ? '安装中...' : '安装并重启'}
                   </motion.button>
                 )}
               </div>
@@ -382,21 +382,21 @@ export default function SettingsView({
 
       {/* Card 5: Banner footer link */}
       <div 
-        className="backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-lg overflow-hidden relative"
+        className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-lg overflow-hidden relative"
         id="card-footer-banner"
       >
         <div className="absolute top-0 left-0 w-[3px] h-full bg-gradient-to-b from-blue-500/50 to-cyan-400/50" />
 
         <div className="flex items-center gap-4 text-left" id="footer-banner-left">
           <div className="w-12 h-12 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 shrink-0">
-            <Zap className="w-5 h-5 text-blue-400 animate-pulse" />
+            <Zap className="w-5 h-5 text-blue-400" />
           </div>
           <div className="flex flex-col" id="footer-banner-titles">
             <span className="font-bold text-slate-100 text-sm tracking-wide font-sans">
               Codex Account Manager {settings.version.startsWith('v') ? settings.version : `v${settings.version}`}
             </span>
             <span className="text-xs text-slate-400 mt-1">
-              Built for precision account switching and high-velocity workflow automation.
+              本地优先的 Codex 多账号管理工具。
             </span>
           </div>
         </div>
@@ -413,7 +413,7 @@ export default function SettingsView({
               id="btn-open-logs"
             >
               <FolderOpen className="w-3.5 h-3.5" />
-              Logs
+              日志
             </motion.button>
           )}
           <motion.a
@@ -440,7 +440,7 @@ export default function SettingsView({
             id="btn-documentation"
           >
             <FileText className="w-3.5 h-3.5" />
-            Documentation
+            文档
           </motion.a>
         </div>
       </div>
