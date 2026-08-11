@@ -7,7 +7,65 @@ release is published.
 
 ## [Unreleased]
 
-No unreleased changes.
+- Track current upstream Codex client behavior: narrow OAuth scopes to
+  `openid profile email offline_access`, send token refresh requests as
+  form-encoded OAuth requests, and drop browser-imitation API headers.
+- Migrate the account profile check to `backend-api/wham/accounts/check` and
+  stop calling the retired subscriptions endpoint; a resolved account profile
+  now counts as a successful subscription refresh even without an expiry.
+- Read the newer `chatgpt_account_id` JWT claim and additional organization-id
+  claim names so new tokens keep their `ChatGPT-Account-Id` header and stable
+  account identity; merge re-added accounts into the existing record when the
+  derived storage id changes.
+- Honor the official `CODEX_HOME` environment variable when locating the Codex
+  data directory.
+- Recognize the official `agentIdentity` authentication format in `auth.json`
+  and report it clearly instead of a generic unsupported message.
+- Clear a stale missing-refresh-token reauthorization flag once a refresh
+  token is available again, and treat invalidated-token error text as a
+  reauthorization signal.
+- Parse FastAPI-style `detail.code` error bodies and log `request-id`/`cf-ray`
+  diagnostics when quota requests fail.
+- Classify the upstream `invalid_refresh_token` error as a reauthorization
+  signal so dead accounts stop retrying and surface the reauthorize action
+  (found during live verification against the current API).
+- Make tab switching smooth by rendering the dashboard backdrops as two
+  persistent pre-decoded layers that cross-fade with GPU-composited opacity,
+  keeping the exact same visuals.
+- Retry atomic file swaps and transaction rollbacks when antivirus or indexer
+  tools briefly lock the target file, treat the retired reset-credit endpoint
+  as an absent feature in the daemon, cap the in-app notification feed, and
+  clamp user-edited auto-switch thresholds into the valid percentage range.
+- Remove the unused `lucide` runtime dependency, delete the orphaned
+  `src/main/window.js`, correct dotted installer names in the English README,
+  and ignore IDE project folders.
+- Remove features whose upstream endpoints were retired: the reset-credit
+  consumption flow and the manual subscription refresh (plan type now comes
+  from quota responses automatically).
+- Deduplicate UI entry points: the header refresh icon, the card menu's
+  duplicate sync action, the footer Release Notes link, the redundant
+  needs-action and daemon-status statistics, and the manual account re-read
+  button.
+- Replace decorative placeholders with real data: the token validity bar now
+  shows the actual remaining lifetime, session switch events count real
+  switches, and the quota header shows the true last sync time. The hardcoded
+  online badge was removed.
+- Adopt a frameless window with a custom dark title bar: the header is now a
+  drag region with minimize/maximize/close controls, and the login screen has
+  its own drag strip and close button.
+- Replace the native delete confirmation with an in-app dialog, use
+  letter-avatar gradients so every account is visually distinct, add empty
+  states for the account and quota pages, and calm decorative animations.
+- Unify the interface language: action buttons, labels, toasts, and log
+  messages now use Chinese while status codes and technical terms stay in
+  English; the sidebar navigation is simplified to single-line items and the
+  login screen replaces the fake password field with a DPAPI protection note.
+- Polish every surface: all dialogs and the notification drawer now animate
+  out as well as in (with fading backdrops and a sliding drawer), account
+  cards animate smoothly when filtered or refreshed, button radii and header
+  action rhythm are consistent across pages, the header avatar joins the
+  letter-avatar system, the session switch counter moved next to the daemon
+  capsule, and the settings cards align naturally without fixed heights.
 
 ## [0.1.0-beta.11] - 2026-07-04
 

@@ -1,6 +1,6 @@
-const { b64url, sha256hex, codeChallenge, ts, tsIso, buildId, jwtPayload, jwtExp, isTokenExpired, extractChatgptAccountId } = require("./crypto-utils");
+const { b64url, sha256hex, codeChallenge, ts, tsIso, buildId, jwtPayload, jwtExp, isTokenExpired, extractChatgptAccountId, extractChatgptOrganizationId } = require("./crypto-utils");
 const { parseTsStr } = require("./time-utils");
-const { httpJson, buildCodexHeaders, extractErrorCode, isTokenRevoked } = require("./http-client");
+const { httpJson, buildCodexHeaders, extractErrorCode } = require("./http-client");
 const { setSecretCodec, protectData, unprotectData, ensureDir, normalizeAccountId, accountFilePath, loadIdx, saveIdx, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct, getStorageDiagnostics, rebuildIndex } = require("./storage");
 const { writeAuthJson, writeProjection, clearApiBaseUrl, killCodex, startCodex, doSwitch, launchOfficialCodex, setSwitchRuntimeForTests } = require("./switch");
 const { oauthLoginFlow, restorePendingOAuth, cancelOAuth, completeOAuthManually, getOAuthStatus, upsert } = require("./oauth");
@@ -8,8 +8,6 @@ const { inspectAuthState, adoptOfficialAuth, reapplyManagedAuth, authFingerprint
 const { initLogger, logInfo, logWarn, logError, getLogDir, sanitizeMessage } = require("./logger");
 const { refreshOneTok, needsRefresh, refreshAll } = require("./token-refresh");
 const { fetchQuota, fetchQuotaWithTokenRepair, isQuotaAuthError, refreshQuota, extractQuotaMetrics } = require("./quota");
-const { fetchResetCredits, consumeResetCredit } = require("./reset-credits");
-const { fetchSubscriptionStatus, refreshSubscription } = require("./subscription");
 const { loadAutoSwitchCfg, saveAutoSwitchCfg, DEFAULT_AUTO_SWITCH_CFG } = require("./config-manager");
 const { withAccountLock, withAccountLocks } = require("./operation-locks");
 const { metricCrossedThreshold, buildSwitchCandidate, pickBestCandidate, resolveMonitoredIds, autoSwitchTick } = require("./auto-switch");
@@ -18,11 +16,11 @@ const { getCodexInstallationStatus, assertOfficialCodexInstalled } = require("./
 
 module.exports = {
   // crypto-utils
-  b64url, sha256hex, codeChallenge, ts, tsIso, buildId, jwtPayload, jwtExp, isTokenExpired, extractChatgptAccountId,
+  b64url, sha256hex, codeChallenge, ts, tsIso, buildId, jwtPayload, jwtExp, isTokenExpired, extractChatgptAccountId, extractChatgptOrganizationId,
   // time-utils
   parseTsStr,
   // http-client
-  httpJson, buildCodexHeaders, extractErrorCode, isTokenRevoked,
+  httpJson, buildCodexHeaders, extractErrorCode,
   // storage
   setSecretCodec, protectData, unprotectData, ensureDir, normalizeAccountId, accountFilePath, loadIdx, saveIdx, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct, getStorageDiagnostics, rebuildIndex,
   // switch
@@ -37,10 +35,6 @@ module.exports = {
   refreshOneTok, needsRefresh, refreshAll,
   // quota
   fetchQuota, fetchQuotaWithTokenRepair, isQuotaAuthError, refreshQuota, extractQuotaMetrics,
-  // reset-credits
-  fetchResetCredits, consumeResetCredit,
-  // subscription
-  fetchSubscriptionStatus, refreshSubscription,
   // config-manager
   loadAutoSwitchCfg, saveAutoSwitchCfg, DEFAULT_AUTO_SWITCH_CFG,
   // operation-locks

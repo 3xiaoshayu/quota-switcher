@@ -7,6 +7,7 @@ const { logWarn } = require("./logger");
 const TOKEN_REPAIR_CODES = new Set([
   "invalid_grant",
   "invalid_token",
+  "invalid_refresh_token",
   "token_revoked",
   "token_invalidated",
   "refresh_token_expired",
@@ -55,12 +56,24 @@ async function fetchQuotaWithTokenRepair(acct, dependencies = {}) {
   }
 }
 
+function responseDiagnostics(resp) {
+  const headers = resp.headers || {};
+  const requestId = headers["request-id"] || headers["x-request-id"] || null;
+  const cfRay = headers["cf-ray"] || null;
+  const parts = [];
+  if (requestId) parts.push(`request-id=${requestId}`);
+  if (cfRay) parts.push(`cf-ray=${cfRay}`);
+  parts.push(`body_len=${String(resp.body || "").length}`);
+  return parts.join(" ");
+}
+
 async function fetchQuota(acct) {
   const headers = buildCodexHeaders(acct);
   const resp = await httpJson(USAGE_URL, { headers });
   if (resp.status >= 400) {
     const { extractErrorCode } = require("./http-client");
     const code = extractErrorCode(resp.body);
+    logWarn(`Quota request failed: status=${resp.status}${code ? ` code=${code}` : ""} ${responseDiagnostics(resp)}`);
     throw new Error("HTTP " + resp.status + (code ? " " + code : ""));
   }
   const data = JSON.parse(resp.body);
@@ -91,7 +104,6 @@ function parseQuotaPayload(data) {
   const hourlyRemaining = remaining(pw);
   const weeklyRemaining = remaining(sw);
   const weeklyBlocksHourly = weeklyRemaining === 0 && hourlyRemaining != null;
-  const resetCreditsAvailable = (data.rate_limit_reset_credits || {}).available_count;
 
   return {
     hourly_percentage: weeklyBlocksHourly ? 0 : hourlyRemaining,
@@ -105,9 +117,6 @@ function parseQuotaPayload(data) {
     weekly_window_minutes: windowMin(sw),
     weekly_window_present: !!sw,
     weekly_blocks_hourly: weeklyBlocksHourly,
-    reset_credits_available: resetCreditsAvailable == null ? null : Math.max(0, Number(resetCreditsAvailable) || 0),
-    reset_credits: [],
-    reset_credits_next_expires_at: null,
     plan_type: data.chatgpt_plan_type || data.plan_type || null,
     raw_data: data,
   };
@@ -141,13 +150,6 @@ async function refreshQuota(acct, options = {}) {
       const ai = idx.accounts.find((a) => a.id === acct.id);
       if (ai) ai.plan_type = q.plan_type;
       saveIdx(idx);
-    }
-    if (q.reset_credits_available != null) {
-      acct.reset_credits = {
-        available_count: q.reset_credits_available,
-        credits: acct.reset_credits?.credits || [],
-        next_expires_at: q.reset_credits_available > 0 ? (acct.reset_credits?.next_expires_at || null) : null,
-      };
     }
     saveAcct(acct);
     return q;

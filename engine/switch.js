@@ -4,7 +4,7 @@ const cp = require("node:child_process");
 const { tsIso, ts } = require("./crypto-utils");
 const { CODEX_DIR, CODEX_AUMID, IDX_PATH } = require("./config");
 const { loadIdx, saveIdx, saveAcct, currentAcct, ensureDir, accountFilePath } = require("./storage");
-const { writeJsonAtomic, writeTextAtomic } = require("./atomic-file");
+const { writeJsonAtomic, writeTextAtomic, renameWithRetry } = require("./atomic-file");
 const { writeManagedProjection, inspectAuthState } = require("./auth-state");
 const { assertOfficialCodexInstalled } = require("./codex-installation");
 const { logInfo, logWarn, logError } = require("./logger");
@@ -206,7 +206,7 @@ function restoreFile(filePath, content) {
   ensureDir(path.dirname(filePath));
   const tempPath = `${filePath}.rollback.tmp`;
   fs.writeFileSync(tempPath, content);
-  fs.renameSync(tempPath, filePath);
+  renameWithRetry(tempPath, filePath);
 }
 
 async function doSwitch(account, options = {}) {

@@ -9,6 +9,29 @@ function uniqueSuffix() {
   return `${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`;
 }
 
+function sleepSync(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+const TRANSIENT_RENAME_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
+
+// Antivirus scanners and the Windows search indexer can briefly hold a handle
+// on the target file; retry the swap instead of failing the whole write.
+function renameWithRetry(fromPath, toPath) {
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      fs.renameSync(fromPath, toPath);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!TRANSIENT_RENAME_CODES.has(error.code)) throw error;
+      sleepSync(20 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+
 function writeTextAtomic(filePath, content, options = {}) {
   const backup = options.backup !== false;
   ensureParent(filePath);
@@ -25,7 +48,7 @@ function writeTextAtomic(filePath, content, options = {}) {
     fs.fsyncSync(descriptor);
     fs.closeSync(descriptor);
     descriptor = null;
-    fs.renameSync(tempPath, filePath);
+    renameWithRetry(tempPath, filePath);
   } catch (error) {
     if (descriptor !== null) {
       try { fs.closeSync(descriptor); } catch {}
@@ -60,4 +83,5 @@ module.exports = {
   writeJsonAtomic,
   quarantineFile,
   restoreBackup,
+  renameWithRetry,
 };

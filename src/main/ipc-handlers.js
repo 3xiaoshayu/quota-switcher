@@ -36,6 +36,7 @@ function publicAccount(eng, account) {
     if (!account) return null;
     const accessToken = account.tokens?.access_token || null;
     const expiryDate = accessToken ? eng.jwtExp(accessToken) : null;
+    const issuedAt = accessToken ? (eng.jwtPayload(accessToken)?.iat ?? null) : null;
     return {
         id: account.id,
         email: account.email,
@@ -58,19 +59,12 @@ function publicAccount(eng, account) {
             message: account.quota_error.message || String(account.quota_error),
             timestamp: account.quota_error.timestamp || null,
         } : null,
-        reset_credits: account.reset_credits ? {
-            available_count: account.reset_credits.available_count ?? 0,
-            next_expires_at: account.reset_credits.next_expires_at || null,
-        } : null,
-        reset_credits_error: account.reset_credits_error ? {
-            message: account.reset_credits_error.message || String(account.reset_credits_error),
-            timestamp: account.reset_credits_error.timestamp || null,
-        } : null,
         token_status: {
             accessAvailable: !!accessToken,
             refreshAvailable: !!account.tokens?.refresh_token,
             expired: accessToken ? eng.isTokenExpired(accessToken) : true,
             expiryDate,
+            issuedAt: typeof issuedAt === "number" ? issuedAt : null,
             timeLeft: expiryDate ? expiryDate - eng.ts() : null,
         },
     };
@@ -153,6 +147,23 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             const error = await shell.openPath(eng.getLogDir());
             return error ? fail(error) : ok(true);
         } catch (openError) { return fail(openError.message); }
+    });
+
+    handle("window:minimize", (event) => {
+        BrowserWindow.fromWebContents(event.sender)?.minimize();
+        return ok(true);
+    });
+    handle("window:toggleMaximize", (event) => {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        if (win) {
+            if (win.isMaximized()) win.unmaximize();
+            else win.maximize();
+        }
+        return ok(true);
+    });
+    handle("window:close", (event) => {
+        BrowserWindow.fromWebContents(event.sender)?.close();
+        return ok(true);
     });
     handle("storage:diagnostics", () => ok(eng.getStorageDiagnostics()));
 
@@ -306,29 +317,6 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             timeLeft: expiryDate ? expiryDate - eng.ts() : null,
         });
     });
-    handle("reset:consume", async (event, id) => {
-        try {
-            return await withFreshAccount(eng, id, async account => {
-                return ok(await eng.consumeResetCredit(account));
-            });
-        } catch (error) { return fail(error.message); }
-    });
-    handle("subscription:refresh", async (event, id, force) => {
-        try {
-            return await withFreshAccount(eng, id, async account => {
-                if (account.requires_reauth) {
-                    return fail(reauthorizationRequiredMessage("the subscription can be refreshed"));
-                }
-                const changed = await eng.refreshSubscription(account, !!force);
-                return ok({
-                    changed,
-                    plan_type: account.plan_type,
-                    subscription_active_until: account.subscription_active_until,
-                });
-            });
-        } catch (error) { return fail(error.message); }
-    });
-
     let daemonTimer = null;
     let daemonInFlight = false;
     let daemonRunRequested = false;

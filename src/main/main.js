@@ -1,10 +1,49 @@
-const { app, BrowserWindow, dialog, safeStorage, shell } = require("electron");
+const { app, BrowserWindow, dialog, safeStorage, screen, shell } = require("electron");
 const path = require("path");
+const fs = require("fs");
 const { registerIpcHandlers } = require("./ipc-handlers");
 const { createUpdateService } = require("./updater");
+const { writeJsonAtomic } = require(path.resolve(__dirname, "..", "..", "engine", "atomic-file"));
 
 let mainWindow = null;
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
+
+function windowStatePath() {
+    return path.join(app.getPath("userData"), "window-state.json");
+}
+
+function loadWindowState() {
+    try {
+        const state = JSON.parse(fs.readFileSync(windowStatePath(), "utf8"));
+        if (!state || typeof state !== "object") return null;
+        const bounds = state.bounds;
+        const isMaximized = !!state.isMaximized;
+        if (!bounds || ![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)) {
+            return { bounds: null, isMaximized };
+        }
+        // Only restore the position when it still intersects a visible display
+        // (monitor layouts change between sessions).
+        const visible = screen.getAllDisplays().some((display) => {
+            const area = display.workArea;
+            return bounds.x < area.x + area.width
+                && bounds.x + bounds.width > area.x
+                && bounds.y < area.y + area.height
+                && bounds.y + bounds.height > area.y;
+        });
+        return { bounds: visible ? bounds : null, isMaximized };
+    } catch {
+        return null;
+    }
+}
+
+function saveWindowState(win) {
+    try {
+        writeJsonAtomic(windowStatePath(), {
+            bounds: win.isMaximized() || win.isMinimized() ? win.getNormalBounds() : win.getBounds(),
+            isMaximized: win.isMaximized(),
+        }, { backup: false });
+    } catch {}
+}
 
 function focusMainWindow() {
     if (!mainWindow) return;
@@ -33,11 +72,15 @@ function startApplication() {
     eng.restorePendingOAuth();
 
     const updateService = createUpdateService({ app, BrowserWindow });
+    const savedWindowState = loadWindowState();
     const win = new BrowserWindow({
-        width: 1440, height: 900,
+        width: savedWindowState?.bounds?.width || 1440,
+        height: savedWindowState?.bounds?.height || 900,
+        ...(savedWindowState?.bounds
+            ? { x: savedWindowState.bounds.x, y: savedWindowState.bounds.y }
+            : { center: true }),
         minWidth: 1280, minHeight: 720,
-        center: true,
-        frame: true,
+        frame: false,
         autoHideMenuBar: true,
         title: "Codex Account Manager",
         backgroundColor: "#0f172a",
@@ -49,6 +92,8 @@ function startApplication() {
         },
     });
     mainWindow = win;
+    if (savedWindowState?.isMaximized) win.maximize();
+    win.on("close", () => saveWindowState(win));
     win.on("closed", () => {
         if (mainWindow === win) mainWindow = null;
     });

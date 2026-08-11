@@ -3,6 +3,7 @@ dist/
 src/renderer-dist/
 coverage/
 .vscode/
+.idea/
 *.log
 .reference/
 HANDOFF.md

@@ -143,6 +143,6 @@ test("dashboard state replaces internal reauthorization details with actionable 
   assert.equal(snapshot.accounts[0].status, "SUSPENDED");
   assert.equal(
     snapshot.accounts[0].warning,
-    "Account requires reauthorization before tokens can be refreshed.",
+    "该账号需要重新授权后才能刷新 Token。",
   );
 });

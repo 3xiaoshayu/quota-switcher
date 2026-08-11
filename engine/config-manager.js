@@ -18,11 +18,24 @@ function normalizeSyncIntervalMinutes(value) {
   return Math.min(60, Math.max(1, Math.round(number)));
 }
 
+// The config file is user-editable, so clamp thresholds into the percentage
+// range the switch policy expects.
+function normalizeThreshold(value, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(100, Math.max(0, Math.round(number)));
+}
+
 function normalizeAutoSwitchCfg(cfg) {
   const next = Object.assign({}, DEFAULT_AUTO_SWITCH_CFG, cfg || {});
+  next.enabled = !!next.enabled;
+  next.primary_threshold = normalizeThreshold(next.primary_threshold, DEFAULT_AUTO_SWITCH_CFG.primary_threshold);
+  next.secondary_threshold = normalizeThreshold(next.secondary_threshold, DEFAULT_AUTO_SWITCH_CFG.secondary_threshold);
   next.sync_interval_minutes = normalizeSyncIntervalMinutes(next.sync_interval_minutes);
   if (next.account_scope_mode !== "selected") next.account_scope_mode = "all";
-  if (!Array.isArray(next.selected_account_ids)) next.selected_account_ids = [];
+  next.selected_account_ids = Array.isArray(next.selected_account_ids)
+    ? next.selected_account_ids.filter((id) => id != null && String(id).trim() !== "").map(String)
+    : [];
   return next;
 }
 

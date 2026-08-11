@@ -1,7 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { DATA_DIR, ACCTS_DIR, IDX_PATH } = require("./config");
-const { writeJsonAtomic, quarantineFile, restoreBackup } = require("./atomic-file");
+const { writeJsonAtomic, quarantineFile, restoreBackup, renameWithRetry } = require("./atomic-file");
 const { logInfo, logWarn, logError } = require("./logger");
 
 let secretCodec = null;
@@ -335,7 +335,7 @@ function restoreFile(filePath, content) {
   ensureDir(path.dirname(filePath));
   const tempPath = `${filePath}.rollback.tmp`;
   fs.writeFileSync(tempPath, content);
-  fs.renameSync(tempPath, filePath);
+  renameWithRetry(tempPath, filePath);
 }
 
 function deleteAcct(id, options = {}) {

@@ -57,8 +57,8 @@ The Release workflow:
 
 ## Expected assets
 
-- `Codex.Account.Manager-Setup-<version>-x64.exe`
-- `Codex.Account.Manager-<version>-x64.zip`
+- `Codex-Account-Manager-Setup-<version>-x64.exe`
+- `Codex-Account-Manager-<version>-x64.zip`
 - installer `.blockmap`
 - `latest.yml`
 - `SHA256SUMS.txt`

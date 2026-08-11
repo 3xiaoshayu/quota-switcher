@@ -52,7 +52,7 @@ Codex Account Manager 专注于一个具体工作流：让多个 Codex 账号的
 ### 下载与首次使用
 
 1. 打开 [GitHub Releases](https://github.com/3xiaoshayu/codex-account-manager/releases)。
-2. 下载最新的 `Codex.Account.Manager-Setup-<version>-x64.exe`。
+2. 下载最新的 `Codex-Account-Manager-Setup-<version>-x64.exe`。
 3. 完成安装并启动应用。
 4. 点击“添加账号”，在浏览器中完成 OAuth 登录。
 5. 返回应用后确认账号卡片、额度和当前账号状态。
@@ -67,7 +67,7 @@ Beta 版本采用手动更新；未来不含预发布标识的稳定版本会在
 每个 Release 都包含 `SHA256SUMS.txt`。在 PowerShell 中运行：
 
 ```powershell
-Get-FileHash ".\Codex.Account.Manager-Setup-<version>-x64.exe" -Algorithm SHA256
+Get-FileHash ".\Codex-Account-Manager-Setup-<version>-x64.exe" -Algorithm SHA256
 ```
 
 将输出与 `SHA256SUMS.txt` 中对应文件的哈希值比较。

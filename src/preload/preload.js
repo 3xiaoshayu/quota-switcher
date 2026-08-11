@@ -10,6 +10,9 @@ const api = {
   openExternal: (url) => ipcRenderer.invoke('app:openExternal', url),
   openLogs: () => ipcRenderer.invoke('app:openLogs'),
   getStorageDiagnostics: () => ipcRenderer.invoke('storage:diagnostics'),
+  minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
+  toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggleMaximize'),
+  closeWindow: () => ipcRenderer.invoke('window:close'),
 
   // 账号管理
   listAccounts: () => ipcRenderer.invoke('account:list'),
@@ -34,10 +37,6 @@ const api = {
   refreshToken: (id) => ipcRenderer.invoke('token:refresh', id),
   refreshAllTokens: (force) => ipcRenderer.invoke('token:refreshAll', force),
   getTokenStatus: (id) => ipcRenderer.invoke('token:status', id),
-
-  // 重置额度
-  consumeResetCredit: (id) => ipcRenderer.invoke('reset:consume', id),
-  refreshSubscription: (id, force) => ipcRenderer.invoke('subscription:refresh', id, force),
 
   // 自动切号
   getAutoSwitchConfig: () => ipcRenderer.invoke('autoswitch:config:get'),

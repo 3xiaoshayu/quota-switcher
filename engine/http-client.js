@@ -199,14 +199,12 @@ async function httpJson(url, opts = {}) {
 
 function buildCodexHeaders(acct) {
   const { extractChatgptAccountId } = require("./crypto-utils");
+  // The chatgpt.com backend only needs the bearer token plus the account id;
+  // browser-imitation headers are no longer required by the upstream API.
   const headers = {
     "Authorization": "Bearer " + acct.tokens.access_token,
     "Accept": "application/json",
     "Content-Type": "application/json",
-    "Referer": "https://chatgpt.com/",
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
-    "OpenAI-Beta": "codex-1",
-    "originator": "Codex Desktop",
   };
   const aid = acct.account_id || extractChatgptAccountId(acct.tokens.access_token);
   if (aid) headers["ChatGPT-Account-Id"] = aid;
@@ -216,6 +214,7 @@ function buildCodexHeaders(acct) {
 function extractErrorCode(body) {
   try {
     const v = JSON.parse(body);
+    if (v.detail && typeof v.detail === "object" && v.detail.code) return String(v.detail.code);
     if (v.error && typeof v.error === "object") return v.error.code || null;
     if (v.error && typeof v.error === "string") return v.error;
     if (v.code) return String(v.code);
@@ -223,10 +222,4 @@ function extractErrorCode(body) {
   } catch { return null; }
 }
 
-function isTokenRevoked(body) {
-  const code = extractErrorCode(body);
-  return code === "token_revoked" || code === "token_invalidated" ||
-    body.includes("token_revoked") || body.includes("token_invalidated");
-}
-
-module.exports = { httpJson, buildCodexHeaders, extractErrorCode, isTokenRevoked };
+module.exports = { httpJson, buildCodexHeaders, extractErrorCode };

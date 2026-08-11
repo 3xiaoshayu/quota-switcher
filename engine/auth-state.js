@@ -57,20 +57,39 @@ function readJson(filePath) {
   }
 }
 
+function readAgentIdentity(value) {
+  const raw = value?.agent_identity || value?.agentIdentity;
+  if (!raw || typeof raw !== "object") return null;
+  return {
+    email: raw.email ? String(raw.email) : null,
+    accountId: raw.account_id || raw.accountId ? String(raw.account_id || raw.accountId) : null,
+  };
+}
+
 function readOfficialAuth() {
   const value = readJson(AUTH_PATH);
   if (!value) return null;
   const tokens = canonicalAuthTokens(value);
+  const agentIdentity = readAgentIdentity(value);
   if (!tokens.access_token && !tokens.id_token) {
-    return { value, tokens, supported: false, fingerprint: authFingerprint(value), identity: null };
+    return {
+      value,
+      tokens,
+      supported: false,
+      agentIdentity,
+      fingerprint: authFingerprint(value),
+      identity: agentIdentity,
+    };
   }
   const payload = jwtPayload(tokens.id_token) || jwtPayload(tokens.access_token) || {};
   const auth = payload["https://api.openai.com/auth"] || {};
   const identity = {
     email: payload.email ? String(payload.email) : null,
-    accountId: tokens.account_id || (auth.account_id ? String(auth.account_id) : extractChatgptAccountId(tokens.access_token)),
+    accountId: tokens.account_id
+      || (auth.chatgpt_account_id ? String(auth.chatgpt_account_id) : null)
+      || (auth.account_id ? String(auth.account_id) : extractChatgptAccountId(tokens.access_token)),
   };
-  return { value, tokens, supported: true, fingerprint: authFingerprint(value), identity };
+  return { value, tokens, supported: true, agentIdentity, fingerprint: authFingerprint(value), identity };
 }
 
 function readManagedProjection() {
@@ -171,8 +190,10 @@ function inspectAuthState(options = {}) {
       requiresResolution: !!current,
       currentAccountId: current?.id || null,
       matchedAccountId: null,
-      officialIdentity: null,
-      message: "The official Codex authentication format is not an OAuth account.",
+      officialIdentity: official.agentIdentity ? publicOfficialIdentity(official) : null,
+      message: official.agentIdentity
+        ? "Official Codex is signed in with an agent identity, which this manager cannot manage."
+        : "The official Codex authentication format is not an OAuth account.",
     });
   }
 

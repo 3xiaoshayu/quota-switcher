@@ -2,7 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const http = require("node:http");
 const cp = require("node:child_process");
-const { b64url, codeChallenge, buildId, ts, jwtPayload } = require("./crypto-utils");
+const { b64url, codeChallenge, buildId, ts, jwtPayload, extractChatgptAccountId, extractChatgptOrganizationId } = require("./crypto-utils");
 const { CLIENT_ID, AUTH_URL, TOKEN_URL, SCOPES, CALLBACK_PORT, DATA_DIR } = require("./config");
 const { httpJson, extractErrorCode } = require("./http-client");
 const {
@@ -13,6 +13,7 @@ const {
   saveIdx,
   loadAcct,
   saveAcct,
+  listAccts,
 } = require("./storage");
 const { writeJsonAtomic } = require("./atomic-file");
 const { logInfo, logWarn, logError } = require("./logger");
@@ -146,7 +147,6 @@ async function exchangeCode(pending, code) {
     code,
     redirect_uri: pending.redirectUri,
     code_verifier: pending.verifier,
-    scope: SCOPES,
   }).toString();
   const response = await httpJson(TOKEN_URL, {
     method: "POST",
@@ -172,14 +172,20 @@ function accountFromTokens(tokens, existing = null) {
   if (!payload) throw new Error("The OAuth identity token could not be parsed");
   const auth = payload["https://api.openai.com/auth"] || {};
   const email = String(payload.email || "");
-  const accountId = auth.account_id ? String(auth.account_id) : (tokens.account_id || null);
-  const userId = auth.user_id ? String(auth.user_id) : null;
+  // Prefer the access token claims (newer key names), then the id_token claim,
+  // then any account id carried alongside the token payload.
+  const accountId = extractChatgptAccountId(tokens.access_token)
+    || (auth.chatgpt_account_id ? String(auth.chatgpt_account_id) : null)
+    || (auth.account_id ? String(auth.account_id) : null)
+    || (tokens.account_id || null);
+  const userId = auth.user_id ? String(auth.user_id) : (auth.chatgpt_user_id ? String(auth.chatgpt_user_id) : null);
   const plan = auth.chatgpt_plan_type ? String(auth.chatgpt_plan_type) : null;
   const subscriptionUntil = auth.chatgpt_subscription_active_until
     ? String(auth.chatgpt_subscription_active_until)
     : null;
-  const defaultOrganization = (auth.organizations || []).find((organization) => organization.is_default);
-  const organizationId = defaultOrganization?.id || null;
+  const organizationId = extractChatgptOrganizationId(tokens.access_token)
+    || extractChatgptOrganizationId(tokens.id_token)
+    || null;
   const id = buildId(email, accountId, organizationId);
   const now = ts();
   return {
@@ -207,12 +213,6 @@ function accountFromTokens(tokens, existing = null) {
     usage_updated_at: existing?.usage_updated_at || null,
     quota_refresh_failures: 0,
     quota_next_retry_at: null,
-    subscription_query_last_success_at: existing?.subscription_query_last_success_at || null,
-    subscription_query_last_attempt_at: existing?.subscription_query_last_attempt_at || null,
-    subscription_query_next_retry_at: null,
-    subscription_query_last_error: null,
-    reset_credits: existing?.reset_credits || null,
-    reset_credits_error: null,
     created_at: existing?.created_at || now,
     last_used: existing?.last_used || now,
   };
@@ -233,7 +233,19 @@ function upsert(tokens, options = {}) {
   const targetAccountId = options.targetAccountId || null;
   const targetAccount = targetAccountId ? loadAcct(targetAccountId) : null;
   const mismatch = !!targetAccountId && (!targetAccount || !sameAccountIdentity(preview, targetAccount));
-  const saveId = mismatch ? preview.id : (targetAccountId || preview.id);
+  let saveId;
+  if (mismatch) {
+    saveId = preview.id;
+  } else if (targetAccountId) {
+    saveId = targetAccountId;
+  } else {
+    // Merge into an existing record for the same identity so identity-hash
+    // changes (e.g. improved organization extraction) cannot split an account.
+    const existingMatch = loadAcct(preview.id)
+      ? null
+      : listAccts().find((account) => sameAccountIdentity(preview, account));
+    saveId = existingMatch?.id || preview.id;
+  }
   const existing = loadAcct(saveId);
   const account = accountFromTokens(tokens, existing);
   account.id = saveId;

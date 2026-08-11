@@ -54,7 +54,7 @@ only selects among accounts that you explicitly saved.
 ### Download and first run
 
 1. Open [GitHub Releases](https://github.com/3xiaoshayu/codex-account-manager/releases).
-2. Download `Codex.Account.Manager-Setup-<version>-x64.exe` from the newest release.
+2. Download `Codex-Account-Manager-Setup-<version>-x64.exe` from the newest release.
 3. Install and launch the app.
 4. Select **Add account** and complete OAuth in your browser.
 5. Return to the app and confirm the account card, quota, and active-account state.
@@ -71,7 +71,7 @@ suffix will download updates in the background and ask before restarting.
 Each release includes `SHA256SUMS.txt`:
 
 ```powershell
-Get-FileHash ".\Codex.Account.Manager-Setup-<version>-x64.exe" -Algorithm SHA256
+Get-FileHash ".\Codex-Account-Manager-Setup-<version>-x64.exe" -Algorithm SHA256
 ```
 
 Compare the output with the matching line in `SHA256SUMS.txt`.

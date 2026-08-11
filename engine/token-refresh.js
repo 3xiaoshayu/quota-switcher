@@ -8,12 +8,25 @@ const { withAccountLock } = require("./operation-locks");
 const REAUTH_ERROR_CODES = new Set([
   "invalid_grant",
   "invalid_token",
+  "invalid_refresh_token",
   "token_revoked",
   "token_invalidated",
   "refresh_token_expired",
   "refresh_token_invalidated",
   "refresh_token_reused",
 ]);
+
+// Some upstream failures carry only a human-readable message instead of a code.
+const REAUTH_ERROR_TEXT = [
+  "invalid refresh token",
+  "invalid_refresh_token",
+  "authentication token has been invalidated",
+];
+
+function isReauthErrorText(detail) {
+  const lower = String(detail || "").toLowerCase();
+  return REAUTH_ERROR_TEXT.some((text) => lower.includes(text));
+}
 
 function tokenRefreshError(status, code) {
   if (code === "unsupported_country_region_territory") {
@@ -34,6 +47,7 @@ function hasTokenRepairSignal(acct) {
   return [
     "invalid_grant",
     "invalid_token",
+    "invalid_refresh_token",
     "token_revoked",
     "token_invalidated",
     "refresh_token_expired",
@@ -74,8 +88,18 @@ async function refreshOneTok(acct, options = {}) {
   const force = !!optionBag.force;
   const request = optionBag.httpJson || httpJson;
   if (acct.requires_reauth) {
-    const code = acct.quota_error?.code || "reauthorization_required";
-    return { ok: false, skipped: true, revoked: true, reauthRequired: true, code, error: reauthRequiredError(code) };
+    // Self-heal: an account flagged only for a missing refresh token becomes
+    // usable again once a refresh token is available (e.g. synced from the
+    // official auth.json).
+    if (acct.quota_error?.code === "missing_refresh_token" && acct.tokens?.refresh_token) {
+      acct.requires_reauth = false;
+      acct.reauth_reason = null;
+      acct.quota_error = null;
+      saveAcct(acct);
+    } else {
+      const code = acct.quota_error?.code || "reauthorization_required";
+      return { ok: false, skipped: true, revoked: true, reauthRequired: true, code, error: reauthRequiredError(code) };
+    }
   }
   if (!force && !needsRefresh(acct) && !hasTokenRepairSignal(acct)) {
     return { ok: true, skipped: true, gen: acct.token_generation || 0, timeLeft: tokenTimeLeft(acct) };
@@ -84,18 +108,21 @@ async function refreshOneTok(acct, options = {}) {
     markRequiresReauth(acct, "missing_refresh_token", "This account has no refresh token.");
     return { ok: false, error: "缺少 refresh_token", revoked: true, reauthRequired: true, code: "missing_refresh_token" };
   }
-  const body = JSON.stringify({
-    client_id: CLIENT_ID, grant_type: "refresh_token",
+  // OAuth 2.0 token endpoints expect form encoding (RFC 6749); this also
+  // matches the current official Codex client behavior.
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
     refresh_token: acct.tokens.refresh_token,
-  });
+    client_id: CLIENT_ID,
+  }).toString();
   try {
     const resp = await request(TOKEN_URL, {
       method: "POST", body,
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
     });
     if (resp.status >= 400) {
       const code = extractErrorCode(resp.body);
-      const revoked = isReauthErrorCode(code);
+      const revoked = isReauthErrorCode(code) || isReauthErrorText(resp.body);
       if (revoked) markRequiresReauth(acct, code, resp.body.slice(0, 300));
       return { ok: false, error: tokenRefreshError(resp.status, code), revoked, code, detail: resp.body.slice(0, 300) };
     }

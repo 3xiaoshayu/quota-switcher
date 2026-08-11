@@ -1,10 +1,9 @@
 const { REFRESH_MINUTES } = require("./config");
 const { needsRefresh, refreshOneTok } = require("./token-refresh");
 const { refreshQuota } = require("./quota");
-const { fetchResetCredits } = require("./reset-credits");
 const { loadAutoSwitchCfg, normalizeSyncIntervalMinutes } = require("./config-manager");
 const { autoSwitchTick } = require("./auto-switch");
-const { loadIdx, listAccts, saveAcct, loadAcct } = require("./storage");
+const { loadIdx, listAccts, loadAcct } = require("./storage");
 const { writeAuthJson, writeProjection } = require("./switch");
 const { inspectAuthState } = require("./auth-state");
 const { withAccountLock } = require("./operation-locks");
@@ -99,20 +98,6 @@ async function runDaemonWorker(options = {}) {
         accountsUpdated++;
       } catch (error) {
         failures.push(failure("quota_refresh", current, error));
-      }
-
-      try {
-        if (isCancelled()) return;
-        const snapshot = await fetchResetCredits(current);
-        if (isCancelled()) return;
-        current.reset_credits = snapshot;
-        current.reset_credits_error = null;
-        saveAcct(current);
-        accountsUpdated++;
-      } catch (error) {
-        current.reset_credits_error = { message: error.message || String(error), timestamp: Math.floor(Date.now() / 1000) };
-        saveAcct(current);
-        failures.push(failure("reset_credits", current, error));
       }
 
       if (isCancelled()) return;

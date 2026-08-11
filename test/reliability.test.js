@@ -66,12 +66,10 @@ test("quota parsing preserves window absence, clamps percentages, and applies we
 
   const missingWeekly = parseQuotaPayload({
     rate_limit: { primary_window: { used_percent: -20, limit_window_seconds: 18000 } },
-    rate_limit_reset_credits: { available_count: 0 },
   });
   assert.equal(missingWeekly.hourly_remaining_percentage, 100);
   assert.equal(missingWeekly.weekly_remaining_percentage, null);
   assert.equal(missingWeekly.weekly_window_present, false);
-  assert.equal(missingWeekly.reset_credits_available, 0);
 
   const blocked = parseQuotaPayload({
     rate_limit: {
@@ -118,105 +116,6 @@ test("quota authorization retries once after repairing an invalidated access tok
   assert.equal(fetchCount, 2);
   assert.equal(refreshCount, 1);
   assert.equal(quota.hourly_remaining_percentage, 75);
-});
-
-test("reset credit parsing retains an explicit zero balance", t => {
-  freshEngine(t);
-  const { parseResetCreditsPayload } = require("../engine/reset-credits");
-  const snapshot = parseResetCreditsPayload({
-    available_count: 0,
-    credits: [{ id: "stale", status: "available" }],
-  });
-  assert.equal(snapshot.available_count, 0);
-});
-
-test("reset credit consumption stays successful when the balance refresh fails", async t => {
-  const { engine } = freshEngine(t);
-  const account = addAccount(engine, "reset@example.com", "acct-reset", "reset");
-  account.reset_credits = { available_count: 1, credits: [], next_expires_at: null };
-  let persisted = 0;
-
-  const { consumeResetCredit } = require("../engine/reset-credits");
-  const result = await consumeResetCredit(account, {
-    httpJson: async () => ({ status: 200, headers: {}, body: "{}" }),
-    fetchResetCredits: async () => { throw new Error("balance endpoint unavailable"); },
-    saveAcct: () => { persisted += 1; },
-  });
-
-  assert.equal(result.consumed, true);
-  assert.equal(result.balance_refreshed, false);
-  assert.equal(result.refresh_error, "balance endpoint unavailable");
-  assert.equal(account.reset_credits_error.message, "balance endpoint unavailable");
-  assert.equal(account.reset_credits.available_count, 0);
-  assert.equal(account.reset_credit_pending_redeem_id, null);
-  assert.equal(persisted, 3);
-});
-
-test("reset credit retry reuses the pending redemption request id", async t => {
-  const { engine } = freshEngine(t);
-  const account = addAccount(engine, "retry-reset@example.com", "acct-retry-reset", "retry-reset");
-  account.reset_credits = { available_count: 1, credits: [], next_expires_at: null };
-  const requestIds = [];
-
-  const { consumeResetCredit } = require("../engine/reset-credits");
-  await assert.rejects(
-    consumeResetCredit(account, {
-      httpJson: async (_url, options) => {
-        requestIds.push(JSON.parse(options.body).redeem_request_id);
-        throw new Error("socket disconnected");
-      },
-      saveAcct: () => {},
-    }),
-    /Retrying will reuse the same request id/,
-  );
-  assert.equal(account.reset_credit_pending_redeem_id, requestIds[0]);
-
-  const result = await consumeResetCredit(account, {
-    httpJson: async (_url, options) => {
-      requestIds.push(JSON.parse(options.body).redeem_request_id);
-      return { status: 200, headers: {}, body: "{}" };
-    },
-    fetchResetCredits: async () => ({ available_count: 0, credits: [], next_expires_at: null }),
-    saveAcct: () => {},
-  });
-
-  assert.equal(requestIds.length, 2);
-  assert.equal(requestIds[1], requestIds[0]);
-  assert.equal(result.consumed, true);
-  assert.equal(result.balance_refreshed, true);
-  assert.equal(account.reset_credit_pending_redeem_id, null);
-});
-
-test("reset credit keeps its request id after an ambiguous HTTP response", async t => {
-  const { engine } = freshEngine(t);
-  const account = addAccount(engine, "ambiguous-reset@example.com", "acct-ambiguous-reset", "ambiguous-reset");
-  account.reset_credits = { available_count: 1, credits: [], next_expires_at: null };
-  const requestIds = [];
-  const { consumeResetCredit } = require("../engine/reset-credits");
-
-  await assert.rejects(
-    consumeResetCredit(account, {
-      httpJson: async (_url, options) => {
-        requestIds.push(JSON.parse(options.body).redeem_request_id);
-        return { status: 409, headers: {}, body: JSON.stringify({ error: { code: "conflict" } }) };
-      },
-      saveAcct: () => {},
-    }),
-    error => error.code === "reset_consume_status_unknown",
-  );
-  assert.equal(account.reset_credit_pending_redeem_id, requestIds[0]);
-
-  const result = await consumeResetCredit(account, {
-    httpJson: async (_url, options) => {
-      requestIds.push(JSON.parse(options.body).redeem_request_id);
-      return { status: 200, headers: {}, body: "{}" };
-    },
-    fetchResetCredits: async () => ({ available_count: 0, credits: [], next_expires_at: null }),
-    saveAcct: () => {},
-  });
-  assert.equal(requestIds[1], requestIds[0]);
-  assert.equal(result.consumed, true);
-  assert.equal(account.reset_credit_pending_redeem_id, null);
 });
 
 test("token refresh IPC does not convert an engine failure into success", () => {
@@ -277,10 +176,9 @@ test("background quota IPC stops at an authentication conflict", async () => {
   assert.equal(refreshCount, 1);
 });
 
-test("quota and subscription IPC skip accounts that require reauthorization", async () => {
+test("quota IPC skips accounts that require reauthorization", async () => {
   const handlers = new Map();
   let quotaRefreshCount = 0;
-  let subscriptionRefreshCount = 0;
   const electron = {
     ipcMain: {
       handle(channel, listener) {
@@ -317,10 +215,6 @@ test("quota and subscription IPC skip accounts that require reauthorization", as
       quotaRefreshCount += 1;
       return { hourly_remaining_percentage: 50 };
     },
-    async refreshSubscription() {
-      subscriptionRefreshCount += 1;
-      return true;
-    },
   };
   const { registerIpcHandlers } = require("../src/main/ipc-handlers");
   registerIpcHandlers(engine, { electron });
@@ -340,40 +234,6 @@ test("quota and subscription IPC skip accounts that require reauthorization", as
   });
   assert.equal(allQuotas.data[1].id, active.id);
   assert.equal(quotaRefreshCount, 1);
-
-  const subscription = await handlers.get("subscription:refresh")({}, suspended.id, true);
-  assert.equal(subscription.success, false);
-  assert.match(subscription.error, /requires reauthorization/i);
-  assert.equal(subscriptionRefreshCount, 0);
-});
-
-test("subscription retry state blocks background attempts but force bypasses it", t => {
-  freshEngine(t);
-  const { shouldAttemptSubscriptionRefresh } = require("../engine/subscription");
-  const now = 1000;
-  const account = { subscription_query_next_retry_at: 1200, subscription_active_until: null };
-  assert.equal(shouldAttemptSubscriptionRefresh(account, false, now), false);
-  assert.equal(shouldAttemptSubscriptionRefresh(account, true, now), true);
-});
-
-test("subscription selection never falls back to a different known account", t => {
-  freshEngine(t);
-  const { selectSubscriptionAccount } = require("../engine/subscription");
-  const records = [
-    { account: { account_id: "acct-other" }, entitlement: { subscription_plan: "team" } },
-    { account: { account_id: "acct-expected" }, entitlement: { subscription_plan: "plus" } },
-  ];
-
-  assert.equal(
-    selectSubscriptionAccount(records, "acct-expected").account.account_id,
-    "acct-expected",
-  );
-  assert.equal(selectSubscriptionAccount(records, null), records[0]);
-  assert.equal(selectSubscriptionAccount([], "acct-expected"), null);
-  assert.throws(
-    () => selectSubscriptionAccount(records, "acct-missing"),
-    error => error.code === "subscription_account_mismatch",
-  );
 });
 
 test("storage restores valid backups and preserves DPAPI failures", t => {
@@ -1190,4 +1050,248 @@ test("persistent logger removes credentials and personal email from messages", t
   assert.equal(value.includes("abc"), false);
   assert.equal(value.includes("user@example.com"), false);
   assert.equal(value.includes("oauth-code"), false);
+});
+
+test("auto-switch config normalization clamps user-edited values", t => {
+  freshEngine(t);
+  const { loadAutoSwitchCfg, saveAutoSwitchCfg } = require("../engine/config-manager");
+  saveAutoSwitchCfg({
+    enabled: 1,
+    primary_threshold: 999,
+    secondary_threshold: "not-a-number",
+    account_scope_mode: "selected",
+    selected_account_ids: ["  ", null, 42, "codex_valid"],
+    sync_interval_minutes: -5,
+  });
+  const cfg = loadAutoSwitchCfg();
+  assert.equal(cfg.enabled, true);
+  assert.equal(cfg.primary_threshold, 100);
+  assert.equal(cfg.secondary_threshold, 30);
+  assert.equal(cfg.account_scope_mode, "selected");
+  assert.deepEqual(cfg.selected_account_ids, ["42", "codex_valid"]);
+  assert.equal(cfg.sync_interval_minutes, 1);
+});
+
+test("config resolves CODEX_HOME with quotes stripped and manager override first", t => {
+  freshEngine(t);
+  const config = require("../engine/config");
+  const originalCodexHome = process.env.CODEX_HOME;
+  t.after(() => {
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalCodexHome;
+  });
+
+  process.env.CODEX_HOME = '"C:\\custom home\\codex"';
+  assert.equal(config.resolveCodexHomeFromEnv(), "C:\\custom home\\codex");
+  process.env.CODEX_HOME = "   ";
+  assert.equal(config.resolveCodexHomeFromEnv(), null);
+  delete process.env.CODEX_HOME;
+  assert.equal(config.resolveCodexHomeFromEnv(), null);
+  assert.equal(config.CODEX_DIR, process.env.CODEX_MANAGER_CODEX_DIR);
+});
+
+test("jwt identity extraction supports new claim key names", t => {
+  freshEngine(t);
+  const { extractChatgptAccountId, extractChatgptOrganizationId } = require("../engine/crypto-utils");
+  const token = jwt({
+    exp: Math.floor(Date.now() / 1000) + 3600,
+    "https://api.openai.com/auth": {
+      chatgpt_account_id: "acct-new-key",
+      organizations: [{ id: "org-first" }, { id: "org-default", is_default: true }],
+    },
+  });
+  assert.equal(extractChatgptAccountId(token), "acct-new-key");
+  assert.equal(extractChatgptOrganizationId(token), "org-default");
+
+  const explicitOrg = jwt({
+    "https://api.openai.com/auth": { account_id: "acct-old", chatgpt_org_id: "org-explicit" },
+  });
+  assert.equal(extractChatgptAccountId(explicitOrg), "acct-old");
+  assert.equal(extractChatgptOrganizationId(explicitOrg), "org-explicit");
+});
+
+test("error code extraction reads FastAPI-style detail objects", t => {
+  freshEngine(t);
+  const { extractErrorCode } = require("../engine/http-client");
+  assert.equal(extractErrorCode(JSON.stringify({ detail: { code: "usage_not_found" } })), "usage_not_found");
+  assert.equal(extractErrorCode(JSON.stringify({ error: { code: "token_revoked" } })), "token_revoked");
+  assert.equal(extractErrorCode(JSON.stringify({ detail: "plain text" })), null);
+});
+
+test("token refresh sends a form-encoded OAuth request", async t => {
+  const { engine } = freshEngine(t);
+  const account = addAccount(engine, "form@example.com", "acct-form", "form");
+  let captured = null;
+  const refreshed = tokens("form@example.com", "acct-form", "form-next");
+  const { refreshOneTok } = require("../engine/token-refresh");
+  const result = await refreshOneTok(account, {
+    force: true,
+    httpJson: async (url, options) => {
+      captured = { url, options };
+      return {
+        status: 200,
+        headers: {},
+        body: JSON.stringify({
+          id_token: refreshed.id_token,
+          access_token: refreshed.access_token,
+          refresh_token: refreshed.refresh_token,
+        }),
+      };
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(captured.options.headers["Content-Type"], "application/x-www-form-urlencoded");
+  const params = new URLSearchParams(captured.options.body);
+  assert.equal(params.get("grant_type"), "refresh_token");
+  assert.equal(params.get("client_id"), "app_EMoamEEZ73f0CkXaXp7hrann");
+  assert.ok(params.get("refresh_token"));
+});
+
+test("an invalid_refresh_token error marks the account for reauthorization", async t => {
+  const { engine } = freshEngine(t);
+  const account = addAccount(engine, "invalid-rt@example.com", "acct-invalid-rt", "invalid-rt");
+  const { refreshOneTok } = require("../engine/token-refresh");
+  const result = await refreshOneTok(account, {
+    force: true,
+    httpJson: async () => ({
+      status: 401,
+      headers: {},
+      body: JSON.stringify({ error: "invalid_refresh_token" }),
+    }),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.revoked, true);
+  assert.equal(result.code, "invalid_refresh_token");
+  const persisted = engine.loadAcct(account.id);
+  assert.equal(persisted.requires_reauth, true);
+  assert.equal(persisted.quota_error.code, "invalid_refresh_token");
+});
+
+test("token refresh treats invalidated-token text errors as reauthorization", async t => {
+  const { engine } = freshEngine(t);
+  const account = addAccount(engine, "text-reauth@example.com", "acct-text-reauth", "text-reauth");
+  const { refreshOneTok } = require("../engine/token-refresh");
+  const result = await refreshOneTok(account, {
+    force: true,
+    httpJson: async () => ({
+      status: 400,
+      headers: {},
+      body: JSON.stringify({ message: "Authentication token has been invalidated." }),
+    }),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.revoked, true);
+  assert.equal(engine.loadAcct(account.id).requires_reauth, true);
+});
+
+test("a missing refresh token flag clears once a refresh token is available", async t => {
+  const { engine } = freshEngine(t);
+  const account = addAccount(engine, "heal@example.com", "acct-heal", "heal");
+  account.tokens.refresh_token = null;
+  engine.saveAcct(account);
+  const { refreshOneTok } = require("../engine/token-refresh");
+  const failed = await refreshOneTok(account, {
+    force: true,
+    httpJson: async () => { throw new Error("refresh endpoint should not be called"); },
+  });
+  assert.equal(failed.ok, false);
+  assert.equal(failed.code, "missing_refresh_token");
+  assert.equal(engine.loadAcct(account.id).requires_reauth, true);
+
+  const healedAccount = engine.loadAcct(account.id);
+  healedAccount.tokens.refresh_token = "refresh-restored";
+  engine.saveAcct(healedAccount);
+  const refreshed = tokens("heal@example.com", "acct-heal", "heal-next");
+  const result = await refreshOneTok(healedAccount, {
+    force: true,
+    httpJson: async () => ({
+      status: 200,
+      headers: {},
+      body: JSON.stringify({
+        id_token: refreshed.id_token,
+        access_token: refreshed.access_token,
+        refresh_token: refreshed.refresh_token,
+      }),
+    }),
+  });
+  assert.equal(result.ok, true);
+  const persisted = engine.loadAcct(account.id);
+  assert.equal(persisted.requires_reauth, false);
+  assert.equal(persisted.quota_error, null);
+});
+
+test("adding the same identity merges into the existing account record", t => {
+  const { engine } = freshEngine(t);
+  const original = engine.upsert(tokens("merge@example.com", "acct-merge", "merge-one")).account;
+  const payload = {
+    email: "merge@example.com",
+    exp: Math.floor(Date.now() / 1000) + 3600,
+    "https://api.openai.com/auth": {
+      account_id: "acct-merge",
+      chatgpt_org_id: "org-merge",
+      organizations: [],
+    },
+  };
+  const orgTokens = { id_token: jwt(payload), access_token: jwt(payload), refresh_token: "refresh-merge-two" };
+  const result = engine.upsert(orgTokens);
+  assert.equal(result.account.id, original.id);
+  assert.equal(engine.listAccts().length, 1);
+});
+
+test("atomic writes retry when the target file is transiently locked", t => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  const { writeTextAtomic } = require("../engine/atomic-file");
+  const target = path.join(config.DATA_DIR, "retry-target.json");
+  engine.ensureDir(config.DATA_DIR);
+
+  const originalRename = fs.renameSync;
+  let failures = 0;
+  fs.renameSync = (from, to) => {
+    if (path.resolve(to) === path.resolve(target) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalRename(from, to);
+  };
+  t.after(() => { fs.renameSync = originalRename; });
+
+  writeTextAtomic(target, "retried content");
+  assert.equal(failures, 2);
+  assert.equal(fs.readFileSync(target, "utf8"), "retried content");
+
+  fs.renameSync = () => {
+    const error = new Error("ENOSPC: no space");
+    error.code = "ENOSPC";
+    throw error;
+  };
+  assert.throws(() => writeTextAtomic(target, "should fail"), /ENOSPC/);
+});
+
+test("auth state reports an official agent identity as unsupported with identity details", t => {
+  const { engine } = freshEngine(t);
+  const account = addAccount(engine, "agent@example.com", "acct-agent", "agent");
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const config = require("../engine/config");
+  fs.mkdirSync(config.CODEX_DIR, { recursive: true });
+  fs.writeFileSync(path.join(config.CODEX_DIR, "auth.json"), JSON.stringify({
+    agentIdentity: {
+      agentRuntimeId: "runtime-1",
+      agentPrivateKey: "private-key",
+      accountId: "acct-agent-official",
+      chatgptUserId: "user-agent",
+      email: "agent-official@example.com",
+    },
+  }), "utf8");
+
+  const state = engine.inspectAuthState();
+  assert.equal(state.status, "unsupported_official_auth");
+  assert.equal(state.requiresResolution, true);
+  assert.match(state.message, /agent identity/i);
+  assert.equal(state.officialIdentity.email, "agent-official@example.com");
+  assert.equal(state.officialIdentity.accountId, "acct-agent-official");
 });

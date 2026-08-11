@@ -47,14 +47,34 @@ function isTokenExpired(accessToken) {
   return exp < ts() + TOKEN_SKEW_SEC;
 }
 
+function authClaim(token) {
+  const p = jwtPayload(token);
+  return p ? (p["https://api.openai.com/auth"] || {}) : null;
+}
+
 function extractChatgptAccountId(accessToken) {
-  const p = jwtPayload(accessToken);
-  if (!p) return null;
-  const ad = p["https://api.openai.com/auth"] || {};
-  return ad.account_id ? String(ad.account_id) : null;
+  const ad = authClaim(accessToken);
+  if (!ad) return null;
+  // Newer tokens use chatgpt_account_id; older ones use account_id.
+  const id = ad.chatgpt_account_id || ad.account_id;
+  return id ? String(id) : null;
+}
+
+const ORG_ID_KEYS = ["organization_id", "chatgpt_organization_id", "chatgpt_org_id", "org_id", "poid", "POID"];
+
+function extractChatgptOrganizationId(token) {
+  const ad = authClaim(token);
+  if (!ad) return null;
+  for (const key of ORG_ID_KEYS) {
+    const value = ad[key];
+    if (value != null && String(value).trim()) return String(value).trim();
+  }
+  const organizations = Array.isArray(ad.organizations) ? ad.organizations : [];
+  const chosen = organizations.find((org) => org && org.is_default) || organizations[0];
+  return chosen?.id ? String(chosen.id) : null;
 }
 
 module.exports = {
   b64url, sha256hex, codeChallenge, ts, tsIso, buildId,
-  jwtPayload, jwtExp, isTokenExpired, extractChatgptAccountId,
+  jwtPayload, jwtExp, isTokenExpired, extractChatgptAccountId, extractChatgptOrganizationId,
 };
