@@ -93,6 +93,49 @@ test("quota parsing preserves window absence, clamps percentages, and applies we
   assert.equal(malformed.weekly_remaining_percentage, null);
 });
 
+test("quota windows are classified by duration, not position", t => {
+  freshEngine(t);
+  const { parseQuotaPayload, normalizeQuota, extractQuotaMetrics } = require("../engine/quota");
+
+  // Upstream currently ships only the weekly window, placed in primary_window.
+  const weeklyOnly = parseQuotaPayload({
+    rate_limit: { primary_window: { used_percent: 59, limit_window_seconds: 604800 } },
+  });
+  assert.equal(weeklyOnly.hourly_window_present, false);
+  assert.equal(weeklyOnly.hourly_remaining_percentage, null);
+  assert.equal(weeklyOnly.weekly_window_present, true);
+  assert.equal(weeklyOnly.weekly_remaining_percentage, 41);
+  assert.equal(weeklyOnly.weekly_blocks_hourly, false);
+
+  // The classic two-window layout keeps its slots.
+  const classic = parseQuotaPayload({
+    rate_limit: {
+      primary_window: { used_percent: 10, limit_window_seconds: 18000 },
+      secondary_window: { used_percent: 20, limit_window_seconds: 604800 },
+    },
+  });
+  assert.equal(classic.hourly_remaining_percentage, 90);
+  assert.equal(classic.weekly_remaining_percentage, 80);
+
+  // Records saved by older versions are re-derived from their raw payload.
+  const stale = {
+    hourly_remaining_percentage: 41,
+    hourly_window_present: true,
+    weekly_remaining_percentage: null,
+    weekly_window_present: false,
+    raw_data: { rate_limit: { primary_window: { used_percent: 59, limit_window_seconds: 604800 } } },
+  };
+  const normalized = normalizeQuota(stale);
+  assert.equal(normalized.hourly_window_present, false);
+  assert.equal(normalized.weekly_remaining_percentage, 41);
+
+  // Auto-switch metrics follow the corrected slots, so the weekly threshold applies.
+  const metrics = extractQuotaMetrics({ quota: stale });
+  assert.equal(metrics.length, 1);
+  assert.equal(metrics[0].key, "secondary_window");
+  assert.equal(metrics[0].percentage, 41);
+});
+
 test("quota authorization retries once after repairing an invalidated access token", async t => {
   freshEngine(t);
   const { fetchQuotaWithTokenRepair, isQuotaAuthError } = require("../engine/quota");

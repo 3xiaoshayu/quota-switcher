@@ -453,43 +453,36 @@ export default function AccountsView({
                 </div>
 
                 {/* Sub Quotas Progress Boxes Grid */}
-                <div className={`grid ${fiveHourPct !== null && weeklyPct !== null ? 'grid-cols-2' : 'grid-cols-1'} gap-4 select-none`} id={`quotas-boxes-grid-${account.id}`}>
-                  {/* 5H QUOTA */}
-                  {fiveHourPct !== null && (
+                <div className="grid grid-cols-2 gap-4 select-none" id={`quotas-boxes-grid-${account.id}`}>
+                  {/* 5H QUOTA (kept visible even while upstream omits the window) */}
                   <div className="bg-slate-950/35 rounded-2xl p-4 text-left" id={`quota-box-5h-${account.id}`}>
                     <span className="text-[10px] font-bold text-slate-500 tracking-wider uppercase tabular-nums">5 小时额度</span>
                     <span className={`text-2xl font-bold block mt-1.5 tracking-tight tabular-nums ${
-                      fiveHourPct <= 25 ? 'text-rose-400' : fiveHourPct >= 70 ? 'text-emerald-400' : 'text-amber-300'
-                    }`}>{fiveHourPct}%</span>
+                      fiveHourPct === null ? 'text-slate-600' : fiveHourPct <= 25 ? 'text-rose-400' : fiveHourPct >= 70 ? 'text-emerald-400' : 'text-amber-300'
+                    }`}>{fiveHourPct !== null ? `${fiveHourPct}%` : '--'}</span>
                     <div className="h-1.5 bg-slate-950/50 rounded-full overflow-hidden mt-3">
-                      <div className={`h-full rounded-full ${color5h}`} style={{ width: `${fiveHourPct}%` }} />
+                      <div className={`h-full rounded-full ${color5h}`} style={{ width: `${fiveHourPct ?? 0}%` }} />
                     </div>
-                    <span className="text-[10px] text-slate-500 mt-2 block font-medium">重置: {account.resetInFiveHour}</span>
+                    <span className="text-[10px] text-slate-500 mt-2 block font-medium">
+                      {fiveHourPct !== null ? `重置: ${account.resetInFiveHour}` : '上游暂未提供'}
+                    </span>
                   </div>
-                  )}
 
                   {/* WEEKLY QUOTA */}
-                  {weeklyPct !== null && (
                   <div className="bg-slate-950/35 rounded-2xl p-4 text-left" id={`quota-box-weekly-${account.id}`}>
                     <span className="text-[10px] font-bold text-slate-500 tracking-wider uppercase tabular-nums">周额度</span>
                     <span className={`text-2xl font-bold block mt-1.5 tracking-tight tabular-nums ${
-                      weeklyPct !== null && weeklyPct <= 25 ? 'text-rose-400' : weeklyPct !== null && weeklyPct >= 70 ? 'text-emerald-400' : 'text-amber-300'
+                      weeklyPct === null ? 'text-slate-600' : weeklyPct <= 25 ? 'text-rose-400' : weeklyPct >= 70 ? 'text-emerald-400' : 'text-amber-300'
                     }`}>
                       {weeklyPct !== null ? `${weeklyPct}%` : '--'}
                     </span>
                     <div className="h-1.5 bg-slate-950/50 rounded-full overflow-hidden mt-3">
-                      <div className={`h-full rounded-full ${colorWeekly}`} style={{ width: `${weeklyPct || 0}%` }} />
+                      <div className={`h-full rounded-full ${colorWeekly}`} style={{ width: `${weeklyPct ?? 0}%` }} />
                     </div>
                     <span className="text-[10px] text-slate-500 mt-2 block font-medium">
-                      {weeklyPct !== null ? `重置: ${account.resetInWeekly}` : '暂无数据'}
+                      {weeklyPct !== null ? `重置: ${account.resetInWeekly}` : '上游暂未提供'}
                     </span>
                   </div>
-                  )}
-                  {fiveHourPct === null && weeklyPct === null && (
-                    <div className="bg-slate-950/35 rounded-2xl p-4 text-left text-xs text-slate-400">
-                      该账号未返回额度窗口数据。
-                    </div>
-                  )}
                 </div>
               </div>
 

@@ -289,50 +289,41 @@ export default function QuotasView({
 
               {/* Quotas Progress Info */}
               <div className="space-y-4 flex-1 select-none" id={`quota-progress-container-${account.id}`}>
-                {/* 5h Quota */}
-                {fiveHourPercentage !== null && (
+                {/* 5h Quota (kept visible even while upstream omits the window) */}
                 <div className="space-y-1.5" id={`quota-5h-row-${account.id}`}>
                   <div className="flex items-center justify-between text-xs font-semibold" id={`quota-5h-labels-${account.id}`}>
                     <span className="text-slate-400">5 小时额度</span>
-                    <span className="text-slate-300 tabular-nums">
-                      {fiveHourExceeded ? '已用尽' : `剩余 ${Math.round(fiveHourPercentage)}%`}
+                    <span className={`tabular-nums ${fiveHourPercentage === null ? 'text-slate-500' : 'text-slate-300'}`}>
+                      {fiveHourPercentage === null ? '上游暂未提供' : fiveHourExceeded ? '已用尽' : `剩余 ${Math.round(fiveHourPercentage)}%`}
                     </span>
                   </div>
                   <div className="h-1.5 bg-slate-950/50 rounded-full overflow-hidden relative" id={`quota-5h-bar-bg-${account.id}`}>
                     <motion.div 
                       initial={{ width: 0 }}
-                      animate={{ width: `${fiveHourPercentage}%` }}
+                      animate={{ width: `${fiveHourPercentage ?? 0}%` }}
                       transition={{ duration: 0.8, ease: 'easeOut' }}
                       className={`h-full rounded-full ${barColor5h}`} 
                     />
                   </div>
                 </div>
-                )}
 
                 {/* Weekly Quota */}
-                {weeklyPercentage !== null && (
-                <div className="space-y-1.5 animate-pulse-slow" id={`quota-weekly-row-${account.id}`}>
+                <div className="space-y-1.5" id={`quota-weekly-row-${account.id}`}>
                   <div className="flex items-center justify-between text-xs font-semibold" id={`quota-weekly-labels-${account.id}`}>
                     <span className="text-slate-400">周额度</span>
-                    <span className="text-slate-300 tabular-nums">
-                      {weeklyExceeded ? '已用尽' : `剩余 ${Math.round(weeklyPercentage)}%`}
+                    <span className={`tabular-nums ${weeklyPercentage === null ? 'text-slate-500' : 'text-slate-300'}`}>
+                      {weeklyPercentage === null ? '上游暂未提供' : weeklyExceeded ? '已用尽' : `剩余 ${Math.round(weeklyPercentage)}%`}
                     </span>
                   </div>
                   <div className="h-1.5 bg-slate-950/50 rounded-full overflow-hidden relative" id={`quota-weekly-bar-bg-${account.id}`}>
                     <motion.div 
                       initial={{ width: 0 }}
-                      animate={{ width: `${weeklyPercentage}%` }}
+                      animate={{ width: `${weeklyPercentage ?? 0}%` }}
                       transition={{ duration: 0.8, ease: 'easeOut' }}
                       className={`h-full rounded-full ${barColorWeekly}`} 
                     />
                   </div>
                 </div>
-                )}
-                {fiveHourPercentage === null && weeklyPercentage === null && (
-                  <div className="rounded-xl bg-slate-950/35 px-3 py-4 text-xs text-slate-400">
-                    该账号未返回额度窗口数据。
-                  </div>
-                )}
               </div>
 
               {/* Action Buttons Row */}

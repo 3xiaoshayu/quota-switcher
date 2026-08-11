@@ -26,9 +26,11 @@ function loadAcctById(eng, id) {
     return eng.listAccts().find(account => account.email === id || account.id === id) || null;
 }
 
-function publicQuota(quota) {
+function publicQuota(eng, quota) {
     if (!quota) return null;
-    const { raw_data, ...safeQuota } = quota;
+    // Re-classify windows saved by older versions before stripping raw data.
+    const normalized = typeof eng.normalizeQuota === "function" ? eng.normalizeQuota(quota) : quota;
+    const { raw_data, ...safeQuota } = normalized;
     return safeQuota;
 }
 
@@ -53,7 +55,7 @@ function publicAccount(eng, account) {
         quota_next_retry_at: account.quota_next_retry_at || null,
         requires_reauth: !!account.requires_reauth,
         reauth_reason: account.reauth_reason || null,
-        quota: publicQuota(account.quota),
+        quota: publicQuota(eng, account.quota),
         quota_error: account.quota_error ? {
             code: account.quota_error.code || null,
             message: account.quota_error.message || String(account.quota_error),
@@ -263,7 +265,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                     return fail(reauthorizationRequiredMessage("quotas can be refreshed"));
                 }
                 const quota = await eng.refreshQuota(account, { force: force !== false });
-                return ok(publicQuota(quota));
+                return ok(publicQuota(eng, quota));
             });
         } catch (error) { return fail(error.message); }
     });
@@ -284,7 +286,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                         return;
                     }
                     const quota = await eng.refreshQuota(account, { force: true });
-                    results.push({ id: account.id, email: account.email, quota: publicQuota(quota) });
+                    results.push({ id: account.id, email: account.email, quota: publicQuota(eng, quota) });
                 });
             } catch (error) {
                 results.push({ id: listed.id, email: listed.email, error: error.message });

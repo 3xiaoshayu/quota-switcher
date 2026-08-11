@@ -80,10 +80,34 @@ async function fetchQuota(acct) {
   return parseQuotaPayload(data);
 }
 
+// Upstream currently ships only a weekly window and puts it in
+// primary_window, so windows must be classified by their duration rather
+// than their position. Anything up to a day counts as the short (5h) slot.
+const HOURLY_WINDOW_MAX_SECONDS = 24 * 60 * 60;
+
+function classifyRateLimitWindows(rateLimit) {
+  const slots = { hourly: null, weekly: null };
+  const candidates = [
+    [rateLimit.primary_window, "hourly"],
+    [rateLimit.secondary_window, "weekly"],
+  ];
+  for (const [win, positional] of candidates) {
+    if (!win) continue;
+    const seconds = Number(win.limit_window_seconds);
+    const preferred = Number.isFinite(seconds) && seconds > 0
+      ? (seconds <= HOURLY_WINDOW_MAX_SECONDS ? "hourly" : "weekly")
+      : positional;
+    if (!slots[preferred]) slots[preferred] = win;
+    else if (!slots[preferred === "hourly" ? "weekly" : "hourly"]) {
+      slots[preferred === "hourly" ? "weekly" : "hourly"] = win;
+    }
+  }
+  return slots;
+}
+
 function parseQuotaPayload(data) {
   const rl2 = data.rate_limit || {};
-  const pw = rl2.primary_window || null;
-  const sw = rl2.secondary_window || null;
+  const { hourly: pw, weekly: sw } = classifyRateLimitWindows(rl2);
 
   const remaining = (win) => {
     if (!win) return null;
@@ -168,9 +192,20 @@ async function refreshQuota(acct, options = {}) {
   }
 }
 
+// Re-derives window classification for quota records saved before windows
+// were classified by duration (the weekly window used to land in the hourly
+// slot once upstream moved it into primary_window).
+function normalizeQuota(quota) {
+  if (!quota || typeof quota !== "object") return quota;
+  if (quota.raw_data && quota.raw_data.rate_limit) {
+    return parseQuotaPayload(quota.raw_data);
+  }
+  return quota;
+}
+
 // 自动切号指标提取
 function extractQuotaMetrics(acct) {
-  const q = acct.quota;
+  const q = normalizeQuota(acct.quota);
   if (!q) return [];
   const hasPresence = q.hourly_window_present != null || q.weekly_window_present != null;
   const hourlyRemaining = q.hourly_remaining_percentage ?? q.hourly_percentage;
@@ -196,4 +231,5 @@ module.exports = {
   extractQuotaMetrics,
   quotaRetryDelaySeconds,
   parseQuotaPayload,
+  normalizeQuota,
 };
