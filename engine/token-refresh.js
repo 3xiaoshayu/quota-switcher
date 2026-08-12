@@ -201,7 +201,9 @@ async function refreshAll(force) {
         markRequiresReauth(a, r.code || "token_revoked", r.detail);
       }
     });
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // A short pause keeps the token endpoint friendly without making a
+    // six-account batch check feel sluggish.
+    await new Promise((resolve) => setTimeout(resolve, 150));
   }
   // 保持当前账号 auth.json 最新（锁内执行，避免与在途刷新交错）
   const idx = loadIdx();

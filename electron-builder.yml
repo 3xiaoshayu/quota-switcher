@@ -2,6 +2,12 @@ appId: com.3xiaoshayu.codex-account-manager
 productName: Codex Account Manager
 copyright: Copyright © 2026
 
+# Ship only the languages the interface actually uses; the full Chromium
+# locale set adds ~47 MB uncompressed.
+electronLanguages:
+  - zh-CN
+  - en-US
+
 directories:
   output: dist
   buildResources: resources
@@ -34,3 +40,4 @@ files:
   - package.json
   - "!**/*.map"
   - "!src/renderer-react/**"
+  - "!src/renderer/**"

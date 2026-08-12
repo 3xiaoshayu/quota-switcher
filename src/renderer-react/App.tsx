@@ -32,8 +32,8 @@ import QuotasView from './components/QuotasView';
 import AutoSwitchView from './components/AutoSwitchView';
 import AccountsView from './components/AccountsView';
 import SettingsView from './components/SettingsView';
-import japanBackground from './assets/background-japan.jpg';
-import settingsBackground from './assets/background-settings.jpg';
+import japanBackground from './assets/background-japan.webp';
+import settingsBackground from './assets/background-settings.webp';
 import { 
   Bell, 
   X, 

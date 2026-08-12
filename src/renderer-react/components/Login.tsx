@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { Mail, Shield, ShieldCheck, User, ArrowRight, Activity, Cpu, X } from 'lucide-react';
-import loginBackground from '../assets/background-login.jpg';
+import loginBackground from '../assets/background-login.webp';
 import { desktopApi, hasDesktopBridge } from '../api/desktop';
 
 interface LoginProps {

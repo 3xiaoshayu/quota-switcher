@@ -77,7 +77,6 @@ function startApplication() {
         decrypt: (encoded) => safeStorage.decryptString(Buffer.from(encoded, "base64")),
     });
     eng.initLogger();
-    eng.listAccts();
     eng.restorePendingOAuth();
 
     const updateService = createUpdateService({ app, BrowserWindow });
@@ -134,6 +133,13 @@ function startApplication() {
     win.once("ready-to-show", () => {
         win.show();
         updateService.startAutoCheck();
+        // Startup housekeeping (legacy migration, index sync) reads and
+        // decrypts every account file; run it after the window is visible.
+        setImmediate(() => {
+            try { eng.listAccts(); } catch (error) {
+                console.error("Startup account scan failed:", error);
+            }
+        });
     });
     win.loadFile(path.join(__dirname, "..", "renderer-dist", "index.html"))
         .catch((error) => console.error("Failed to load renderer:", error));
