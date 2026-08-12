@@ -32,8 +32,6 @@ import QuotasView from './components/QuotasView';
 import AutoSwitchView from './components/AutoSwitchView';
 import AccountsView from './components/AccountsView';
 import SettingsView from './components/SettingsView';
-import japanBackground from './assets/background-japan.webp';
-import settingsBackground from './assets/background-settings.webp';
 import { 
   Bell, 
   X, 
@@ -49,21 +47,6 @@ import {
 } from 'lucide-react';
 
 const desktopBridgeAvailable = hasDesktopBridge();
-
-// Decode both dashboard backdrops up front so the first tab switch never
-// stalls on JPEG decoding.
-if (typeof Image !== 'undefined') {
-  for (const src of [japanBackground, settingsBackground]) {
-    const img = new Image();
-    img.src = src;
-  }
-}
-
-// Same gradients and images as before; rendered as two persistent layers so
-// switching tabs only animates GPU-composited opacity instead of a full
-// background-image cross-fade repaint.
-const JAPAN_BACKDROP = `linear-gradient(to bottom, rgba(15, 23, 42, 0.45), rgba(15, 23, 42, 0.7)), url('${japanBackground}')`;
-const FUJI_BACKDROP = `linear-gradient(to bottom, rgba(15, 23, 42, 0.45), rgba(15, 23, 42, 0.75)), url('${settingsBackground}')`;
 
 const DEFAULT_CONFIG: DesktopAutoSwitchConfig = {
   enabled: false,
@@ -942,32 +925,22 @@ export default function App() {
     await saveAutoSwitchConfig(nextConfig);
   };
 
-  // 'accounts'/'settings' show the sakura backdrop; 'quotas'/'autoswitch'
-  // show the foggy dawn backdrop. Same imagery as before.
-  const showsJapanBackdrop = activeTab === 'accounts' || activeTab === 'settings';
-
   if (!isAuthenticated) {
     return <Login onLogin={handleLogin} userEmail={userEmail} appVersion={settings.version} showDemoShortcuts={!desktopBridgeAvailable} />;
   }
 
   return (
     <div 
-      className="h-screen w-screen flex overflow-hidden relative isolate select-none text-slate-100 font-sans"
+      className="h-screen w-screen flex overflow-hidden relative isolate select-none text-label font-sans"
       id="dashboard-main-container"
     >
-      {/* Persistent backdrop layers; only opacity animates on tab switches. */}
-      <div
-        aria-hidden
-        className="absolute inset-0 -z-10 bg-cover bg-center transition-opacity duration-1000 pointer-events-none"
-        style={{ backgroundImage: JAPAN_BACKDROP, opacity: showsJapanBackdrop ? 1 : 0 }}
-        id="dashboard-backdrop-japan"
-      />
-      <div
-        aria-hidden
-        className="absolute inset-0 -z-10 bg-cover bg-center transition-opacity duration-1000 pointer-events-none"
-        style={{ backgroundImage: FUJI_BACKDROP, opacity: showsJapanBackdrop ? 0 : 1 }}
-        id="dashboard-backdrop-fuji"
-      />
+      {/* Apple-flat backdrop: a near-black base with a faint top light. */}
+      <div aria-hidden className="absolute inset-0 -z-10 pointer-events-none bg-base" id="dashboard-backdrop">
+        <div
+          className="absolute inset-0"
+          style={{ background: 'radial-gradient(110% 60% at 50% -8%, rgba(255,255,255,0.05), transparent 62%)' }}
+        />
+      </div>
       {/* Absolute overlay elements */}
       {/* Toast notification Tray */}
       <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 w-80 pointer-events-none" id="toast-tray">
@@ -977,14 +950,14 @@ export default function App() {
               initial={{ opacity: 0, x: 50, scale: 0.9 }}
               animate={{ opacity: 1, x: 0, scale: 1 }}
               exit={{ opacity: 0, x: 50, scale: 0.9 }}
-              className="glass-card pointer-events-auto backdrop-blur-xl bg-slate-950/80 border border-white/10 rounded-2xl p-4 flex items-center gap-3 shadow-2xl"
+              className="pointer-events-auto bg-surface-2 border border-sep rounded-xl p-4 flex items-center gap-3 shadow-xl"
               key={t.id}
             >
-              {t.type === 'success' && <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0" />}
-              {t.type === 'error' && <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />}
-              {t.type === 'warning' && <ShieldAlert className="w-5 h-5 text-amber-400 shrink-0" />}
-              {t.type === 'info' && <Info className="w-5 h-5 text-blue-400 shrink-0" />}
-              <span className="text-xs font-semibold text-slate-200">{t.msg}</span>
+              {t.type === 'success' && <CheckCircle className="w-5 h-5 text-ok shrink-0" />}
+              {t.type === 'error' && <AlertCircle className="w-5 h-5 text-danger shrink-0" />}
+              {t.type === 'warning' && <ShieldAlert className="w-5 h-5 text-warn shrink-0" />}
+              {t.type === 'info' && <Info className="w-5 h-5 text-accent shrink-0" />}
+              <span className="text-xs font-semibold text-label">{t.msg}</span>
             </motion.div>
           ))}
         </AnimatePresence>
@@ -1026,10 +999,10 @@ export default function App() {
                   role="status"
                   aria-live="polite"
                 >
-                  <div className="glass-card flex w-full max-w-sm flex-col items-center rounded-3xl border border-white/10 bg-slate-950/45 px-8 py-10 text-center shadow-2xl backdrop-blur-xl">
-                    <LoaderCircle className="mb-4 h-8 w-8 animate-spin text-blue-400" />
+                  <div className="glass-card flex w-full max-w-sm flex-col items-center rounded-2xl px-8 py-10 text-center">
+                    <LoaderCircle className="mb-4 h-8 w-8 animate-spin text-accent" />
                     <h2 className="text-base font-bold text-white">正在加载账号数据</h2>
-                    <p className="mt-2 text-xs leading-5 text-slate-400">
+                    <p className="mt-2 text-xs leading-5 text-label-2">
                       正在读取本地账号、额度状态与守护进程设置。
                     </p>
                   </div>
@@ -1042,10 +1015,10 @@ export default function App() {
                   id="dashboard-load-error-state"
                   role="alert"
                 >
-                  <div className="flex w-full max-w-md flex-col items-center rounded-3xl border border-rose-500/20 bg-slate-950/55 px-8 py-10 text-center shadow-2xl backdrop-blur-xl">
-                    <AlertCircle className="mb-4 h-9 w-9 text-rose-400" />
+                  <div className="glass-card flex w-full max-w-md flex-col items-center rounded-2xl px-8 py-10 text-center">
+                    <AlertCircle className="mb-4 h-9 w-9 text-danger" />
                     <h2 className="text-base font-bold text-white">账号数据加载失败</h2>
-                    <p className="mt-2 max-w-sm text-xs leading-5 text-slate-400">
+                    <p className="mt-2 max-w-sm text-xs leading-5 text-label-2">
                       {dashboardLoadError || '本地账号存储未响应。'}
                     </p>
                     <motion.button
@@ -1053,7 +1026,7 @@ export default function App() {
                       onClick={() => void loadDashboardState(true)}
                       whileHover={{ y: -1 }}
                       whileTap={{ scale: 0.96 }}
-                      className="mt-6 flex items-center gap-2 rounded-2xl border border-blue-500/30 bg-blue-500/15 px-5 py-2.5 text-xs font-bold text-blue-200 hover:bg-blue-500/20"
+                      className="mt-6 flex items-center gap-2 rounded-xl border border-blue-500/30 bg-accent/15 px-5 py-2.5 text-xs font-bold text-blue-200 hover:bg-accent/20"
                       id="dashboard-retry-load"
                     >
                       <RefreshCw className="h-3.5 w-3.5" />
@@ -1136,7 +1109,7 @@ export default function App() {
 
         {/* Global Footer bar matching image */}
         <footer 
-          className="h-10 border-t border-white/5 backdrop-blur-md bg-slate-950/15 flex items-center justify-between px-8 text-[11px] text-slate-400 font-medium select-none shrink-0"
+          className="h-10 border-t border-sep flex items-center justify-between px-8 text-[11px] text-label-2 font-medium select-none shrink-0"
           id="dashboard-footer"
         >
           <div className="flex items-center gap-1.5" id="footer-left">
@@ -1147,7 +1120,7 @@ export default function App() {
               onClick={() => {
                 void handleOpenExternal(`${appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}/blob/main/docs/privacy.md`);
               }}
-              className="hover:text-slate-200 cursor-pointer"
+              className="hover:text-label cursor-pointer"
             >
               隐私政策
             </button>
@@ -1158,7 +1131,7 @@ export default function App() {
       <AnimatePresence>
       {deleteTarget && (
         <motion.div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/85 p-4 backdrop-blur-md"
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 p-4"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -1169,21 +1142,21 @@ export default function App() {
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.96 }}
             transition={{ duration: 0.16, ease: 'easeOut' }}
-            className="glass-card w-full max-w-sm rounded-3xl border border-rose-500/20 bg-slate-900/95 p-7 text-left shadow-2xl"
+            className="glass-card w-full max-w-sm rounded-2xl border border-sep bg-surface-2 p-7 text-left shadow-2xl"
             id="delete-confirm-modal"
             role="alertdialog"
             aria-modal="true"
           >
-            <Trash2 className="mb-4 h-9 w-9 text-rose-400" />
+            <Trash2 className="mb-4 h-9 w-9 text-danger" />
             <h3 className="text-lg font-bold text-white">删除账号</h3>
-            <p className="mt-2 text-xs leading-relaxed text-slate-300">
+            <p className="mt-2 text-xs leading-relaxed text-label-2">
               确定要删除 <strong className="text-white">{deleteTarget.email}</strong> 吗？该操作无法撤销。
             </p>
             <div className="mt-6 grid grid-cols-2 gap-3">
               <button
                 onClick={() => { if (!isDeletingAccount) setDeleteTarget(null); }}
                 disabled={isDeletingAccount}
-                className="rounded-2xl bg-white/5 hover:bg-white/10 px-4 py-3 text-xs font-bold text-slate-200 disabled:opacity-50 cursor-pointer"
+                className="rounded-xl bg-fill hover:bg-fill-2 px-4 py-3 text-xs font-bold text-label disabled:opacity-50 cursor-pointer"
                 id="delete-confirm-cancel"
               >
                 取消
@@ -1191,7 +1164,7 @@ export default function App() {
               <button
                 onClick={() => void confirmDeleteAccount()}
                 disabled={isDeletingAccount}
-                className="rounded-2xl border border-rose-500/30 bg-rose-500/15 px-4 py-3 text-xs font-bold text-rose-200 hover:bg-rose-500/25 disabled:opacity-50 cursor-pointer"
+                className="rounded-xl border border-rose-500/30 bg-danger/15 px-4 py-3 text-xs font-bold text-rose-200 hover:bg-rose-500/25 disabled:opacity-50 cursor-pointer"
                 id="delete-confirm-accept"
               >
                 {isDeletingAccount ? '删除中...' : '确认删除'}
@@ -1205,7 +1178,7 @@ export default function App() {
       <AnimatePresence>
       {authState.requiresResolution && (
         <motion.div
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/85 p-4 backdrop-blur-md"
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/55 p-4"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -1216,25 +1189,25 @@ export default function App() {
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.96 }}
             transition={{ duration: 0.16, ease: 'easeOut' }}
-            className="w-full max-w-md rounded-3xl border border-amber-500/20 bg-slate-900/95 p-7 text-left shadow-2xl"
+            className="w-full max-w-md rounded-2xl border border-sep bg-surface-2 p-7 text-left shadow-2xl"
             id="auth-conflict-modal"
             role="alertdialog"
             aria-modal="true"
             aria-labelledby="auth-conflict-title"
           >
-            <ShieldAlert className="mb-4 h-10 w-10 text-amber-400" />
+            <ShieldAlert className="mb-4 h-10 w-10 text-warn" />
             <h3 id="auth-conflict-title" className="text-lg font-bold text-white">
               {authState.status === 'unknown' ? '认证状态不可用' : '官方 Codex 登录已变更'}
             </h3>
-            <p className="mt-2 text-xs leading-relaxed text-slate-300">
+            <p className="mt-2 text-xs leading-relaxed text-label-2">
               {authState.message || '官方 Codex 登录与本管理器记录的当前账号不一致。'}
             </p>
             {authState.officialIdentity?.email && (
-              <div className="mt-4 rounded-2xl border border-white/5 bg-slate-950/35 px-4 py-3 text-xs text-slate-300">
+              <div className="mt-4 rounded-xl border border-sep bg-fill px-4 py-3 text-xs text-label-2">
                 官方账号：<strong className="text-white">{authState.officialIdentity.email}</strong>
               </div>
             )}
-            <p className="mt-4 text-[11px] leading-relaxed text-slate-400">
+            <p className="mt-4 text-[11px] leading-relaxed text-label-2">
               在处理此冲突之前，自动切号与认证写入将保持暂停。
             </p>
             <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -1242,7 +1215,7 @@ export default function App() {
                 <button
                   onClick={() => void loadDashboardState(false)}
                   disabled={isResolvingAuth}
-                  className="rounded-2xl border border-blue-500/25 bg-blue-500/10 px-4 py-3 text-xs font-bold text-blue-300 hover:bg-blue-500/15 disabled:opacity-50"
+                  className="rounded-xl border border-accent/20 bg-accent/12 px-4 py-3 text-xs font-bold text-accent hover:bg-accent/20 disabled:opacity-50"
                   id="auth-conflict-reload"
                 >
                   重新加载状态
@@ -1252,7 +1225,7 @@ export default function App() {
                 <button
                   onClick={() => void handleResolveAuthConflict('adopt')}
                   disabled={isResolvingAuth}
-                  className="rounded-2xl border border-blue-500/25 bg-blue-500/10 px-4 py-3 text-xs font-bold text-blue-300 hover:bg-blue-500/15 disabled:opacity-50"
+                  className="rounded-xl border border-accent/20 bg-accent/12 px-4 py-3 text-xs font-bold text-accent hover:bg-accent/20 disabled:opacity-50"
                   id="auth-conflict-adopt"
                 >
                   采用官方账号
@@ -1262,7 +1235,7 @@ export default function App() {
                 <button
                   onClick={() => void handleResolveAuthConflict('reapply')}
                   disabled={isResolvingAuth}
-                  className="rounded-2xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-xs font-bold text-amber-300 hover:bg-amber-500/15 disabled:opacity-50"
+                  className="rounded-xl border border-warn/20 bg-warn/12 px-4 py-3 text-xs font-bold text-warn hover:bg-warn/15 disabled:opacity-50"
                   id="auth-conflict-reapply"
                 >
                   重写为管理账号
@@ -1289,21 +1262,21 @@ export default function App() {
             />
             <motion.div
               key="notifications-panel"
-              className="fixed right-0 top-0 bottom-0 w-80 backdrop-blur-2xl bg-slate-900/95 border-l border-white/10 p-6 z-40 shadow-2xl flex flex-col text-slate-200 text-left"
+              className="fixed right-0 top-0 bottom-0 w-80 bg-surface-2 border-l border-sep p-6 z-40 shadow-2xl flex flex-col text-label text-left"
               id="notification-sidebar-center"
               initial={{ x: 340 }}
               animate={{ x: 0 }}
               exit={{ x: 340 }}
               transition={{ type: 'spring', stiffness: 380, damping: 36 }}
             >
-              <div className="flex items-center justify-between pb-4 border-b border-white/10 mb-6">
+              <div className="flex items-center justify-between pb-4 border-b border-sep mb-6">
                 <div className="flex items-center gap-2">
-                  <Bell className="w-4 h-4 text-blue-400" />
+                  <Bell className="w-4 h-4 text-accent" />
                   <h3 className="font-bold text-sm tracking-wide font-sans">系统动态日志</h3>
                 </div>
                 <button
                   onClick={() => setShowNotifications(false)}
-                  className="p-1.5 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white cursor-pointer"
+                  className="p-1.5 hover:bg-fill-2 rounded-lg text-label-2 hover:text-white cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -1312,18 +1285,18 @@ export default function App() {
               {/* Logs stream */}
               <div className="flex-1 overflow-y-auto space-y-4 pr-1 scrollbar-thin">
                 {logs.map((log) => {
-                  let color = "text-blue-400";
-                  if (log.type === 'success') color = "text-emerald-400";
-                  if (log.type === 'warning') color = "text-amber-400";
-                  if (log.type === 'error') color = "text-rose-400";
+                  let color = "text-accent";
+                  if (log.type === 'success') color = "text-ok";
+                  if (log.type === 'warning') color = "text-warn";
+                  if (log.type === 'error') color = "text-danger";
 
                   return (
                     <div className="p-3 bg-white/[0.06] rounded-xl text-xs space-y-1" key={log.id}>
                       <div className="flex items-center justify-between">
                         <span className={`font-bold capitalize text-[10px] ${color}`}>{log.type}</span>
-                        <span className="text-[9px] text-slate-500 tabular-nums">{log.timestamp}</span>
+                        <span className="text-[9px] text-label-3 tabular-nums">{log.timestamp}</span>
                       </div>
-                      <p className="text-slate-300 leading-relaxed text-[11px] font-sans font-medium">{log.message}</p>
+                      <p className="text-label-2 leading-relaxed text-[11px] font-sans font-medium">{log.message}</p>
                     </div>
                   );
                 })}
@@ -1337,7 +1310,7 @@ export default function App() {
       <AnimatePresence>
       {showSupport && (
           <motion.div
-            className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4"
+            className="fixed inset-0 bg-black/55 z-50 flex items-center justify-center p-4"
             initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -1348,36 +1321,36 @@ export default function App() {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.96, opacity: 0 }}
               transition={{ duration: 0.16, ease: 'easeOut' }}
-              className="glass-card backdrop-blur-2xl bg-slate-900/90 border border-white/10 rounded-3xl p-8 w-full max-w-md shadow-2xl relative text-white text-left select-none"
+              className="bg-surface-2 border border-sep rounded-2xl p-8 w-full max-w-md shadow-2xl relative text-label text-left select-none"
               id="support-modal-popup"
             >
               <button
                 onClick={() => setShowSupport(false)}
-                className="absolute top-5 right-5 p-2 hover:bg-white/10 rounded-xl text-slate-400 hover:text-white transition-all cursor-pointer"
+                className="absolute top-5 right-5 p-2 hover:bg-fill-2 rounded-xl text-label-2 hover:text-white transition-all cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
 
-              <HelpCircle className="w-12 h-12 text-blue-400 mb-4" />
+              <HelpCircle className="w-12 h-12 text-accent mb-4" />
               <h3 className="text-lg font-bold tracking-tight mb-2 font-sans">客户服务 / Technical Support</h3>
-              <p className="text-xs text-slate-400 leading-relaxed mb-6 font-sans">
+              <p className="text-xs text-label-2 leading-relaxed mb-6 font-sans">
                 如果您在使用 Codex 账号管理器时遇到配额验证、客户端连接或服务问题，请通过 GitHub Issues 提交可复现信息。
               </p>
 
               <div className="space-y-3 mb-6" id="support-channels-list">
-                <div className="p-3 bg-white/[0.06] rounded-2xl flex items-center justify-between text-xs font-semibold">
-                  <span className="text-slate-400">GitHub Issues</span>
-                  <a className="text-blue-400" href={`${appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}/issues`} target="_blank" rel="noopener noreferrer">Open issue tracker</a>
+                <div className="p-3 bg-white/[0.06] rounded-xl flex items-center justify-between text-xs font-semibold">
+                  <span className="text-label-2">GitHub Issues</span>
+                  <a className="text-accent" href={`${appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}/issues`} target="_blank" rel="noopener noreferrer">Open issue tracker</a>
                 </div>
-                <div className="p-3 bg-white/[0.06] rounded-2xl flex items-center justify-between text-xs font-semibold">
-                  <span className="text-slate-400">支持方式</span>
-                  <span className="text-emerald-400">Community / Best effort</span>
+                <div className="p-3 bg-white/[0.06] rounded-xl flex items-center justify-between text-xs font-semibold">
+                  <span className="text-label-2">支持方式</span>
+                  <span className="text-ok">Community / Best effort</span>
                 </div>
               </div>
 
               <button
                 onClick={() => setShowSupport(false)}
-                className="w-full py-3 bg-blue-500/10 hover:bg-blue-500/15 border border-blue-500/25 text-blue-300 hover:text-blue-200 rounded-2xl text-xs font-bold transition-all cursor-pointer"
+                className="w-full py-3 bg-accent/12 hover:bg-accent/20 border border-accent/20 text-accent hover:text-accent-hi rounded-xl text-xs font-bold transition-all cursor-pointer"
               >
                 好的，我知道了
               </button>
@@ -1390,7 +1363,7 @@ export default function App() {
       <AnimatePresence>
       {showUpdates && (
           <motion.div
-            className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4"
+            className="fixed inset-0 bg-black/55 z-50 flex items-center justify-center p-4"
             initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -1401,26 +1374,26 @@ export default function App() {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.96, opacity: 0 }}
               transition={{ duration: 0.16, ease: 'easeOut' }}
-              className="glass-card backdrop-blur-2xl bg-slate-900/90 border border-white/10 rounded-3xl p-8 w-full max-w-md shadow-2xl relative text-white text-left select-none"
+              className="bg-surface-2 border border-sep rounded-2xl p-8 w-full max-w-md shadow-2xl relative text-label text-left select-none"
               id="updates-modal-popup"
             >
               <button
                 onClick={() => setShowUpdates(false)}
-                className="absolute top-5 right-5 p-2 hover:bg-white/10 rounded-xl text-slate-400 hover:text-white transition-all cursor-pointer"
+                className="absolute top-5 right-5 p-2 hover:bg-fill-2 rounded-xl text-label-2 hover:text-white transition-all cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
 
-              <Activity className="w-12 h-12 text-cyan-400 mb-4" />
+              <Activity className="w-12 h-12 text-accent mb-4" />
               <h3 className="text-lg font-bold tracking-tight mb-2 font-sans">版本更新详情 / Release Notes</h3>
-              <p className="text-xs text-slate-400 mb-6 font-sans">
+              <p className="text-xs text-label-2 mb-6 font-sans">
                 当前版本 <strong>{settings.version.startsWith('v') ? settings.version : `v${settings.version}`}</strong>。
               </p>
 
-              <div className="space-y-4 max-h-48 overflow-y-auto pr-2 mb-6 text-xs text-slate-300 leading-relaxed font-sans" id="changelog-list">
+              <div className="space-y-4 max-h-48 overflow-y-auto pr-2 mb-6 text-xs text-label-2 leading-relaxed font-sans" id="changelog-list">
                 <div>
                   <h4 className="font-bold text-white mb-1">发布说明校准 (Release Notes)</h4>
-                  <ul className="list-disc pl-4 space-y-1 text-slate-400 text-[11px]">
+                  <ul className="list-disc pl-4 space-y-1 text-label-2 text-[11px]">
                     <li>修正应用内 Release Notes 的过时说明，与当前版本保持一致。</li>
                     <li>保留批量 Token 检查的真实反馈：区分重新授权与真正失败。</li>
                     <li>通知日志继续记录每次检查结果，便于回看操作是否执行。</li>
@@ -1428,7 +1401,7 @@ export default function App() {
                 </div>
                 <div>
                   <h4 className="font-bold text-white mb-1">已验证修复 (Verified Fixes)</h4>
-                  <ul className="list-disc pl-4 space-y-1 text-slate-400 text-[11px]">
+                  <ul className="list-disc pl-4 space-y-1 text-label-2 text-[11px]">
                     <li>添加账号弹窗不再显示误导性的套餐和优先级下拉框。</li>
                     <li>套餐与轮转优先级继续由 OAuth 授权后的账号状态自动识别。</li>
                     <li>本版本已重新视觉验证并发布 Windows 安装包与 zip 包。</li>
@@ -1438,7 +1411,7 @@ export default function App() {
 
               <button
                 onClick={() => setShowUpdates(false)}
-                className="w-full py-3 bg-blue-500/10 hover:bg-blue-500/15 border border-blue-500/25 text-blue-300 hover:text-blue-200 rounded-2xl text-xs font-bold transition-all cursor-pointer"
+                className="w-full py-3 bg-accent/12 hover:bg-accent/20 border border-accent/20 text-accent hover:text-accent-hi rounded-xl text-xs font-bold transition-all cursor-pointer"
               >
                 确认版本
               </button>

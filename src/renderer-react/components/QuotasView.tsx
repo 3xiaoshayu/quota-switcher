@@ -9,7 +9,7 @@ import {
   Activity
 } from 'lucide-react';
 import { AccountQuota } from '../types';
-import { avatarGradient, formatDateTime } from '../api/desktop';
+import { avatarGradient, formatDateTime, STATUS_DOT, STATUS_TEXT } from '../api/desktop';
 
 interface QuotasProps {
   accounts: AccountQuota[];
@@ -104,48 +104,15 @@ export default function QuotasView({
     }
   };
 
-  const getStatusBadge = (status: AccountQuota['status']) => {
-    switch (status) {
-      case 'ACTIVE':
-        return (
-          <span className="flex items-center gap-1.5 px-2.5 py-0.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-bold rounded-full uppercase tracking-wider">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            Active
-          </span>
-        );
-      case 'WARNING':
-        return (
-          <span className="flex items-center gap-1.5 px-2.5 py-0.5 bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[10px] font-bold rounded-full uppercase tracking-wider">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-            Warning
-          </span>
-        );
-      case 'EXPIRED':
-        return (
-          <span className="flex items-center gap-1.5 px-2.5 py-0.5 bg-rose-500/10 border border-rose-500/20 text-rose-400 text-[10px] font-bold rounded-full uppercase tracking-wider">
-            <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse" />
-            Expired
-          </span>
-        );
-      case 'LOW_QUOTA':
-        return (
-          <span className="flex items-center gap-1.5 px-2.5 py-0.5 bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[10px] font-bold rounded-full uppercase tracking-wider">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-            Low Quota
-          </span>
-        );
-      default:
-        return (
-          <span className="flex items-center gap-1.5 px-2.5 py-0.5 bg-slate-500/10 border border-slate-500/20 text-slate-400 text-[10px] font-bold rounded-full uppercase tracking-wider">
-            <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
-            {status}
-          </span>
-        );
-    }
-  };
+  const getStatusBadge = (status: AccountQuota['status']) => (
+    <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-label-2">
+      <span className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT[status] || 'bg-fill-3'}`} />
+      {STATUS_TEXT[status] || status}
+    </span>
+  );
 
   const getAccountIcon = (account: AccountQuota) => (
-    <div className={`w-11 h-11 rounded-2xl flex items-center justify-center bg-gradient-to-br ${avatarGradient(account.id)} text-white font-bold text-base shadow-md`}>
+    <div className={`w-11 h-11 rounded-full flex items-center justify-center ${avatarGradient(account.id)} font-semibold text-base`}>
       {(account.name.charAt(0) || '?').toUpperCase()}
     </div>
   );
@@ -155,19 +122,12 @@ export default function QuotasView({
       {/* Title Header with Subtitle & Refresh All button */}
       <div className="flex items-center justify-between mb-8 select-none" id="quotas-view-title-row">
         <div className="flex flex-col" id="quotas-title-group">
-          <h2 className="text-3xl font-bold tracking-tight text-white font-sans">
+          <h2 className="text-[28px] font-bold tracking-tight text-label font-sans">
             配额总览
           </h2>
-          <div className="flex items-center gap-3 mt-1.5 text-xs text-slate-300 font-medium font-sans" id="quotas-meta-row">
-            <span className="flex items-center gap-1 text-slate-200">
-              <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
-              已同步 {syncedCount}/{accounts.length}
-            </span>
-            <span className="text-slate-500">·</span>
-            <span className="text-slate-400">
-              最近同步：{lastUpdatedAtMs !== null ? formatDateTime(lastUpdatedAtMs) : '等待同步'}
-            </span>
-          </div>
+          <p className="mt-1.5 text-[13px] text-label-2 font-sans" id="quotas-meta-row">
+            已同步 {syncedCount}/{accounts.length} · 最近同步 {lastUpdatedAtMs !== null ? formatDateTime(lastUpdatedAtMs) : '等待同步'}
+          </p>
         </div>
 
         <motion.button
@@ -176,10 +136,10 @@ export default function QuotasView({
           whileHover={{ scale: 1.04 }}
           whileTap={{ scale: 0.96 }}
           transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-          className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 text-white text-xs font-semibold tracking-wide transition-all shadow-lg cursor-pointer"
+          className="flex items-center gap-2 px-4 py-2 rounded-[10px] bg-fill-2 hover:bg-fill-3 text-label text-[13px] font-medium transition-colors cursor-pointer"
           id="quotas-btn-refresh-all-secondary"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingAll ? 'animate-spin text-blue-400' : ''}`} />
+          <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingAll ? 'animate-spin text-accent' : ''}`} />
           全部刷新
         </motion.button>
       </div>
@@ -188,55 +148,55 @@ export default function QuotasView({
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8 select-none" id="quotas-metrics-grid">
         {/* Total Accounts */}
         <div 
-          className="glass-card backdrop-blur-xl bg-slate-900/40 border border-white/5 rounded-3xl p-5 flex items-center gap-4 shadow-xl group"
+          className="glass-card rounded-2xl p-5 flex items-center gap-4 group"
           id="quota-stat-card-total"
         >
-          <div className="w-12 h-12 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
+          <div className="w-11 h-11 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent">
             <Users className="w-5 h-5" />
           </div>
           <div className="flex flex-col">
-            <span className="text-[10px] font-bold text-slate-400 tracking-wider uppercase tabular-nums">账号总数</span>
-            <span className="text-2xl font-bold text-white mt-0.5 tracking-tight">{totalAccounts}</span>
+            <span className="text-[12px] font-medium text-label-3">账号总数</span>
+            <span className="text-[22px] font-semibold text-label mt-0.5 tracking-tight tabular-nums">{totalAccounts}</span>
           </div>
         </div>
 
         {/* Action Required */}
         <div 
-          className="glass-card backdrop-blur-xl bg-slate-900/40 border border-white/5 rounded-3xl p-5 flex items-center gap-4 shadow-xl group"
+          className="glass-card rounded-2xl p-5 flex items-center gap-4 group"
           id="quota-stat-card-action"
         >
-          <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
+          <div className="w-11 h-11 rounded-[10px] bg-danger/15 flex items-center justify-center text-danger">
             <Bell className="w-5 h-5" />
           </div>
           <div className="flex flex-col">
-            <span className="text-[10px] font-bold text-slate-400 tracking-wider uppercase tabular-nums">需要处理</span>
-            <span className="text-2xl font-bold text-white mt-0.5 tracking-tight">{actionRequiredCount}</span>
+            <span className="text-[12px] font-medium text-label-3">需要处理</span>
+            <span className="text-[22px] font-semibold text-label mt-0.5 tracking-tight tabular-nums">{actionRequiredCount}</span>
           </div>
         </div>
 
         {/* Avg Remaining */}
         <div 
-          className="glass-card backdrop-blur-xl bg-slate-900/40 border border-white/5 rounded-3xl p-5 flex items-center gap-4 shadow-xl group"
+          className="glass-card rounded-2xl p-5 flex items-center gap-4 group"
           id="quota-stat-card-remaining"
         >
-          <div className="w-12 h-12 rounded-2xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center text-teal-400">
+          <div className="w-11 h-11 rounded-[10px] bg-teal/15 flex items-center justify-center text-teal">
             <BarChart3 className="w-5 h-5" />
           </div>
           <div className="flex flex-col">
-            <span className="text-[10px] font-bold text-slate-400 tracking-wider uppercase tabular-nums">平均剩余</span>
-            <span className="text-2xl font-bold text-white mt-0.5 tracking-tight">{avgRemaining}</span>
+            <span className="text-[12px] font-medium text-label-3">平均剩余</span>
+            <span className="text-[22px] font-semibold text-label mt-0.5 tracking-tight tabular-nums">{avgRemaining}</span>
           </div>
         </div>
       </div>
 
       {/* Empty state */}
       {accounts.length === 0 && (
-        <div className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl px-8 py-16 flex flex-col items-center text-center shadow-xl" id="quotas-empty-state">
-          <div className="w-14 h-14 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 mb-4">
+        <div className="glass-card rounded-2xl px-8 py-16 flex flex-col items-center text-center" id="quotas-empty-state">
+          <div className="w-14 h-14 rounded-xl bg-accent/15 flex items-center justify-center text-accent mb-4">
             <Users className="w-6 h-6" />
           </div>
           <h3 className="text-sm font-bold text-white">还没有账号</h3>
-          <p className="mt-2 max-w-xs text-xs leading-5 text-slate-400">前往“账号管理”页面添加你的第一个 Codex 账号，额度状态会在这里展示。</p>
+          <p className="mt-2 max-w-xs text-xs leading-5 text-label-2">前往“账号管理”页面添加你的第一个 Codex 账号，额度状态会在这里展示。</p>
         </div>
       )}
 
@@ -258,20 +218,12 @@ export default function QuotasView({
 
           // Progress color follows remaining quota: low red, medium amber, high green.
           const barColor5h = fiveHourPercentage == null
-            ? "bg-slate-600/40"
-            : fiveHourPercentage <= 25
-            ? "bg-gradient-to-r from-rose-500/40 via-rose-400/50 to-rose-500/40 shadow-[0_0_12px_rgba(244,63,94,0.1)]"
-            : fiveHourPercentage >= 70
-              ? "bg-gradient-to-r from-emerald-500/40 via-green-400/50 to-emerald-500/40 shadow-[0_0_12px_rgba(52,211,153,0.15)]"
-              : "bg-gradient-to-r from-amber-500/40 via-yellow-400/50 to-amber-500/40 shadow-[0_0_12px_rgba(251,191,36,0.1)]";
+            ? "bg-fill-3"
+            : fiveHourPercentage <= 25 ? "bg-danger" : fiveHourPercentage >= 70 ? "bg-ok" : "bg-warn";
 
           const barColorWeekly = weeklyPercentage == null
-            ? "bg-slate-600/40"
-            : weeklyPercentage <= 25
-            ? "bg-gradient-to-r from-rose-600/40 via-rose-500/50 to-rose-600/40 shadow-[0_0_12px_rgba(225,29,72,0.1)]"
-            : weeklyPercentage >= 70
-              ? "bg-gradient-to-r from-emerald-600/40 via-green-500/50 to-emerald-600/40 shadow-[0_0_12px_rgba(16,185,129,0.15)]"
-              : "bg-gradient-to-r from-amber-600/40 via-yellow-500/50 to-amber-600/40 shadow-[0_0_12px_rgba(217,119,6,0.1)]";
+            ? "bg-fill-3"
+            : weeklyPercentage <= 25 ? "bg-danger" : weeklyPercentage >= 70 ? "bg-ok" : "bg-warn";
 
           return (
             <motion.div
@@ -280,9 +232,8 @@ export default function QuotasView({
               initial={{ opacity: 0, scale: 0.97 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.97 }}
-              whileHover={{ y: -4, borderColor: 'rgba(255,255,255,0.12)' }}
               transition={{ type: 'spring', stiffness: 350, damping: 28 }}
-              className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col shadow-2xl relative overflow-hidden group"
+              className="glass-card rounded-2xl p-6 flex flex-col relative overflow-hidden group"
               id={`quota-account-card-${account.id}`}
             >
               {/* Highlight Overlay on hover */}
@@ -293,8 +244,8 @@ export default function QuotasView({
                 <div className="flex items-center gap-4" id={`quota-card-meta-${account.id}`}>
                   {getAccountIcon(account)}
                   <div className="flex flex-col select-all" id={`quota-card-titles-${account.id}`}>
-                    <h3 className="font-bold text-slate-100 tracking-wide text-sm font-sans">{account.name}</h3>
-                    <span className="text-xs text-slate-400 mt-0.5">{account.email}</span>
+                    <h3 className="font-bold text-label tracking-wide text-sm font-sans">{account.name}</h3>
+                    <span className="text-xs text-label-2 mt-0.5">{account.email}</span>
                   </div>
                 </div>
                 {getStatusBadge(account.status)}
@@ -305,12 +256,12 @@ export default function QuotasView({
                 {/* 5h Quota (kept visible even while upstream omits the window) */}
                 <div className="space-y-1.5" id={`quota-5h-row-${account.id}`}>
                   <div className="flex items-center justify-between text-xs font-semibold" id={`quota-5h-labels-${account.id}`}>
-                    <span className="text-slate-400">5 小时额度</span>
-                    <span className={`tabular-nums ${fiveHourPercentage === null ? 'text-slate-500' : 'text-slate-300'}`}>
+                    <span className="text-label-2">5 小时额度</span>
+                    <span className={`tabular-nums ${fiveHourPercentage === null ? 'text-label-3' : 'text-label-2'}`}>
                       {fiveHourPercentage === null ? '上游暂未提供' : fiveHourExceeded ? '已用尽' : `剩余 ${Math.round(fiveHourPercentage)}%`}
                     </span>
                   </div>
-                  <div className="h-1.5 bg-slate-950/50 rounded-full overflow-hidden relative" id={`quota-5h-bar-bg-${account.id}`}>
+                  <div className="h-1 bg-fill rounded-full overflow-hidden relative" id={`quota-5h-bar-bg-${account.id}`}>
                     <motion.div 
                       initial={{ width: 0 }}
                       animate={{ width: `${fiveHourPercentage ?? 0}%` }}
@@ -323,12 +274,12 @@ export default function QuotasView({
                 {/* Weekly Quota */}
                 <div className="space-y-1.5" id={`quota-weekly-row-${account.id}`}>
                   <div className="flex items-center justify-between text-xs font-semibold" id={`quota-weekly-labels-${account.id}`}>
-                    <span className="text-slate-400">周额度</span>
-                    <span className={`tabular-nums ${weeklyPercentage === null ? 'text-slate-500' : 'text-slate-300'}`}>
+                    <span className="text-label-2">周额度</span>
+                    <span className={`tabular-nums ${weeklyPercentage === null ? 'text-label-3' : 'text-label-2'}`}>
                       {weeklyPercentage === null ? '上游暂未提供' : weeklyExceeded ? '已用尽' : `剩余 ${Math.round(weeklyPercentage)}%`}
                     </span>
                   </div>
-                  <div className="h-1.5 bg-slate-950/50 rounded-full overflow-hidden relative" id={`quota-weekly-bar-bg-${account.id}`}>
+                  <div className="h-1 bg-fill rounded-full overflow-hidden relative" id={`quota-weekly-bar-bg-${account.id}`}>
                     <motion.div 
                       initial={{ width: 0 }}
                       animate={{ width: `${weeklyPercentage ?? 0}%` }}
@@ -340,7 +291,7 @@ export default function QuotasView({
               </div>
 
               {/* Action Buttons Row */}
-              <div className="flex items-center gap-3 mt-6 pt-4 border-t border-white/5" id={`quota-actions-row-${account.id}`}>
+              <div className="flex items-center gap-3 mt-6 pt-4 border-t border-sep" id={`quota-actions-row-${account.id}`}>
                 <motion.button
                   onClick={() => handleCardRefresh(account.id)}
                   disabled={isCardRefreshing || accountRequiresReauthorization}
@@ -348,7 +299,7 @@ export default function QuotasView({
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.96 }}
                   transition={{ type: 'spring', stiffness: 400, damping: 20 }}
-                  className="flex-1 py-3 bg-blue-500/10 hover:bg-blue-500/15 border border-blue-500/25 disabled:bg-white/5 disabled:border-white/5 disabled:text-slate-500 disabled:cursor-not-allowed text-blue-300 hover:text-blue-200 text-xs font-bold rounded-xl flex items-center justify-center gap-2 cursor-pointer transition-all"
+                  className="flex-1 py-3 bg-accent/12 hover:bg-accent/20 border border-accent/20 disabled:bg-fill disabled:border-sep disabled:text-label-3 disabled:cursor-not-allowed text-accent hover:text-accent-hi text-xs font-bold rounded-xl flex items-center justify-center gap-2 cursor-pointer transition-all"
                   id={`quota-btn-refresh-${account.id}`}
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${isCardRefreshing ? 'animate-spin' : ''}`} />
@@ -365,7 +316,7 @@ export default function QuotasView({
                     whileHover={{ scale: 1.06 }}
                     whileTap={{ scale: 0.94 }}
                     transition={{ type: 'spring', stiffness: 400, damping: 15 }}
-                    className="p-3 bg-white/5 hover:bg-white/10 rounded-xl border border-white/5 text-slate-300 hover:text-white transition-all cursor-pointer"
+                    className="p-3 bg-fill hover:bg-fill-2 rounded-xl border border-sep text-label-2 hover:text-white transition-all cursor-pointer"
                     id={`quota-btn-more-${account.id}`}
                   >
                     <MoreHorizontal className="w-4 h-4" />
@@ -379,7 +330,7 @@ export default function QuotasView({
                           initial={{ opacity: 0, scale: 0.95, y: 10 }}
                           animate={{ opacity: 1, scale: 1, y: 0 }}
                           exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                          className="absolute right-0 bottom-full mb-2 w-48 backdrop-blur-xl bg-slate-900/95 border border-white/10 rounded-2xl p-2 shadow-2xl z-20 select-none text-slate-300"
+                          className="absolute right-0 bottom-full mb-2 w-48 bg-surface-2 border border-sep rounded-xl p-2 shadow-xl z-20 select-none text-label-2"
                           id={`quota-more-dropdown-${account.id}`}
                         >
                           <button
@@ -391,7 +342,7 @@ export default function QuotasView({
                             aria-busy={refreshingTokenId === account.id}
                             id={`quota-menu-refresh-token-${account.id}`}
                             title={tokenRefreshUnavailable ? '该账号需要重新授权后才能刷新 Token' : '刷新 Token'}
-                            className="w-full px-3 py-2 hover:bg-white/5 rounded-xl text-left text-xs text-rose-400 hover:text-rose-300 flex items-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                            className="w-full px-3 py-2 hover:bg-fill rounded-xl text-left text-xs text-danger hover:text-danger flex items-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           >
                             <Activity className={`w-3.5 h-3.5 ${refreshingTokenId === account.id ? 'animate-spin' : ''}`} />
                             {refreshingTokenId === account.id ? '刷新中...' : tokenRefreshUnavailable ? '需要重新授权' : '刷新 Token'}

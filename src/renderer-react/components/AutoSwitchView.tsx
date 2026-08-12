@@ -8,6 +8,7 @@ import {
   Users
 } from 'lucide-react';
 import { AccountQuota, AutoSwitchRunResult, LogEntry, SystemSettings, DaemonState } from '../types';
+import { STATUS_DOT, STATUS_TEXT } from '../api/desktop';
 
 interface AutoSwitchProps {
   accounts: AccountQuota[];
@@ -126,61 +127,26 @@ export default function AutoSwitchView({
     }
   };
 
-  const getScopeStatusBadge = (status: AccountQuota['status']) => {
-    switch (status) {
-      case 'ACTIVE':
-        return (
-          <span className="flex items-center gap-1 text-emerald-400 text-[10px] font-bold uppercase tracking-wider">
-            <span className="w-1 h-1 rounded-full bg-emerald-400" />
-            Active
-          </span>
-        );
-      case 'LOW_QUOTA':
-        return (
-          <span className="flex items-center gap-1 text-amber-500 text-[10px] font-bold uppercase tracking-wider">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-            Low Quota
-          </span>
-        );
-      case 'SUSPENDED':
-        return (
-          <span className="flex items-center gap-1 text-rose-500 text-[10px] font-bold uppercase tracking-wider">
-            <span className="w-1 h-1 rounded-full bg-rose-500" />
-            Suspended
-          </span>
-        );
-      case 'READY':
-        return (
-          <span className="flex items-center gap-1 text-teal-400 text-[10px] font-bold uppercase tracking-wider">
-            <span className="w-1.5 h-1.5 rounded-full bg-teal-400" />
-            Ready
-          </span>
-        );
-      default:
-        return (
-          <span className="text-slate-400 text-[10px] uppercase font-bold">{status}</span>
-        );
-    }
-  };
+  const getScopeStatusBadge = (status: AccountQuota['status']) => (
+    <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-label-2">
+      <span className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT[status] || 'bg-fill-3'}`} />
+      {STATUS_TEXT[status] || status}
+    </span>
+  );
 
-  const getPriorityBadge = (priority: AccountQuota['priority']) => {
-    let colors = "text-slate-400";
-    if (priority === 'Ultra') colors = "text-cyan-400";
-    if (priority === 'High') colors = "text-blue-400";
-    if (priority === 'Normal') colors = "text-slate-300";
-    if (priority === 'Low') colors = "text-slate-500";
-    return <span className={`text-[10px] ${colors} font-semibold tabular-nums`}>优先级: {priority}</span>;
-  };
+  const getPriorityBadge = (priority: AccountQuota['priority']) => (
+    <span className="text-[11px] text-label-3 tabular-nums">优先级 {priority}</span>
+  );
 
   return (
     <div className="flex-1 p-8 overflow-y-auto select-none" id="autoswitch-view-container">
       {/* Page Title & Check Now Header Bar */}
       <div className="flex items-center justify-between mb-8" id="autoswitch-title-row">
         <div className="flex flex-col" id="autoswitch-title-group">
-          <h2 className="text-3xl font-bold tracking-tight text-white font-sans">
+          <h2 className="text-[28px] font-bold tracking-tight text-label font-sans">
             自动切号
           </h2>
-          <p className="text-xs text-slate-300 mt-1 font-sans">
+          <p className="text-[13px] text-label-2 mt-1.5 font-sans">
             智能配额监控与自动化账号轮转
           </p>
         </div>
@@ -188,16 +154,16 @@ export default function AutoSwitchView({
         {/* Daemon status and Trigger button */}
         <div className="flex items-center gap-3" id="autoswitch-trigger-group">
           {/* Daemon active widget */}
-          <div className="flex items-center gap-2 px-4 py-2 bg-slate-900/40 border border-white/5 rounded-2xl text-xs font-semibold" id="daemon-capsule-autoswitch">
-            <span className={`w-2 h-2 rounded-full ${daemonState.status === 'Running' ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
-            <span className="text-slate-400">Daemon 状态</span>
-            <span className={`${daemonState.status === 'Running' ? 'text-emerald-400' : 'text-rose-400'} font-bold uppercase tracking-wide`}>{daemonState.status === 'Running' ? '运行中' : '已停止'}</span>
+          <div className="flex items-center gap-2 px-3.5 py-2 bg-fill rounded-[10px] text-[12px] font-medium" id="daemon-capsule-autoswitch">
+            <span className={`w-1.5 h-1.5 rounded-full ${daemonState.status === 'Running' ? 'bg-ok' : 'bg-danger'}`} />
+            <span className="text-label-2">Daemon</span>
+            <span className="text-label">{daemonState.status === 'Running' ? '运行中' : '已停止'}</span>
           </div>
 
           {/* Session switch counter */}
-          <div className="flex items-center gap-2 px-4 py-2 bg-slate-900/40 border border-white/5 rounded-2xl text-xs font-semibold" id="autoswitch-session-capsule">
-            <span className="text-slate-400">本次切换</span>
-            <span className="text-blue-400 font-bold tabular-nums">{sessionSwitchCount}</span>
+          <div className="flex items-center gap-2 px-3.5 py-2 bg-fill rounded-[10px] text-[12px] font-medium" id="autoswitch-session-capsule">
+            <span className="text-label-2">本次切换</span>
+            <span className="text-label tabular-nums">{sessionSwitchCount}</span>
           </div>
 
           <motion.button
@@ -206,10 +172,10 @@ export default function AutoSwitchView({
             whileHover={{ scale: 1.04 }}
             whileTap={{ scale: 0.96 }}
             transition={{ type: 'spring', stiffness: 400, damping: 20 }}
-            className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-blue-500/10 hover:bg-blue-500/15 border border-blue-500/25 disabled:opacity-50 text-blue-300 hover:text-blue-200 text-xs font-bold transition-all"
+            className="flex items-center gap-2 px-4 py-2 rounded-[10px] bg-accent/15 hover:bg-accent/25 disabled:opacity-50 text-accent text-[13px] font-medium transition-colors"
             id="autoswitch-btn-checknow"
           >
-            <Zap className={`w-3.5 h-3.5 ${isCheckingNow ? 'animate-pulse text-cyan-300' : ''}`} />
+            <Zap className={`w-3.5 h-3.5 ${isCheckingNow ? 'animate-pulse text-accent' : ''}`} />
             立即检查
           </motion.button>
         </div>
@@ -220,12 +186,12 @@ export default function AutoSwitchView({
         {/* Left Side: Control Settings & Switch Config (5 cols) */}
         <div className="lg:col-span-5 flex flex-col gap-6" id="autoswitch-left-panel">
           {/* Controls Card */}
-          <div className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col shadow-xl" id="autoswitch-control-card">
+          <div className="glass-card rounded-2xl p-6 flex flex-col" id="autoswitch-control-card">
             {/* Global Switch row */}
-            <div className="flex items-center justify-between pb-6 border-b border-white/5" id="autoswitch-global-row">
+            <div className="flex items-center justify-between pb-6 border-b border-sep" id="autoswitch-global-row">
               <div className="flex flex-col" id="autoswitch-global-text">
-                <span className="font-bold text-slate-100 text-sm font-sans">全局开关</span>
-                <span className="text-xs text-slate-400 mt-1">启用系统自动监测并切换账号</span>
+                <span className="font-bold text-label text-sm font-sans">全局开关</span>
+                <span className="text-xs text-label-2 mt-1">启用系统自动监测并切换账号</span>
               </div>
               {/* Custom IOS style Toggle */}
               <motion.button
@@ -234,7 +200,7 @@ export default function AutoSwitchView({
                 aria-busy={isTogglingGlobal}
                 whileTap={{ scale: 0.92 }}
                 className={`w-11 h-6 rounded-full p-0.5 transition-colors cursor-pointer outline-none relative ${
-                  settings.globalSwitch ? 'bg-blue-500' : 'bg-slate-800'
+                  settings.globalSwitch ? 'bg-accent' : 'bg-fill-3'
                 }`}
                 id="autoswitch-global-toggle-btn"
               >
@@ -250,13 +216,13 @@ export default function AutoSwitchView({
 
             {/* Threshold Sliders */}
             <div className="pt-6 space-y-6" id="autoswitch-sliders-container">
-              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider tabular-nums">阈值设定</h4>
+              <h4 className="text-[13px] font-semibold text-label">阈值设定</h4>
 
               {/* 5h Quota Threshold */}
               <div className="space-y-2" id="threshold-5h-container">
                 <div className="flex items-center justify-between text-xs font-semibold" id="threshold-5h-labels">
-                  <span className="text-slate-300">5 小时额度阈值</span>
-                  <span className="text-blue-400 font-bold tabular-nums">{settings.fiveHourThreshold}%</span>
+                  <span className="text-label-2">5 小时额度阈值</span>
+                  <span className="text-accent font-bold tabular-nums">{settings.fiveHourThreshold}%</span>
                 </div>
                 <input
                   type="range"
@@ -267,7 +233,7 @@ export default function AutoSwitchView({
                   onPointerUp={(e) => onUpdateThreshold('5h', Number(e.currentTarget.value))}
                   onKeyUp={(e) => onUpdateThreshold('5h', Number(e.currentTarget.value))}
                   onBlur={(e) => onUpdateThreshold('5h', Number(e.currentTarget.value))}
-                  className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500 outline-none"
+                  className="w-full h-1 bg-fill-2 rounded-lg appearance-none cursor-pointer accent-accent outline-none"
                   id="threshold-5h-slider"
                 />
               </div>
@@ -275,8 +241,8 @@ export default function AutoSwitchView({
               {/* Weekly Quota Threshold */}
               <div className="space-y-2" id="threshold-weekly-container">
                 <div className="flex items-center justify-between text-xs font-semibold" id="threshold-weekly-labels">
-                  <span className="text-slate-300">周额度阈值</span>
-                  <span className="text-blue-400 font-bold tabular-nums">{settings.weeklyThreshold}%</span>
+                  <span className="text-label-2">周额度阈值</span>
+                  <span className="text-accent font-bold tabular-nums">{settings.weeklyThreshold}%</span>
                 </div>
                 <input
                   type="range"
@@ -287,7 +253,7 @@ export default function AutoSwitchView({
                   onPointerUp={(e) => onUpdateThreshold('weekly', Number(e.currentTarget.value))}
                   onKeyUp={(e) => onUpdateThreshold('weekly', Number(e.currentTarget.value))}
                   onBlur={(e) => onUpdateThreshold('weekly', Number(e.currentTarget.value))}
-                  className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500 outline-none"
+                  className="w-full h-1 bg-fill-2 rounded-lg appearance-none cursor-pointer accent-accent outline-none"
                   id="threshold-weekly-slider"
                 />
               </div>
@@ -295,43 +261,43 @@ export default function AutoSwitchView({
           </div>
 
           {/* Status Log & Banner Panel */}
-          <div className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col shadow-xl" id="autoswitch-logs-card">
-            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider tabular-nums mb-4">状态日志</h4>
+          <div className="glass-card rounded-2xl p-6 flex flex-col" id="autoswitch-logs-card">
+            <h4 className="text-[13px] font-semibold text-label mb-4">状态日志</h4>
 
             {/* Green banner */}
-            <div className={`p-4 border rounded-2xl flex items-start gap-3 mb-4 ${currentQuotaSufficient ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-amber-500/10 border-amber-500/20'}`} id="autoswitch-log-banner">
-              <CheckCircle2 className={`w-5 h-5 shrink-0 mt-0.5 ${currentQuotaSufficient ? 'text-emerald-400' : 'text-amber-400'}`} />
+            <div className={`p-4 rounded-[10px] flex items-start gap-3 mb-4 ${currentQuotaSufficient ? 'bg-ok/12' : 'bg-warn/12'}`} id="autoswitch-log-banner">
+              <CheckCircle2 className={`w-5 h-5 shrink-0 mt-0.5 ${currentQuotaSufficient ? 'text-ok' : 'text-warn'}`} />
               <div className="flex flex-col" id="autoswitch-banner-text">
-                <span className={`text-xs font-bold ${currentQuotaSufficient ? 'text-emerald-300' : 'text-amber-300'}`}>
+                <span className={`text-xs font-bold ${currentQuotaSufficient ? 'text-ok' : 'text-warn'}`}>
                   {currentAccount ? (currentQuotaSufficient ? '当前额度充足' : '当前账号需要关注') : '暂无当前账号'}
                 </span>
-                <span className={`text-[11px] mt-0.5 ${currentQuotaSufficient ? 'text-emerald-400/80' : 'text-amber-400/80'}`}>
+                <span className={`text-[11px] mt-0.5 ${currentQuotaSufficient ? 'text-ok/80' : 'text-warn/80'}`}>
                   {settings.globalSwitch ? '自动轮换已启用' : '自动轮换已禁用'}
                 </span>
               </div>
             </div>
 
             {/* Checked time banner */}
-            <div className="flex items-center gap-2 text-xs text-slate-400 mb-4 px-1" id="autoswitch-lastcheck-row">
-              <Clock className="w-3.5 h-3.5 text-slate-400" />
+            <div className="flex items-center gap-2 text-xs text-label-2 mb-4 px-1" id="autoswitch-lastcheck-row">
+              <Clock className="w-3.5 h-3.5 text-label-2" />
               <span>最近检查：{daemonState.lastChecked}</span>
             </div>
 
             {/* Log Scroll Container */}
-            <div className="h-44 overflow-y-auto space-y-2.5 pr-1 text-slate-300 font-sans" id="autoswitch-logs-list">
+            <div className="h-44 overflow-y-auto space-y-2.5 pr-1 text-label-2 font-sans" id="autoswitch-logs-list">
               {logs.slice(0, 5).map((log) => {
-                let badgeColor = "bg-slate-400";
-                if (log.type === 'success') badgeColor = "bg-emerald-400";
-                if (log.type === 'error') badgeColor = "bg-rose-400";
-                if (log.type === 'warning') badgeColor = "bg-amber-400";
-                if (log.type === 'info') badgeColor = "bg-blue-400";
+                let badgeColor = "bg-fill-3";
+                if (log.type === 'success') badgeColor = "bg-ok";
+                if (log.type === 'error') badgeColor = "bg-danger";
+                if (log.type === 'warning') badgeColor = "bg-warn";
+                if (log.type === 'info') badgeColor = "bg-accent";
 
                 return (
                   <div key={log.id} className="flex items-start gap-2.5 text-[11px]" id={`log-item-${log.id}`}>
                     <span className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${badgeColor}`} />
                     <div className="flex flex-col" id={`log-item-desc-${log.id}`}>
-                      <span className="text-slate-300 font-medium leading-normal">{log.message}</span>
-                      <span className="text-[9px] text-slate-500 tabular-nums mt-0.5">{log.timestamp}</span>
+                      <span className="text-label-2 font-medium leading-normal">{log.message}</span>
+                      <span className="text-[10px] text-label-3 tabular-nums mt-0.5">{log.timestamp}</span>
                     </div>
                   </div>
                 );
@@ -341,11 +307,11 @@ export default function AutoSwitchView({
         </div>
 
         {/* Right Side: Scope Selection (7 cols) */}
-        <div className="lg:col-span-7 glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col shadow-xl" id="autoswitch-right-panel">
+        <div className="lg:col-span-7 glass-card rounded-2xl p-6 flex flex-col" id="autoswitch-right-panel">
           {/* Card header and tab selector */}
-          <div className="flex items-center justify-between pb-5 border-b border-white/5 mb-5" id="scope-header-row">
-            <h4 className="text-sm font-bold text-slate-100 tracking-wide font-sans">生效范围</h4>
-            <div className="flex bg-slate-950/40 p-1 rounded-xl border border-white/5 text-xs font-semibold relative" id="scope-tabs-capsule">
+          <div className="flex items-center justify-between pb-5 border-b border-sep mb-5" id="scope-header-row">
+            <h4 className="text-sm font-bold text-label tracking-wide font-sans">生效范围</h4>
+            <div className="flex bg-fill p-1 rounded-xl border border-sep text-xs font-semibold relative" id="scope-tabs-capsule">
               <button
                 onClick={() => {
                   setActiveScopeTab('all');
@@ -353,14 +319,14 @@ export default function AutoSwitchView({
                   onAddLog('生效范围已切换为全部账号。', 'info');
                 }}
                 className={`px-4 py-2 rounded-lg transition-all relative cursor-pointer z-10 ${
-                  activeScopeTab === 'all' ? 'text-white font-bold' : 'text-slate-400 hover:text-slate-300'
+                  activeScopeTab === 'all' ? 'text-white font-bold' : 'text-label-2 hover:text-label-2'
                 }`}
                 id="scope-tab-all"
               >
                 {activeScopeTab === 'all' && (
                   <motion.div
                     layoutId="scopeActiveBg"
-                    className="absolute inset-0 bg-white/10 rounded-lg -z-10"
+                    className="absolute inset-0 bg-fill-2 rounded-lg -z-10"
                     transition={{ type: 'spring', stiffness: 450, damping: 25 }}
                   />
                 )}
@@ -373,14 +339,14 @@ export default function AutoSwitchView({
                   onAddLog('生效范围已切换为指定账号。', 'info');
                 }}
                 className={`px-4 py-2 rounded-lg transition-all relative cursor-pointer z-10 ${
-                  activeScopeTab === 'specific' ? 'text-white font-bold' : 'text-slate-400 hover:text-slate-300'
+                  activeScopeTab === 'specific' ? 'text-white font-bold' : 'text-label-2 hover:text-label-2'
                 }`}
                 id="scope-tab-specific"
               >
                 {activeScopeTab === 'specific' && (
                   <motion.div
                     layoutId="scopeActiveBg"
-                    className="absolute inset-0 bg-white/10 rounded-lg -z-10"
+                    className="absolute inset-0 bg-fill-2 rounded-lg -z-10"
                     transition={{ type: 'spring', stiffness: 450, damping: 25 }}
                   />
                 )}
@@ -397,12 +363,11 @@ export default function AutoSwitchView({
                 <motion.div
                   key={account.id}
                   onClick={() => onToggleAccountSelection(account.id)}
-                  whileHover={{ scale: 1.015, x: 4, backgroundColor: 'rgba(255, 255, 255, 0.05)' }}
-                  whileTap={{ scale: 0.985 }}
+                  whileTap={{ scale: 0.99 }}
                   transition={{ type: 'spring', stiffness: 450, damping: 24 }}
-                  className={`p-4 rounded-2xl border flex items-center justify-between transition-all cursor-pointer group ${
+                  className={`p-4 rounded-xl border flex items-center justify-between transition-all cursor-pointer group ${
                     isChecked 
-                      ? 'bg-white/[0.04] border-white/10 hover:border-white/15' 
+                      ? 'bg-white/[0.04] border-sep hover:border-white/15' 
                       : 'bg-transparent border-transparent opacity-60 hover:opacity-80'
                   }`}
                   id={`scope-acc-card-${account.id}`}
@@ -412,7 +377,7 @@ export default function AutoSwitchView({
                     <div 
                       className={`w-5 h-5 rounded-md border flex items-center justify-center transition-all shrink-0 ${
                         isChecked 
-                          ? 'bg-blue-500 border-blue-400 text-white' 
+                          ? 'bg-accent border-accent text-white' 
                           : 'border-white/20 group-hover:border-white/30'
                       }`}
                       id={`scope-checkbox-${account.id}`}
@@ -421,14 +386,14 @@ export default function AutoSwitchView({
                     </div>
 
                     {/* Account Icon */}
-                    <div className="w-10 h-10 rounded-xl bg-white/5 border border-white/5 flex items-center justify-center text-slate-300" id={`scope-icon-${account.id}`}>
-                      <Users className="w-4 h-4 text-slate-400" />
+                    <div className="w-10 h-10 rounded-full bg-fill flex items-center justify-center text-label-2" id={`scope-icon-${account.id}`}>
+                      <Users className="w-4 h-4 text-label-2" />
                     </div>
 
                     {/* Title and details */}
                     <div className="flex flex-col text-left" id={`scope-titles-${account.id}`}>
-                      <span className="font-bold text-slate-100 text-sm font-sans">{account.name}</span>
-                      <span className="text-[11px] text-slate-400 tabular-nums mt-0.5">
+                      <span className="font-bold text-label text-sm font-sans">{account.name}</span>
+                      <span className="text-[11px] text-label-2 tabular-nums mt-0.5">
                         5 小时剩余: {account.fiveHourQuotaRemaining == null
                           ? '--'
                           : `${Math.round((account.fiveHourQuotaRemaining / account.fiveHourQuotaTotal) * 100)}%`}

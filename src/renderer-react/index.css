@@ -4,12 +4,37 @@
    back to the best system font per platform. */
 @theme {
   --font-sans: "Inter", "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+
+  /*
+   * Apple dark-mode design tokens (macOS Sequoia / iOS dark palette).
+   * Generates utilities such as bg-surface, bg-fill, text-label-2,
+   * border-sep, bg-accent, text-ok, text-warn, text-danger.
+   */
+  --color-base: #131315;            /* window background          */
+  --color-surface: #1c1c1e;         /* elevated content surface   */
+  --color-surface-2: #242426;       /* secondary elevated surface */
+  --color-fill: rgba(255, 255, 255, 0.055);   /* quaternary fill  */
+  --color-fill-2: rgba(255, 255, 255, 0.09);  /* tertiary fill    */
+  --color-fill-3: rgba(255, 255, 255, 0.14);  /* secondary fill   */
+  --color-label: rgba(255, 255, 255, 0.96);
+  --color-label-2: rgba(235, 235, 245, 0.62);
+  --color-label-3: rgba(235, 235, 245, 0.34);
+  --color-sep: rgba(255, 255, 255, 0.075);    /* hairline separator */
+  --color-accent: #0a84ff;          /* Apple blue (dark)  */
+  --color-accent-hi: #409cff;       /* hover lift         */
+  --color-ok: #30d158;              /* Apple green (dark) */
+  --color-warn: #ff9f0a;            /* Apple orange       */
+  --color-danger: #ff453a;          /* Apple red          */
+  --color-purple: #bf5af2;
+  --color-teal: #64d2ff;
 }
 
 body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  background: #131315;
+  letter-spacing: -0.01em; /* SF Pro-like tightness */
 }
 
 /* Frameless-window drag regions. */
@@ -22,12 +47,12 @@ body {
 }
 
 /*
- * iOS-style glass finish: a 1px hairline ring that is lit from above
- * (bright top edge, faint sides, subtle bottom reflection) instead of a
- * flat uniform border. Follows the element's own border radius.
+ * Apple material card: a flat elevated surface with an even hairline ring
+ * and a barely-there top light. No heavy shadows, no gradients.
  */
 .glass-card {
   position: relative;
+  background: rgba(255, 255, 255, 0.045);
 }
 
 .glass-card::before {
@@ -38,10 +63,9 @@ body {
   padding: 1px;
   background: linear-gradient(
     180deg,
-    rgba(255, 255, 255, 0.22),
-    rgba(255, 255, 255, 0.055) 28%,
-    rgba(255, 255, 255, 0.015) 62%,
-    rgba(255, 255, 255, 0.08)
+    rgba(255, 255, 255, 0.13),
+    rgba(255, 255, 255, 0.055) 30%,
+    rgba(255, 255, 255, 0.045)
   );
   -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
@@ -50,32 +74,43 @@ body {
   pointer-events: none;
 }
 
-/* Custom scrollbars for a beautiful, premium dark theme aesthetic */
+/* Inset grouped surface (iOS settings-style rows). */
+.inset-group {
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+}
+
+/* Row separator inside grouped surfaces. */
+.row-sep + .row-sep {
+  border-top: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+/* Custom scrollbars, macOS-style overlay look. */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.1);
-  border-radius: 9999px;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.14);
   border-radius: 9999px;
   border: 1.5px solid transparent;
   background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.26);
   border: 1.5px solid transparent;
   background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:active {
-  background: rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.36);
   border: 1.5px solid transparent;
   background-clip: padding-box;
 }
@@ -83,5 +118,5 @@ body {
 /* Firefox scrollbars support */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.12) rgba(0, 0, 0, 0.05);
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
 }

@@ -304,17 +304,38 @@ function formatReset(value: string | number | null | undefined): string {
   return formatDuration(seconds);
 }
 
-// Deterministic gradient per account for the letter avatars.
+// Deterministic per-account avatar tint: low-saturation Apple system-color
+// fills with a matching label, instead of loud gradients.
 const AVATAR_GRADIENTS = [
-  'from-blue-500 to-cyan-400',
-  'from-violet-500 to-purple-400',
-  'from-emerald-500 to-teal-400',
-  'from-amber-500 to-orange-400',
-  'from-rose-500 to-pink-400',
-  'from-indigo-500 to-blue-400',
-  'from-fuchsia-500 to-pink-400',
-  'from-sky-500 to-cyan-400',
+  'bg-[#0a84ff]/18 text-[#6cb2ff]',
+  'bg-[#bf5af2]/18 text-[#d29bf5]',
+  'bg-[#30d158]/18 text-[#6fdd92]',
+  'bg-[#ff9f0a]/18 text-[#ffbc57]',
+  'bg-[#64d2ff]/18 text-[#9ce1ff]',
+  'bg-[#ff375f]/18 text-[#ff7d97]',
+  'bg-[#5e5ce6]/18 text-[#9c9af0]',
+  'bg-[#66d4cf]/18 text-[#9de4e1]',
 ];
+
+// Apple-style status presentation: a small colored dot plus quiet text
+// instead of loud uppercase pills.
+export const STATUS_DOT: Record<string, string> = {
+  ACTIVE: 'bg-ok',
+  READY: 'bg-teal',
+  WARNING: 'bg-warn',
+  LOW_QUOTA: 'bg-warn',
+  EXPIRED: 'bg-danger',
+  SUSPENDED: 'bg-danger',
+};
+
+export const STATUS_TEXT: Record<string, string> = {
+  ACTIVE: '活跃',
+  READY: '就绪',
+  WARNING: '注意',
+  LOW_QUOTA: '额度偏低',
+  EXPIRED: '已耗尽',
+  SUSPENDED: '需重新授权',
+};
 
 export function avatarGradient(id: string): string {
   let hash = 0;

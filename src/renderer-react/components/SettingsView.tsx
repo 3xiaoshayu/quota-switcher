@@ -140,10 +140,10 @@ export default function SettingsView({
     <div className="flex-1 p-8 overflow-y-auto select-none" id="settings-view-container">
       {/* Page Title block */}
       <div className="flex flex-col mb-8 select-none" id="settings-title-group">
-        <h2 className="text-3xl font-bold tracking-tight text-white font-sans">
+        <h2 className="text-[28px] font-bold tracking-tight text-label font-sans">
           设置
         </h2>
-        <p className="text-xs text-slate-300 mt-1 font-sans">
+        <p className="text-[13px] text-label-2 mt-1.5 font-sans">
           管理 Codex 系统运行参数及账户同步配置
         </p>
       </div>
@@ -153,16 +153,16 @@ export default function SettingsView({
         {/* Left Column: Daemon Service config (7 cols) */}
         <div className="lg:col-span-7 flex flex-col gap-6" id="settings-left-col">
           {/* Card 1: Daemon Service */}
-          <div className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col shadow-xl" id="card-daemon-settings">
+          <div className="glass-card rounded-2xl p-6 flex flex-col" id="card-daemon-settings">
             {/* Daemon Card Header */}
-            <div className="flex items-start justify-between pb-5 border-b border-white/5" id="daemon-header">
+            <div className="flex items-start justify-between pb-5 border-b border-sep" id="daemon-header">
               <div className="flex items-center gap-3.5">
-                <div className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
+                <div className="w-10 h-10 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent">
                   <Server className="w-4 h-4" />
                 </div>
                 <div className="flex flex-col text-left">
-                  <h3 className="font-bold text-slate-100 text-sm tracking-wide font-sans">Daemon 服务</h3>
-                  <span className="text-[11px] text-slate-400 mt-0.5">控制后台同步守护进程</span>
+                  <h3 className="font-bold text-label text-sm tracking-wide font-sans">Daemon 服务</h3>
+                  <span className="text-[11px] text-label-2 mt-0.5">控制后台同步守护进程</span>
                 </div>
               </div>
 
@@ -174,21 +174,21 @@ export default function SettingsView({
                 whileHover={{ scale: 1.04 }}
                 whileTap={{ scale: 0.95 }}
                 transition={{ type: 'spring', stiffness: 450, damping: 20 }}
-                className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all border cursor-pointer ${
+                className={`flex items-center gap-1.5 px-4 py-2 rounded-[10px] text-[13px] font-medium transition-colors cursor-pointer ${
                   daemonState.status === 'Running' 
-                    ? 'bg-rose-500/10 hover:bg-rose-500/15 border-rose-500/25 text-rose-300 hover:text-rose-200' 
-                    : 'bg-emerald-500/10 hover:bg-emerald-500/15 border-emerald-500/25 text-emerald-300 hover:text-emerald-200'
+                    ? 'bg-danger/12 hover:bg-danger/20 text-danger' 
+                    : 'bg-ok/12 hover:bg-ok/20 text-ok'
                 }`}
                 id="btn-toggle-daemon"
               >
                 {daemonState.status === 'Running' ? (
                   <>
-                    <Square className={`w-3 h-3 fill-rose-300 ${isTogglingDaemon ? 'animate-pulse' : ''}`} />
+                    <Square className={`w-3 h-3 fill-danger ${isTogglingDaemon ? 'animate-pulse' : ''}`} />
                     {isTogglingDaemon ? '停止中...' : '停止服务'}
                   </>
                 ) : (
                   <>
-                    <Play className={`w-3 h-3 fill-emerald-300 ${isTogglingDaemon ? 'animate-pulse' : ''}`} />
+                    <Play className={`w-3 h-3 fill-ok ${isTogglingDaemon ? 'animate-pulse' : ''}`} />
                     {isTogglingDaemon ? '启动中...' : '启动服务'}
                   </>
                 )}
@@ -199,20 +199,18 @@ export default function SettingsView({
             <div className="pt-6 grid grid-cols-1 md:grid-cols-2 gap-6 items-center" id="daemon-body">
               {/* Status display */}
               <div className="space-y-1 text-left" id="daemon-status-box">
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider tabular-nums">当前状态</span>
+                <span className="text-[12px] font-medium text-label-3">当前状态</span>
                 <div className="flex items-center gap-2 pt-1">
-                  <span className={`w-2 h-2 rounded-full ${
-                    daemonState.status === 'Running' ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'
+                  <span className={`w-1.5 h-1.5 rounded-full ${
+                    daemonState.status === 'Running' ? 'bg-ok' : 'bg-danger'
                   }`} />
-                  <span className={`font-bold text-sm ${
-                    daemonState.status === 'Running' ? 'text-emerald-400' : 'text-rose-400'
-                  }`}>{daemonState.status === 'Running' ? '运行中' : '已停止'}</span>
+                  <span className="font-medium text-sm text-label">{daemonState.status === 'Running' ? '运行中' : '已停止'}</span>
                 </div>
                 {daemonState.pausedReason && (
-                  <span className="block text-[10px] text-amber-300">已暂停：{daemonState.pausedReason}</span>
+                  <span className="block text-[10px] text-warn">已暂停：{daemonState.pausedReason}</span>
                 )}
                 {daemonState.lastError && (
-                  <span className="block max-w-xs truncate text-[10px] text-rose-300" title={daemonState.lastError}>
+                  <span className="block max-w-xs truncate text-[10px] text-danger" title={daemonState.lastError}>
                     {daemonState.lastError}
                   </span>
                 )}
@@ -220,9 +218,9 @@ export default function SettingsView({
 
               {/* Sync Interval Slider */}
               <div className="space-y-2 text-left" id="daemon-interval-box">
-                <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 uppercase tracking-wider tabular-nums">
+                <div className="flex items-center justify-between text-[12px] font-medium text-label-3">
                   <span>同步间隔（分钟）</span>
-                  <span className="text-slate-200 tabular-nums text-xs">{daemonState.syncInterval}</span>
+                  <span className="text-label tabular-nums text-xs">{daemonState.syncInterval}</span>
                 </div>
                 <div className="flex items-center gap-4">
                   <input
@@ -234,38 +232,32 @@ export default function SettingsView({
                     onPointerUp={(e) => onUpdateSyncInterval(Number(e.currentTarget.value))}
                     onKeyUp={(e) => onUpdateSyncInterval(Number(e.currentTarget.value))}
                     onBlur={(e) => onUpdateSyncInterval(Number(e.currentTarget.value))}
-                    className="flex-1 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500 outline-none"
+                    className="flex-1 h-1 bg-fill-2 rounded-lg appearance-none cursor-pointer accent-accent outline-none"
                     id="sync-interval-slider"
                   />
-                  <span className="text-slate-100 font-bold tabular-nums text-sm">{daemonState.syncInterval}</span>
+                  <span className="text-label font-bold tabular-nums text-sm">{daemonState.syncInterval}</span>
                 </div>
               </div>
             </div>
           </div>
 
           {/* Card 2: Codex Client environment */}
-          <div className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex items-center justify-between shadow-xl" id="card-client-detect">
+          <div className="glass-card rounded-2xl p-6 flex items-center justify-between" id="card-client-detect">
             <div className="flex items-center gap-3.5">
-              <div className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
+              <div className="w-10 h-10 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent">
                 <Monitor className="w-4 h-4" />
               </div>
               <div className="flex flex-col text-left">
-                <h3 className="font-bold text-slate-100 text-sm tracking-wide font-sans">Codex Client</h3>
-                <span className="text-[11px] text-slate-400 mt-0.5">客户端环境检测</span>
+                <h3 className="font-bold text-label text-sm tracking-wide font-sans">Codex Client</h3>
+                <span className="text-[11px] text-label-2 mt-0.5">客户端环境检测</span>
               </div>
             </div>
 
             <div className="flex items-center gap-4" id="client-detect-actions">
-              <div className={`flex items-center gap-1.5 px-3 py-1.5 border text-[10px] font-bold rounded-xl uppercase tracking-wider ${
-                settings.clientDetected
-                  ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-                  : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
-              }`}>
-                Microsoft Store 版本
-                <span className="px-1.5 py-0.5 bg-white/5 border border-white/10 rounded text-[9px] font-extrabold ml-1">
-                  {settings.clientDetected ? '已检测' : '未找到'}
-                </span>
-              </div>
+              <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-label-2">
+                <span className={`w-1.5 h-1.5 rounded-full ${settings.clientDetected ? 'bg-ok' : 'bg-danger'}`} />
+                Microsoft Store 版本{settings.clientDetected ? '已检测' : '未找到'}
+              </span>
 
               <motion.button
                 onClick={handleDetectClient}
@@ -273,10 +265,10 @@ export default function SettingsView({
                 whileHover={{ scale: 1.03 }}
                 whileTap={{ scale: 0.97 }}
                 transition={{ type: 'spring', stiffness: 450, damping: 20 }}
-                className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 text-slate-200 text-xs font-semibold cursor-pointer transition-all flex items-center gap-1"
+                className="px-4 py-2 rounded-[10px] bg-fill hover:bg-fill-2 text-label text-[13px] font-medium cursor-pointer transition-colors flex items-center gap-1.5"
                 id="btn-re-detect-client"
               >
-                <RotateCw className={`w-3 h-3 ${isDetectingClient ? 'animate-spin text-blue-400' : ''}`} />
+                <RotateCw className={`w-3 h-3 ${isDetectingClient ? 'animate-spin text-accent' : ''}`} />
                 重新检测
               </motion.button>
             </div>
@@ -286,23 +278,23 @@ export default function SettingsView({
         {/* Right Column: Tokens integrity & Updates (5 cols) */}
         <div className="lg:col-span-5 flex flex-col gap-6" id="settings-right-col">
           {/* Card 3: Tokens */}
-          <div className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col gap-6 shadow-xl" id="card-tokens">
+          <div className="glass-card rounded-2xl p-6 flex flex-col gap-6" id="card-tokens">
             <div className="flex items-start justify-between" id="tokens-header">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
+                <div className="w-10 h-10 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent">
                   <Key className="w-4 h-4" />
                 </div>
                 <div className="flex flex-col text-left">
-                  <h3 className="font-bold text-slate-100 text-sm tracking-wide font-sans">Tokens 令牌</h3>
-                  <span className="text-[11px] text-slate-400 mt-0.5">凭证完整性校验</span>
+                  <h3 className="font-bold text-label text-sm tracking-wide font-sans">Tokens 令牌</h3>
+                  <span className="text-[11px] text-label-2 mt-0.5">凭证完整性校验</span>
                 </div>
               </div>
             </div>
 
             <div className="flex items-end justify-between" id="tokens-body">
               <div className="flex flex-col text-left" id="tokens-stat-box">
-                <span className="text-3xl font-extrabold text-white tracking-tight tabular-nums">{accountCount}</span>
-                <span className="text-[10px] text-slate-400 uppercase tracking-widest tabular-nums font-bold mt-1">管理账号总数</span>
+                <span className="text-[28px] font-semibold text-label tracking-tight tabular-nums">{accountCount}</span>
+                <span className="text-[12px] text-label-3 font-medium mt-1">管理账号总数</span>
               </div>
 
               <motion.button
@@ -311,38 +303,38 @@ export default function SettingsView({
                 whileHover={{ scale: 1.03 }}
                 whileTap={{ scale: 0.96 }}
                 transition={{ type: 'spring', stiffness: 450, damping: 20 }}
-                className="px-4 py-3 bg-blue-500/10 hover:bg-blue-500/15 border border-blue-500/25 disabled:opacity-50 text-blue-300 hover:text-blue-200 rounded-2xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+                className="px-4 py-2.5 bg-accent/15 hover:bg-accent/25 disabled:opacity-50 text-accent rounded-[10px] text-[13px] font-medium flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
                 id="btn-batch-login-check"
               >
-                <ShieldCheck className="w-3.5 h-3.5 text-cyan-300" />
+                <ShieldCheck className="w-3.5 h-3.5 text-accent" />
                 {isVerifyingTokens ? '检查中...' : '批量登录检查'}
               </motion.button>
             </div>
           </div>
 
           {/* Card 4: Update Channels */}
-          <div className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col gap-5 shadow-xl" id="card-software-update">
+          <div className="glass-card rounded-2xl p-6 flex flex-col gap-5" id="card-software-update">
             <div className="flex items-start justify-between" id="updates-header">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
+                <div className="w-10 h-10 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent">
                   <Download className="w-4 h-4" />
                 </div>
                 <div className="flex flex-col text-left">
-                  <h3 className="font-bold text-slate-100 text-sm tracking-wide font-sans">软件更新</h3>
-                  <span className="text-[11px] text-slate-400 mt-0.5">当前版本状态与更新通道</span>
+                  <h3 className="font-bold text-label text-sm tracking-wide font-sans">软件更新</h3>
+                  <span className="text-[11px] text-label-2 mt-0.5">当前版本状态与更新通道</span>
                 </div>
               </div>
             </div>
 
             <div className="flex flex-col gap-3" id="updates-body">
               <div className="flex items-center justify-between text-xs font-semibold px-1" id="updates-status-labels">
-                <span className="text-slate-400">更新通道</span>
-                <span className="px-2.5 py-0.5 bg-blue-500/10 border border-blue-500/20 text-blue-300 rounded-full font-bold uppercase tracking-wider text-[9px]">{settings.updateChannel.replace('Beta Channel', 'Beta 通道').replace('Stable Channel', '稳定通道').replace('Developer Channel', '开发通道')}</span>
+                <span className="text-label-2">更新通道</span>
+                <span className="px-2 py-0.5 bg-accent/15 text-accent rounded-md font-medium text-[11px]">{settings.updateChannel.replace('Beta Channel', 'Beta 通道').replace('Stable Channel', '稳定通道').replace('Developer Channel', '开发通道')}</span>
               </div>
               <div className="flex items-center justify-between text-xs font-semibold px-1 pb-1" id="updates-version-labels">
-                <span className="text-slate-400">最新状态</span>
-                <span className="text-emerald-400/90 font-bold uppercase tracking-wide flex items-center gap-1">
-                  <CheckCircle className="w-3 h-3 text-emerald-400" />
+                <span className="text-label-2">最新状态</span>
+                <span className="text-label font-medium flex items-center gap-1.5">
+                  <CheckCircle className="w-3.5 h-3.5 text-ok" />
                   {settings.latestStatus}
                 </span>
               </div>
@@ -354,10 +346,10 @@ export default function SettingsView({
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                   transition={{ type: 'spring', stiffness: 450, damping: 20 }}
-                  className="w-full py-2.5 bg-blue-500/10 hover:bg-blue-500/15 border border-blue-500/20 text-blue-300 hover:text-blue-200 text-xs font-bold rounded-2xl cursor-pointer transition-all flex items-center justify-center gap-1.5"
+                  className="w-full py-2.5 bg-accent/15 hover:bg-accent/25 text-accent text-[13px] font-medium rounded-[10px] cursor-pointer transition-colors flex items-center justify-center gap-1.5"
                   id="btn-check-for-updates"
                 >
-                  <Activity className={`w-3.5 h-3.5 text-blue-400 ${isCheckingUpdates ? 'animate-spin' : ''}`} />
+                  <Activity className={`w-3.5 h-3.5 text-accent ${isCheckingUpdates ? 'animate-spin' : ''}`} />
                   {isCheckingUpdates ? '检查中...' : (updateEnabled ? '检查更新' : '打开发布页')}
                 </motion.button>
                 {canInstallUpdate && (
@@ -367,7 +359,7 @@ export default function SettingsView({
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                     transition={{ type: 'spring', stiffness: 450, damping: 20 }}
-                    className="w-full py-2.5 bg-emerald-500/10 hover:bg-emerald-500/15 border border-emerald-500/20 text-emerald-300 hover:text-emerald-200 text-xs font-bold rounded-2xl cursor-pointer transition-all flex items-center justify-center gap-1.5 disabled:opacity-50"
+                    className="w-full py-2.5 bg-ok/15 hover:bg-ok/25 text-ok text-[13px] font-medium rounded-[10px] cursor-pointer transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
                     id="btn-install-update"
                   >
                     <Download className={`w-3.5 h-3.5 ${isInstallingUpdate ? 'animate-pulse' : ''}`} />
@@ -382,20 +374,18 @@ export default function SettingsView({
 
       {/* Card 5: Banner footer link */}
       <div 
-        className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-lg overflow-hidden relative"
+        className="glass-card rounded-2xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 overflow-hidden relative"
         id="card-footer-banner"
       >
-        <div className="absolute top-0 left-0 w-[3px] h-full bg-gradient-to-b from-blue-500/50 to-cyan-400/50" />
-
         <div className="flex items-center gap-4 text-left" id="footer-banner-left">
-          <div className="w-12 h-12 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 shrink-0">
-            <Zap className="w-5 h-5 text-blue-400" />
+          <div className="w-11 h-11 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent shrink-0">
+            <Zap className="w-5 h-5" />
           </div>
           <div className="flex flex-col" id="footer-banner-titles">
-            <span className="font-bold text-slate-100 text-sm tracking-wide font-sans">
+            <span className="font-bold text-label text-sm tracking-wide font-sans">
               Codex Account Manager {settings.version.startsWith('v') ? settings.version : `v${settings.version}`}
             </span>
-            <span className="text-xs text-slate-400 mt-1">
+            <span className="text-xs text-label-2 mt-1">
               本地优先的 Codex 多账号管理工具。
             </span>
           </div>
@@ -409,7 +399,7 @@ export default function SettingsView({
               }}
               whileHover={{ scale: 1.04 }}
               whileTap={{ scale: 0.96 }}
-              className="px-5 py-3 rounded-2xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-all border border-white/5"
+              className="px-5 py-3 rounded-xl bg-fill hover:bg-fill-2 text-label-2 hover:text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-all border border-sep"
               id="btn-open-logs"
             >
               <FolderOpen className="w-3.5 h-3.5" />
@@ -423,7 +413,7 @@ export default function SettingsView({
             whileHover={{ scale: 1.04 }}
             whileTap={{ scale: 0.96 }}
             transition={{ type: 'spring', stiffness: 450, damping: 20 }}
-            className="px-5 py-3 rounded-2xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-all border border-white/5"
+            className="px-5 py-3 rounded-xl bg-fill hover:bg-fill-2 text-label-2 hover:text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-all border border-sep"
             id="btn-github"
           >
             <Github className="w-3.5 h-3.5" />
@@ -436,7 +426,7 @@ export default function SettingsView({
             whileHover={{ scale: 1.04 }}
             whileTap={{ scale: 0.96 }}
             transition={{ type: 'spring', stiffness: 450, damping: 20 }}
-            className="px-5 py-3 rounded-2xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-all border border-white/5"
+            className="px-5 py-3 rounded-xl bg-fill hover:bg-fill-2 text-label-2 hover:text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-all border border-sep"
             id="btn-documentation"
           >
             <FileText className="w-3.5 h-3.5" />

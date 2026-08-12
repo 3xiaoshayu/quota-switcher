@@ -17,7 +17,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { AccountQuota, DesktopOAuthStatus } from '../types';
-import { avatarGradient } from '../api/desktop';
+import { avatarGradient, STATUS_DOT, STATUS_TEXT } from '../api/desktop';
 
 interface AccountsProps {
   accounts: AccountQuota[];
@@ -210,20 +210,12 @@ export default function AccountsView({
       {/* Title block with stats & action triggers */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8" id="accounts-header-row">
         <div className="flex flex-col" id="accounts-title-block">
-          <h2 className="text-3xl font-bold tracking-tight text-white font-sans">
+          <h2 className="text-[28px] font-bold tracking-tight text-label font-sans">
             账号管理
           </h2>
-          <div className="flex items-center gap-4 mt-2.5 text-xs text-slate-300 font-medium font-sans" id="accounts-meta-labels">
-            <span className="flex items-center gap-1.5 text-slate-200">
-              <Users className="w-3.5 h-3.5 text-blue-400" />
-              账号总数: {accounts.length}
-            </span>
-            <span className="text-slate-500">·</span>
-            <span className="flex items-center gap-1.5 text-amber-300 font-bold">
-              <Award className="w-3.5 h-3.5 text-amber-400" />
-              当前套餐: {currentPlan}
-            </span>
-          </div>
+          <p className="mt-1.5 text-[13px] text-label-2 font-sans" id="accounts-meta-labels">
+            {accounts.length} 个账号 · 当前套餐 {currentPlan}
+          </p>
         </div>
 
         {/* Action button triggers */}
@@ -237,7 +229,7 @@ export default function AccountsView({
             whileHover={{ scale: 1.04 }}
             whileTap={{ scale: 0.96 }}
             transition={{ type: 'spring', stiffness: 400, damping: 20 }}
-            className="flex items-center gap-1.5 px-5 py-2.5 rounded-2xl bg-blue-500/10 hover:bg-blue-500/15 border border-blue-500/25 text-blue-300 hover:text-blue-200 text-xs font-bold transition-all cursor-pointer shadow-lg"
+            className="flex items-center gap-1.5 px-4 py-2 rounded-[10px] bg-accent hover:bg-accent-hi text-white text-[13px] font-medium transition-colors cursor-pointer"
             id="btn-add-account-modal-trigger"
           >
             <Plus className="w-4 h-4" />
@@ -248,12 +240,12 @@ export default function AccountsView({
 
       {/* Filters & Search Control Bar */}
       <div 
-        className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8 shadow-md"
+        className="glass-card rounded-2xl p-3 flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8"
         id="accounts-search-filter-row"
       >
         {/* Search input with icon */}
         <div className="relative flex-1 max-w-md" id="accounts-search-group">
-          <span className="absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-400 pointer-events-none">
+          <span className="absolute inset-y-0 left-0 flex items-center pl-3.5 text-label-2 pointer-events-none">
             <Search className="w-4 h-4" />
           </span>
           <input
@@ -261,24 +253,24 @@ export default function AccountsView({
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="搜索邮箱或计划..."
-            className="w-full pl-10 pr-4 py-2.5 bg-slate-950/40 border border-white/5 rounded-2xl text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all text-xs font-sans font-medium"
+            className="w-full pl-10 pr-4 py-2.5 bg-fill border border-sep rounded-xl text-label placeholder-label-3 focus:outline-none focus:ring-2 focus:ring-accent/60 transition-all text-xs font-sans font-medium"
             id="accounts-search-input"
           />
         </div>
 
         {/* Tab Filters capsule */}
-        <div className="flex bg-slate-950/40 p-1 rounded-2xl border border-white/5 text-xs font-semibold relative" id="accounts-filter-tabs">
+        <div className="flex bg-fill p-1 rounded-xl border border-sep text-xs font-semibold relative" id="accounts-filter-tabs">
           <button
             onClick={() => setFilterTab('all')}
             className={`px-5 py-2.5 rounded-xl transition-all relative cursor-pointer z-10 ${
-              filterTab === 'all' ? 'text-white font-bold' : 'text-slate-400 hover:text-slate-300'
+              filterTab === 'all' ? 'text-white font-bold' : 'text-label-2 hover:text-label-2'
             }`}
             id="filter-tab-all"
           >
             {filterTab === 'all' && (
               <motion.div
                 layoutId="accountsActiveFilterBg"
-                className="absolute inset-0 bg-white/10 rounded-xl -z-10"
+                className="absolute inset-0 bg-fill-2 rounded-xl -z-10"
                 transition={{ type: 'spring', stiffness: 450, damping: 25 }}
               />
             )}
@@ -287,14 +279,14 @@ export default function AccountsView({
           <button
             onClick={() => setFilterTab('current')}
             className={`px-5 py-2.5 rounded-xl transition-all relative cursor-pointer z-10 ${
-              filterTab === 'current' ? 'text-white font-bold' : 'text-slate-400 hover:text-slate-300'
+              filterTab === 'current' ? 'text-white font-bold' : 'text-label-2 hover:text-label-2'
             }`}
             id="filter-tab-current"
           >
             {filterTab === 'current' && (
               <motion.div
                 layoutId="accountsActiveFilterBg"
-                className="absolute inset-0 bg-white/10 rounded-xl -z-10"
+                className="absolute inset-0 bg-fill-2 rounded-xl -z-10"
                 transition={{ type: 'spring', stiffness: 450, damping: 25 }}
               />
             )}
@@ -303,14 +295,14 @@ export default function AccountsView({
           <button
             onClick={() => setFilterTab('warning')}
             className={`px-5 py-2.5 rounded-xl transition-all relative cursor-pointer z-10 flex items-center gap-1.5 ${
-              filterTab === 'warning' ? 'text-white font-bold' : 'text-slate-400 hover:text-slate-300'
+              filterTab === 'warning' ? 'text-white font-bold' : 'text-label-2 hover:text-label-2'
             }`}
             id="filter-tab-warning"
           >
             {filterTab === 'warning' && (
               <motion.div
                 layoutId="accountsActiveFilterBg"
-                className="absolute inset-0 bg-white/10 rounded-xl -z-10"
+                className="absolute inset-0 bg-fill-2 rounded-xl -z-10"
                 transition={{ type: 'spring', stiffness: 450, damping: 25 }}
               />
             )}
@@ -326,12 +318,12 @@ export default function AccountsView({
 
       {/* Empty state */}
       {filteredAccounts.length === 0 && (
-        <div className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl px-8 py-16 flex flex-col items-center text-center shadow-xl" id="accounts-empty-state">
-          <div className="w-14 h-14 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 mb-4">
+        <div className="glass-card rounded-2xl px-8 py-16 flex flex-col items-center text-center" id="accounts-empty-state">
+          <div className="w-14 h-14 rounded-xl bg-accent/12 border border-accent/20 flex items-center justify-center text-accent mb-4">
             <Users className="w-6 h-6" />
           </div>
           <h3 className="text-sm font-bold text-white">{accounts.length === 0 ? '还没有账号' : '没有匹配的账号'}</h3>
-          <p className="mt-2 max-w-xs text-xs leading-5 text-slate-400">
+          <p className="mt-2 max-w-xs text-xs leading-5 text-label-2">
             {accounts.length === 0 ? '通过 OAuth 授权添加你的第一个 Codex 账号。' : '换个关键词，或切换筛选条件再试试。'}
           </p>
           {accounts.length === 0 && (
@@ -341,7 +333,7 @@ export default function AccountsView({
                 setFormError('');
                 setShowAddModal(true);
               }}
-              className="mt-6 flex items-center gap-1.5 px-5 py-3 rounded-2xl bg-blue-500/10 hover:bg-blue-500/15 border border-blue-500/25 text-blue-300 hover:text-blue-200 text-xs font-bold transition-all cursor-pointer"
+              className="mt-6 flex items-center gap-1.5 px-5 py-3 rounded-xl bg-accent/12 hover:bg-accent/20 border border-accent/20 text-accent hover:text-accent-hi text-xs font-bold transition-all cursor-pointer"
               id="accounts-empty-add"
             >
               <Plus className="w-4 h-4" />
@@ -366,20 +358,12 @@ export default function AccountsView({
 
           // Progress colors
           const color5h = fiveHourPct == null
-            ? 'bg-slate-600/40'
-            : fiveHourPct <= 25
-            ? 'bg-gradient-to-r from-rose-500/45 via-rose-400/55 to-rose-500/45 shadow-[0_0_8px_rgba(244,63,94,0.1)]' 
-            : fiveHourPct >= 70
-              ? 'bg-gradient-to-r from-emerald-500/45 via-green-400/55 to-emerald-500/45 shadow-[0_0_8px_rgba(52,211,153,0.12)]'
-              : 'bg-gradient-to-r from-amber-500/45 via-yellow-400/55 to-amber-500/45 shadow-[0_0_8px_rgba(251,191,36,0.1)]';
-          
+            ? 'bg-fill-3'
+            : fiveHourPct <= 25 ? 'bg-danger' : fiveHourPct >= 70 ? 'bg-ok' : 'bg-warn';
+
           const colorWeekly = weeklyPct == null
-            ? 'bg-slate-600/40'
-            : weeklyPct <= 25
-            ? 'bg-gradient-to-r from-rose-600/45 via-rose-500/55 to-rose-600/45 shadow-[0_0_8px_rgba(225,29,72,0.1)]' 
-            : weeklyPct !== null && weeklyPct >= 70
-              ? 'bg-gradient-to-r from-emerald-600/45 via-green-500/55 to-emerald-600/45 shadow-[0_0_8px_rgba(16,185,129,0.12)]'
-              : 'bg-gradient-to-r from-amber-600/45 via-yellow-500/55 to-amber-600/45 shadow-[0_0_8px_rgba(217,119,6,0.1)]';
+            ? 'bg-fill-3'
+            : weeklyPct <= 25 ? 'bg-danger' : weeklyPct >= 70 ? 'bg-ok' : 'bg-warn';
 
           return (
             <motion.div
@@ -388,9 +372,8 @@ export default function AccountsView({
               initial={{ opacity: 0, scale: 0.97 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.97 }}
-              whileHover={{ y: -4, borderColor: 'rgba(255,255,255,0.12)' }}
               transition={{ type: 'spring', stiffness: 350, damping: 28 }}
-              className="glass-card backdrop-blur-xl bg-slate-900/35 border border-white/5 rounded-3xl p-6 flex flex-col shadow-2xl relative overflow-hidden group"
+              className="glass-card rounded-2xl p-6 flex flex-col relative overflow-hidden group"
               id={`account-manage-card-${account.id}`}
             >
               {/* Highlight glass background on hover */}
@@ -399,32 +382,27 @@ export default function AccountsView({
               {/* Card Title Area */}
               <div className="flex items-start justify-between mb-5" id={`account-m-header-${account.id}`}>
                 <div className="flex items-center gap-3.5" id={`account-m-user-${account.id}`}>
-                  <div className={`w-11 h-11 rounded-2xl flex items-center justify-center bg-gradient-to-br ${avatarGradient(account.id)} text-white font-bold text-base shadow-md`}>
+                  <div className={`w-11 h-11 rounded-full flex items-center justify-center ${avatarGradient(account.id)} font-semibold text-base`}>
                     {(account.name.charAt(0) || '?').toUpperCase()}
                   </div>
 
                   <div className="flex flex-col text-left select-all" id={`account-m-titles-${account.id}`}>
                     <div className="flex items-center gap-2">
-                      <span className="font-bold text-slate-100 text-sm tracking-wide font-sans truncate max-w-[140px] sm:max-w-none">
+                      <span className="font-bold text-label text-sm tracking-wide font-sans truncate max-w-[140px] sm:max-w-none">
                         {account.email}
                       </span>
                       {account.isCurrent && (
-                        <span className="px-2.5 py-0.5 bg-blue-500/20 border border-blue-500/30 text-blue-300 text-[9px] font-bold rounded-full uppercase tracking-wider" id="current-account-badge">
+                        <span className="px-2 py-0.5 bg-accent/15 text-accent text-[10px] font-semibold rounded-md" id="current-account-badge">
                           当前
                         </span>
                       )}
                     </div>
                     <div className="flex items-center gap-1.5 mt-1" id={`account-m-badges-${account.id}`}>
-                      <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider border ${
-                        account.status === 'ACTIVE'
-                          ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-                          : account.status === 'WARNING'
-                            ? 'bg-amber-500/10 border-amber-500/20 text-amber-400'
-                            : account.status === 'READY'
-                              ? 'bg-teal-500/10 border-teal-500/20 text-teal-400'
-                              : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
-                      }`}>{account.status}</span>
-                      <span className="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider bg-blue-500/10 border border-blue-500/20 text-blue-300">{account.plan}</span>
+                      <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-label-2">
+                        <span className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT[account.status] || 'bg-fill-3'}`} />
+                        {STATUS_TEXT[account.status] || account.status}
+                      </span>
+                      <span className="text-[11px] text-label-3">{account.plan}</span>
                     </div>
                   </div>
                 </div>
@@ -432,8 +410,8 @@ export default function AccountsView({
 
               {/* Red Warning Banner if needed */}
               {hasWarningBanner && (
-                <div className="mb-5 p-3 bg-rose-500/10 border border-rose-500/20 rounded-2xl flex items-center gap-2 text-xs text-rose-300" id={`warning-banner-${account.id}`}>
-                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                <div className="mb-5 p-3 bg-danger/12 rounded-[10px] flex items-center gap-2 text-xs text-danger" id={`warning-banner-${account.id}`}>
+                  <AlertTriangle className="w-4 h-4 text-danger shrink-0" />
                   <span className="font-medium">
                     {account.warning || (account.weeklyBlocksFiveHour
                       ? '周额度已用尽，5 小时额度暂不可用。'
@@ -447,12 +425,12 @@ export default function AccountsView({
                 {/* TOKEN VALIDITY Row */}
                 <div className="space-y-1.5" id={`token-validity-row-${account.id}`}>
                   <div className="flex items-center justify-between text-xs font-semibold">
-                    <span className="text-slate-400 uppercase tracking-wider text-[10px] tabular-nums">TOKEN 有效期</span>
-                    <span className="text-slate-300 font-semibold">{account.tokenValidity}</span>
+                    <span className="text-[12px] font-medium text-label-3">Token 有效期</span>
+                    <span className="text-label-2 font-semibold">{account.tokenValidity}</span>
                   </div>
-                  <div className="h-1.5 bg-slate-950/50 rounded-full overflow-hidden">
+                  <div className="h-1 bg-fill rounded-full overflow-hidden">
                     <div
-                      className="h-full bg-gradient-to-r from-blue-500/40 via-cyan-400/50 to-indigo-500/40 rounded-full"
+                      className="h-full bg-accent rounded-full"
                       style={{ width: `${Math.round(account.tokenValidityPct ?? 0)}%` }}
                     />
                   </div>
@@ -461,31 +439,31 @@ export default function AccountsView({
                 {/* Sub Quotas Progress Boxes Grid */}
                 <div className="grid grid-cols-2 gap-4 select-none" id={`quotas-boxes-grid-${account.id}`}>
                   {/* 5H QUOTA (kept visible even while upstream omits the window) */}
-                  <div className="bg-slate-950/35 rounded-2xl p-4 text-left" id={`quota-box-5h-${account.id}`}>
-                    <span className="text-[10px] font-bold text-slate-500 tracking-wider uppercase tabular-nums">5 小时额度</span>
-                    <span className={`text-2xl font-bold block mt-1.5 tracking-tight tabular-nums ${
-                      fiveHourPct === null ? 'text-slate-600' : fiveHourPct <= 25 ? 'text-rose-400' : fiveHourPct >= 70 ? 'text-emerald-400' : 'text-amber-300'
+                  <div className="bg-fill rounded-xl p-4 text-left" id={`quota-box-5h-${account.id}`}>
+                    <span className="text-[12px] font-medium text-label-3">5 小时额度</span>
+                    <span className={`text-[22px] font-semibold block mt-1.5 tracking-tight tabular-nums ${
+                      fiveHourPct === null ? 'text-label-3' : 'text-label'
                     }`}>{fiveHourPct !== null ? `${fiveHourPct}%` : '--'}</span>
-                    <div className="h-1.5 bg-slate-950/50 rounded-full overflow-hidden mt-3">
+                    <div className="h-1 bg-fill rounded-full overflow-hidden mt-3">
                       <div className={`h-full rounded-full ${color5h}`} style={{ width: `${fiveHourPct ?? 0}%` }} />
                     </div>
-                    <span className="text-[10px] text-slate-500 mt-2 block font-medium">
+                    <span className="text-[10px] text-label-3 mt-2 block font-medium">
                       {fiveHourPct !== null ? `重置: ${account.resetInFiveHour}` : '上游暂未提供'}
                     </span>
                   </div>
 
                   {/* WEEKLY QUOTA */}
-                  <div className="bg-slate-950/35 rounded-2xl p-4 text-left" id={`quota-box-weekly-${account.id}`}>
-                    <span className="text-[10px] font-bold text-slate-500 tracking-wider uppercase tabular-nums">周额度</span>
-                    <span className={`text-2xl font-bold block mt-1.5 tracking-tight tabular-nums ${
-                      weeklyPct === null ? 'text-slate-600' : weeklyPct <= 25 ? 'text-rose-400' : weeklyPct >= 70 ? 'text-emerald-400' : 'text-amber-300'
+                  <div className="bg-fill rounded-xl p-4 text-left" id={`quota-box-weekly-${account.id}`}>
+                    <span className="text-[12px] font-medium text-label-3">周额度</span>
+                    <span className={`text-[22px] font-semibold block mt-1.5 tracking-tight tabular-nums ${
+                      weeklyPct === null ? 'text-label-3' : 'text-label'
                     }`}>
                       {weeklyPct !== null ? `${weeklyPct}%` : '--'}
                     </span>
-                    <div className="h-1.5 bg-slate-950/50 rounded-full overflow-hidden mt-3">
+                    <div className="h-1 bg-fill rounded-full overflow-hidden mt-3">
                       <div className={`h-full rounded-full ${colorWeekly}`} style={{ width: `${weeklyPct ?? 0}%` }} />
                     </div>
-                    <span className="text-[10px] text-slate-500 mt-2 block font-medium">
+                    <span className="text-[10px] text-label-3 mt-2 block font-medium">
                       {weeklyPct !== null ? `重置: ${account.resetInWeekly}` : '上游暂未提供'}
                     </span>
                   </div>
@@ -493,7 +471,7 @@ export default function AccountsView({
               </div>
 
               {/* Action buttons footer */}
-              <div className="flex items-center justify-between gap-2.5 mt-6 pt-4 border-t border-white/5" id={`account-actions-${account.id}`}>
+              <div className="flex items-center justify-between gap-2.5 mt-6 pt-4 border-t border-sep" id={`account-actions-${account.id}`}>
                 {/* 1. Refresh */}
                 <motion.button
                   onClick={() => handleSingleRefresh(account.id, account.name)}
@@ -501,11 +479,11 @@ export default function AccountsView({
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.95 }}
                   transition={{ type: 'spring', stiffness: 450, damping: 20 }}
-                  className="flex-1 py-3 px-2 bg-white/5 hover:bg-white/10 rounded-xl text-slate-300 hover:text-white transition-all text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                  className="flex-1 py-3 px-2 bg-fill hover:bg-fill-2 rounded-[10px] text-label-2 hover:text-label transition-all text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
                   title={account.status === 'SUSPENDED' ? '该账号需要重新授权后才能刷新额度' : '刷新此账号'}
                   id={`action-refresh-${account.id}`}
                 >
-            <RefreshCw className={`w-3.5 h-3.5 ${isCardRefreshing ? 'animate-spin text-blue-400' : ''}`} />
+            <RefreshCw className={`w-3.5 h-3.5 ${isCardRefreshing ? 'animate-spin text-accent' : ''}`} />
                   {account.status === 'SUSPENDED' ? '请先重新授权' : '刷新'}
                 </motion.button>
 
@@ -519,7 +497,7 @@ export default function AccountsView({
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.95 }}
                     transition={{ type: 'spring', stiffness: 450, damping: 20 }}
-                    className="flex-1 py-3 px-2 bg-amber-500/10 hover:bg-amber-500/15 border border-amber-500/20 rounded-xl text-amber-300 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                    className="flex-1 py-3 px-2 bg-warn/12 hover:bg-warn/20 rounded-[10px] text-warn text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
                     id={`action-reauthorize-${account.id}`}
                   >
                     <KeyRound className="w-3.5 h-3.5" />
@@ -530,11 +508,11 @@ export default function AccountsView({
                 {/* 2. Switch/Check (Star/Switch) */}
                 {account.isCurrent ? (
                   <motion.button
-                    className="flex-1 py-3 px-2 bg-blue-500/15 border border-blue-500/30 rounded-xl text-blue-300 transition-all text-xs font-bold flex items-center justify-center gap-1.5 cursor-not-allowed"
+                    className="flex-1 py-3 px-2 bg-accent/15 rounded-[10px] text-accent transition-all text-xs font-semibold flex items-center justify-center gap-1.5 cursor-not-allowed"
                     disabled
                     id={`action-current-${account.id}`}
                   >
-                    <Star className="w-3.5 h-3.5 fill-blue-300" />
+                    <Star className="w-3.5 h-3.5 fill-accent" />
                     当前
                   </motion.button>
                 ) : (
@@ -546,7 +524,7 @@ export default function AccountsView({
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.95 }}
                     transition={{ type: 'spring', stiffness: 450, damping: 20 }}
-                    className="flex-1 py-3 px-2 bg-white/5 hover:bg-blue-500/15 hover:text-blue-300 hover:border-blue-500/35 border border-transparent rounded-xl text-slate-300 transition-all text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                    className="flex-1 py-3 px-2 bg-fill hover:bg-accent/20 hover:text-accent rounded-[10px] text-label-2 transition-all text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
                     id={`action-switch-${account.id}`}
                   >
                     <ArrowLeftRight className={`w-3.5 h-3.5 ${switchingId === account.id ? 'animate-pulse' : ''}`} />
@@ -570,8 +548,8 @@ export default function AccountsView({
                   transition={{ type: 'spring', stiffness: 450, damping: 15 }}
                   className={`py-3 px-4 rounded-xl transition-all text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer ${
                     account.isCurrent 
-                      ? 'bg-white/5 text-slate-500 cursor-not-allowed' 
-                      : 'bg-white/5 text-slate-300 hover:text-rose-400'
+                      ? 'bg-fill text-label-3 cursor-not-allowed' 
+                      : 'bg-fill text-label-2 hover:text-danger'
                   }`}
                   title="删除此账号"
                   id={`action-delete-${account.id}`}
@@ -589,7 +567,7 @@ export default function AccountsView({
       <AnimatePresence>
       {showAddModal && (
           <motion.div
-            className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4"
+            className="fixed inset-0 bg-black/55 z-50 flex items-center justify-center p-4"
             id="add-account-modal-overlay"
             initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -601,7 +579,7 @@ export default function AccountsView({
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.96, opacity: 0 }}
               transition={{ duration: 0.16, ease: 'easeOut' }}
-              className="glass-card backdrop-blur-2xl bg-slate-900/90 border border-white/10 rounded-3xl p-8 w-full max-w-lg shadow-2xl relative text-white select-none"
+              className="bg-surface-2 border border-sep rounded-2xl p-8 w-full max-w-lg shadow-2xl relative text-label select-none"
               id="add-account-modal"
               role="dialog"
               aria-modal="true"
@@ -614,7 +592,7 @@ export default function AccountsView({
                   }
                 }}
                 disabled={isAdding}
-                className="absolute top-5 right-5 p-2 hover:bg-white/10 rounded-xl text-slate-400 hover:text-white transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                className="absolute top-5 right-5 p-2 hover:bg-fill-2 rounded-xl text-label-2 hover:text-white transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 id="btn-close-modal"
               >
                 <X className="w-4 h-4" />
@@ -623,18 +601,18 @@ export default function AccountsView({
               <h3 className="text-xl font-bold tracking-tight mb-2 font-sans">
                 {reauthorizeId ? '重新授权账号' : '添加配置账号'}
               </h3>
-              <p className="text-xs text-slate-400 mb-6 font-sans">
+              <p className="text-xs text-label-2 mb-6 font-sans">
                 {oauthMode ? '将打开 OpenAI OAuth 授权页面，邮箱、套餐与凭证会在授权完成后自动读取。' : '为 Codex 账号管理器配置一个新的接入凭证和配额检测对象。'}
               </p>
 
               <form onSubmit={handleAddSubmit} className="space-y-5" id="add-account-form">
                 {/* Email input */}
                 <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-300 tracking-wider uppercase tabular-nums block ml-1">
-                    电子邮箱 (Email Address)
+                  <label className="text-[13px] font-medium text-label-2 block ml-1">
+                    电子邮箱
                   </label>
                   <div className="relative">
-                    <span className="absolute inset-y-0 left-0 flex items-center pl-4 text-slate-500">
+                    <span className="absolute inset-y-0 left-0 flex items-center pl-4 text-label-3">
                       <Mail className="w-4 h-4" />
                     </span>
                     <input
@@ -643,7 +621,7 @@ export default function AccountsView({
                       onChange={(e) => setNewEmail(e.target.value)}
                       placeholder={oauthMode ? '由 OAuth 自动读取' : 'user@example.com'}
                       readOnly={oauthMode}
-                      className="w-full pl-11 pr-4 py-3 bg-slate-950/40 border border-white/10 rounded-2xl text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-all font-sans text-xs"
+                      className="w-full pl-11 pr-4 py-3 bg-fill border border-sep rounded-xl text-white placeholder-label-3 focus:outline-none focus:ring-2 focus:ring-accent/60 transition-all font-sans text-xs"
                       id="input-add-email"
                     />
                   </div>
@@ -651,11 +629,11 @@ export default function AccountsView({
 
                 {/* Name input */}
                 <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-300 tracking-wider uppercase tabular-nums block ml-1">
-                    展示名称 (Display Name)
+                  <label className="text-[13px] font-medium text-label-2 block ml-1">
+                    展示名称
                   </label>
                   <div className="relative">
-                    <span className="absolute inset-y-0 left-0 flex items-center pl-4 text-slate-500">
+                    <span className="absolute inset-y-0 left-0 flex items-center pl-4 text-label-3">
                       <User className="w-4 h-4" />
                     </span>
                     <input
@@ -664,7 +642,7 @@ export default function AccountsView({
                       onChange={(e) => setNewName(e.target.value)}
                       placeholder={oauthMode ? '由账号邮箱自动生成' : 'My Operations Node'}
                       readOnly={oauthMode}
-                      className="w-full pl-11 pr-4 py-3 bg-slate-950/40 border border-white/10 rounded-2xl text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-all font-sans text-xs"
+                      className="w-full pl-11 pr-4 py-3 bg-fill border border-sep rounded-xl text-white placeholder-label-3 focus:outline-none focus:ring-2 focus:ring-accent/60 transition-all font-sans text-xs"
                       id="input-add-name"
                     />
                   </div>
@@ -673,12 +651,12 @@ export default function AccountsView({
                 {/* Plan select */}
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-300 tracking-wider uppercase tabular-nums block ml-1">
-                      {oauthMode ? '套餐（OAuth 自动识别）' : '选择方案 / 套餐 (Plan)'}
+                    <label className="text-[13px] font-medium text-label-2 block ml-1">
+                      {oauthMode ? '套餐（OAuth 自动识别）' : '套餐'}
                     </label>
                     {oauthMode ? (
                       <div
-                        className="w-full px-4 py-3 bg-slate-950 border border-white/10 rounded-2xl text-slate-500 text-xs"
+                        className="w-full px-4 py-3 bg-fill rounded-[10px] text-label-3 text-xs"
                         id="input-add-plan"
                         role="status"
                       >
@@ -688,7 +666,7 @@ export default function AccountsView({
                       <select
                         value={newPlan}
                         onChange={(e) => setNewPlan(e.target.value as any)}
-                        className="w-full px-4 py-3 bg-slate-950 border border-white/10 rounded-2xl text-slate-300 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-all text-xs"
+                        className="w-full px-4 py-3 bg-fill rounded-[10px] text-label-2 focus:outline-none focus:ring-2 focus:ring-accent/60 transition-all text-xs"
                         id="input-add-plan"
                       >
                         <option value="Pro Plan">Pro Plan</option>
@@ -700,12 +678,12 @@ export default function AccountsView({
 
                   {/* Priority Select */}
                   <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-300 tracking-wider uppercase tabular-nums block ml-1">
-                      {oauthMode ? '轮转优先级（自动计算）' : '轮转优先级 (Priority)'}
+                    <label className="text-[13px] font-medium text-label-2 block ml-1">
+                      {oauthMode ? '轮转优先级（自动计算）' : '轮转优先级'}
                     </label>
                     {oauthMode ? (
                       <div
-                        className="w-full px-4 py-3 bg-slate-950 border border-white/10 rounded-2xl text-slate-500 text-xs"
+                        className="w-full px-4 py-3 bg-fill rounded-[10px] text-label-3 text-xs"
                         id="input-add-priority"
                         role="status"
                       >
@@ -715,7 +693,7 @@ export default function AccountsView({
                       <select
                         value={newPriority}
                         onChange={(e) => setNewPriority(e.target.value as any)}
-                        className="w-full px-4 py-3 bg-slate-950 border border-white/10 rounded-2xl text-slate-300 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-all text-xs"
+                        className="w-full px-4 py-3 bg-fill rounded-[10px] text-label-2 focus:outline-none focus:ring-2 focus:ring-accent/60 transition-all text-xs"
                         id="input-add-priority"
                       >
                         <option value="Ultra">Ultra</option>
@@ -728,14 +706,14 @@ export default function AccountsView({
                 </div>
 
                 {formError && (
-                  <p className="text-xs text-rose-400 font-semibold bg-rose-500/10 border border-rose-500/20 p-3 rounded-2xl text-center break-words">
+                  <p className="text-xs text-danger font-semibold bg-danger/12 p-3 rounded-[10px] text-center break-words">
                     {formError}
                   </p>
                 )}
 
                 {isAdding && oauthMode && (
-                  <div className="space-y-3 rounded-2xl border border-white/10 bg-slate-950/30 p-4">
-                    <p className="text-xs text-slate-400">
+                  <div className="space-y-3 rounded-xl border border-sep bg-fill p-4">
+                    <p className="text-xs text-label-2">
                       正在等待浏览器回调。如果浏览器无法自动返回，请粘贴完整的回调网址。
                     </p>
                     <div className="flex gap-2">
@@ -743,7 +721,7 @@ export default function AccountsView({
                         value={manualCallbackUrl}
                         onChange={(event) => setManualCallbackUrl(event.target.value)}
                         placeholder="http://localhost:1455/auth/callback?code=..."
-                        className="min-w-0 flex-1 px-3 py-2 bg-slate-950/50 border border-white/10 rounded-xl text-xs text-slate-200"
+                        className="min-w-0 flex-1 px-3 py-2 bg-fill border border-sep rounded-xl text-xs text-label"
                         id="oauth-manual-callback-input"
                       />
                       <button
@@ -754,7 +732,7 @@ export default function AccountsView({
                             .catch(error => setFormError(error instanceof Error ? error.message : String(error)));
                         }}
                         disabled={!manualCallbackUrl || !onCompleteOAuthManually}
-                        className="p-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-300 disabled:opacity-40"
+                        className="p-2.5 rounded-xl bg-accent/12 border border-accent/20 text-accent disabled:opacity-40"
                         title="提交回调网址"
                         id="oauth-manual-callback-submit"
                       >
@@ -764,7 +742,7 @@ export default function AccountsView({
                   </div>
                 )}
 
-                <div className="flex gap-3 pt-4 border-t border-white/5">
+                <div className="flex gap-3 pt-4 border-t border-sep">
                   <button
                     type="button"
                     onClick={() => {
@@ -775,14 +753,14 @@ export default function AccountsView({
                       setShowAddModal(false);
                       setReauthorizeId(null);
                     }}
-                    className="flex-1 py-3 bg-white/5 hover:bg-white/10 text-white rounded-2xl text-xs font-semibold cursor-pointer transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex-1 py-3 bg-fill hover:bg-fill-2 text-white rounded-xl text-xs font-semibold cursor-pointer transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {isAdding ? '取消 OAuth' : '取消'}
                   </button>
                   <button
                     type="submit"
                     disabled={isAdding}
-                    className="flex-1 py-3 bg-blue-500/10 hover:bg-blue-500/15 border border-blue-500/25 text-blue-300 hover:text-blue-200 rounded-2xl text-xs font-bold transition-all cursor-pointer"
+                    className="flex-1 py-3 bg-accent/12 hover:bg-accent/20 border border-accent/20 text-accent hover:text-accent-hi rounded-xl text-xs font-bold transition-all cursor-pointer"
                   >
                     {isAdding ? '正在打开授权...' : oauthMode ? '打开 OAuth 授权' : '添加配置'}
                   </button>
