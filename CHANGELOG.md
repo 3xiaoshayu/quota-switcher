@@ -5,6 +5,22 @@ All notable changes to Codex Account Manager are documented here.
 The project follows [Semantic Versioning](https://semver.org/) once a stable
 release is published.
 
+## [0.1.0-beta.15] - 2026-08-12
+
+- Redesign the application icon: a glossy cyan-to-violet twisted loop on a
+  dark squircle replaces the busy light-background mark. The silhouette
+  stays crisp at taskbar sizes and matches the app's dark glass interface.
+- Ship only the Chinese and English Chromium locales instead of all 55
+  (about 47 MB uncompressed), shrinking the installer accordingly.
+- Load only the Latin subsets of the Inter typeface - Chinese text uses the
+  system font stack anyway - cutting the bundled font payload from about
+  1 MB to a seventh of that.
+- Convert the wallpaper backgrounds to WebP (445 KB saved) for a faster
+  first paint, and exclude a stale local directory from packaging.
+- Speed up batch token checks by shortening the fixed pause between
+  accounts, and scan the account store after the window is visible instead
+  of before it opens.
+
 ## [0.1.0-beta.14] - 2026-08-12
 
 A five-angle audit of the whole codebase (auth and token flows, storage and
