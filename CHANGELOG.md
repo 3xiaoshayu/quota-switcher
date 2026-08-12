@@ -5,6 +5,27 @@ All notable changes to Codex Account Manager are documented here.
 The project follows [Semantic Versioning](https://semver.org/) once a stable
 release is published.
 
+## [0.1.0-beta.16] - 2026-08-12
+
+A full visual redesign following Apple's dark-mode design language.
+
+- Replace the photographic wallpapers with flat Apple-style surface layering
+  (a near-black base, hairline-ringed cards, and a faint top light); the
+  bundled Unsplash backgrounds are gone entirely.
+- Restrain the palette to Apple system colors: one blue accent plus
+  green/orange/red reserved for status. Quota numerals render white with
+  thin flat progress bars carrying the state color; the loud gradients,
+  glows, and heavy shadows are removed.
+- Replace uppercase tracked labels and colored status pills with
+  normal-case 12-13px captions and quiet dot-plus-text status indicators
+  in Chinese.
+- Rebuild the sidebar as a macOS source list (gray selection block, accent
+  icons, no indicator bar), tighten the header, and switch avatars to
+  circular low-saturation tints.
+- Rework the login screen around a filled accent button and centered card;
+  modals sit on opaque elevated surfaces with a calm dimming layer.
+- Refresh the README gallery with the redesigned interface.
+
 ## [0.1.0-beta.15] - 2026-08-12
 
 - Redesign the application icon: a glossy cyan-to-violet twisted loop on a
