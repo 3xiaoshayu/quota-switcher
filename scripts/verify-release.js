@@ -14,6 +14,9 @@ const requiredFiles = [
   "THIRD_PARTY_NOTICES.md",
   "docs/images/account-dashboard.png",
   "resources/icon.ico",
+  "resources/installerSidebar.bmp",
+  "resources/installerHeader.bmp",
+  "resources/installer.nsh",
 ];
 
 const missing = requiredFiles.filter((file) => !fs.existsSync(path.join(root, file)));

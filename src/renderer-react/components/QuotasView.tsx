@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  Users, 
+  AtSign, 
   Bell, 
   BarChart3, 
   MoreHorizontal, 
@@ -9,7 +9,7 @@ import {
   Activity
 } from 'lucide-react';
 import { AccountQuota } from '../types';
-import { avatarGradient, formatDateTime, STATUS_DOT, STATUS_TEXT } from '../api/desktop';
+import { avatarGradient, formatDateTime, quotaBarColor, STATUS_DOT, STATUS_TEXT } from '../api/desktop';
 
 interface QuotasProps {
   accounts: AccountQuota[];
@@ -151,8 +151,8 @@ export default function QuotasView({
           className="glass-card rounded-2xl p-5 flex items-center gap-4 group"
           id="quota-stat-card-total"
         >
-          <div className="w-11 h-11 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent">
-            <Users className="w-5 h-5" />
+          <div className="w-11 h-11 rounded-[10px] bg-fill-2 flex items-center justify-center text-label-2">
+            <AtSign className="w-5 h-5" />
           </div>
           <div className="flex flex-col">
             <span className="text-[12px] font-medium text-label-3">账号总数</span>
@@ -192,8 +192,8 @@ export default function QuotasView({
       {/* Empty state */}
       {accounts.length === 0 && (
         <div className="glass-card rounded-2xl px-8 py-16 flex flex-col items-center text-center" id="quotas-empty-state">
-          <div className="w-14 h-14 rounded-xl bg-accent/15 flex items-center justify-center text-accent mb-4">
-            <Users className="w-6 h-6" />
+          <div className="w-14 h-14 rounded-xl bg-fill-2 flex items-center justify-center text-label-2 mb-4">
+            <AtSign className="w-6 h-6" />
           </div>
           <h3 className="text-sm font-bold text-white">还没有账号</h3>
           <p className="mt-2 max-w-xs text-xs leading-5 text-label-2">前往“账号管理”页面添加你的第一个 Codex 账号，额度状态会在这里展示。</p>
@@ -216,14 +216,8 @@ export default function QuotasView({
           const tokenRefreshUnavailable = account.status === 'SUSPENDED' || account.tokenRefreshAvailable === false;
           const accountRequiresReauthorization = account.status === 'SUSPENDED';
 
-          // Progress color follows remaining quota: low red, medium amber, high green.
-          const barColor5h = fiveHourPercentage == null
-            ? "bg-fill-3"
-            : fiveHourPercentage <= 25 ? "bg-danger" : fiveHourPercentage >= 70 ? "bg-ok" : "bg-warn";
-
-          const barColorWeekly = weeklyPercentage == null
-            ? "bg-fill-3"
-            : weeklyPercentage <= 25 ? "bg-danger" : weeklyPercentage >= 70 ? "bg-ok" : "bg-warn";
+          const barColor5h = quotaBarColor(fiveHourPercentage);
+          const barColorWeekly = quotaBarColor(weeklyPercentage);
 
           return (
             <motion.div

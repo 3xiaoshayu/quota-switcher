@@ -5,6 +5,15 @@ All notable changes to Codex Account Manager are documented here.
 The project follows [Semantic Versioning](https://semver.org/) once a stable
 release is published.
 
+## [0.1.0-beta.20] - 2026-08-15
+
+- Replace the default NSIS wizard chrome with branded sidebar and header art,
+  a welcome/finish flow, and plain-language install copy.
+- Color quota bars green at 55% remaining, yellow through 25%, and red below
+  that; token lifetime uses a quiet gray bar instead of the accent blue.
+- Drop the empty red-alert placeholder on account cards, and use an @ mark
+  instead of the two-person glyph for account navigation.
+
 ## [0.1.0-beta.19] - 2026-08-15
 
 - Fix the Windows installer script so the setup executable actually builds.

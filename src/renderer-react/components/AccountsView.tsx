@@ -1,12 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  Users, 
   Award, 
   Plus, 
   Search, 
-  User, 
-  AlertTriangle, 
+  User,
+  AtSign, 
   ArrowLeftRight, 
   Trash2, 
   Star,
@@ -17,7 +16,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { AccountQuota, DesktopAuthState, DesktopOAuthStatus } from '../types';
-import { avatarGradient, planLabel, STATUS_DOT, STATUS_TEXT } from '../api/desktop';
+import { avatarGradient, planLabel, quotaBarColor, STATUS_DOT, STATUS_TEXT } from '../api/desktop';
 import { toUserMessage } from '../api/user-messages';
 
 interface AccountsProps {
@@ -344,8 +343,8 @@ export default function AccountsView({
       {/* Empty state */}
       {filteredAccounts.length === 0 && (
         <div className="glass-card rounded-2xl px-8 py-16 flex flex-col items-center text-center" id="accounts-empty-state">
-          <div className="w-14 h-14 rounded-xl bg-accent/12 border border-accent/20 flex items-center justify-center text-accent mb-4">
-            <Users className="w-6 h-6" />
+          <div className="w-14 h-14 rounded-xl bg-fill-2 flex items-center justify-center text-label-2 mb-4">
+            <AtSign className="w-6 h-6" />
           </div>
           <h3 className="text-sm font-bold text-white">{accounts.length === 0 ? '还没有账号' : '没有匹配的账号'}</h3>
           <p className="mt-2 max-w-xs text-xs leading-5 text-label-2">
@@ -379,20 +378,20 @@ export default function AccountsView({
           const weeklyPct = account.weeklyQuotaRemaining == null || account.weeklyQuotaTotal <= 0
             ? null
             : Math.round((account.weeklyQuotaRemaining / account.weeklyQuotaTotal) * 100);
-          const hasWarningBanner = account.status === 'WARNING' || account.status === 'EXPIRED' || account.status === 'LOW_QUOTA' || account.status === 'SUSPENDED';
+          const quotaNotice = account.status === 'SUSPENDED'
+            ? null
+            : account.warning
+              || (account.weeklyBlocksFiveHour ? '周额度已用尽，5 小时额度暂不可用。' : null)
+              || ((account.status === 'WARNING' || account.status === 'EXPIRED' || account.status === 'LOW_QUOTA')
+                ? '额度状态需要关注。'
+                : null);
           const officialAligned = !oauthMode || (
             authState?.status === 'aligned' &&
             authState.currentAccountId === account.id
           );
 
-          // Progress colors
-          const color5h = fiveHourPct == null
-            ? 'bg-fill-3'
-            : fiveHourPct <= 25 ? 'bg-danger' : fiveHourPct >= 70 ? 'bg-ok' : 'bg-warn';
-
-          const colorWeekly = weeklyPct == null
-            ? 'bg-fill-3'
-            : weeklyPct <= 25 ? 'bg-danger' : weeklyPct >= 70 ? 'bg-ok' : 'bg-warn';
+          const color5h = quotaBarColor(fiveHourPct);
+          const colorWeekly = quotaBarColor(weeklyPct);
 
           return (
             <motion.div
@@ -437,20 +436,14 @@ export default function AccountsView({
                 </div>
               </div>
 
-              <div
-                className={`mb-5 min-h-[46px] p-3 rounded-[10px] flex items-center gap-2 text-xs ${
-                  hasWarningBanner ? 'bg-danger/12 text-danger' : 'invisible'
-                }`}
-                id={`warning-banner-${account.id}`}
-                aria-hidden={!hasWarningBanner}
-              >
-                <AlertTriangle className="w-4 h-4 text-danger shrink-0" />
-                <span className="font-medium">
-                  {account.warning || (account.weeklyBlocksFiveHour
-                    ? '周额度已用尽，5 小时额度暂不可用。'
-                    : '额度状态需要关注。')}
-                </span>
-              </div>
+              {quotaNotice && (
+                <p
+                  className="mb-5 text-[12px] leading-5 text-warn"
+                  id={`warning-banner-${account.id}`}
+                >
+                  {quotaNotice}
+                </p>
+              )}
 
               {/* Token Validity Slider/Progress Info */}
               <div className="space-y-5 flex-1" id={`account-m-details-${account.id}`}>
@@ -460,9 +453,9 @@ export default function AccountsView({
                     <span className="text-[12px] font-medium text-label-3">Token 有效期</span>
                     <span className="text-label-2 font-semibold">{account.tokenValidity}</span>
                   </div>
-                  <div className="h-1 bg-fill rounded-full overflow-hidden">
+                  <div className="h-[3px] bg-[#3a3a3c] rounded-full overflow-hidden">
                     <div
-                      className="h-full bg-accent rounded-full"
+                      className="h-full bg-[#8e8e93]"
                       style={{ width: `${Math.round(account.tokenValidityPct ?? 0)}%` }}
                     />
                   </div>

@@ -315,6 +315,13 @@ export function formatDateTime(value: string | number | null | undefined): strin
   }).format(date);
 }
 
+export function quotaBarColor(remainingPercent: number | null | undefined): string {
+  if (remainingPercent == null || !Number.isFinite(remainingPercent)) return 'bg-fill-3';
+  if (remainingPercent < 25) return 'bg-danger';
+  if (remainingPercent >= 55) return 'bg-ok';
+  return 'bg-warn';
+}
+
 export function lastCheckCaption(lastChecked: string | null | undefined): string {
   const text = String(lastChecked || '').trim();
   if (!text || text === '尚未检查' || text === '未知') return '暂无检查记录';

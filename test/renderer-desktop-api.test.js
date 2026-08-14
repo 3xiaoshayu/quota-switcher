@@ -298,6 +298,15 @@ test("auto-switch banner uses quota thresholds and daemon state, not ACTIVE stat
   assert.equal(quotaLow.tone, "warn");
 });
 
+test("quota bar color turns green at 55 and red below 25", () => {
+  const { quotaBarColor } = loadDesktopExports(bridge());
+  assert.equal(quotaBarColor(null), "bg-fill-3");
+  assert.equal(quotaBarColor(55), "bg-ok");
+  assert.equal(quotaBarColor(54), "bg-warn");
+  assert.equal(quotaBarColor(25), "bg-warn");
+  assert.equal(quotaBarColor(24), "bg-danger");
+});
+
 test("last check caption avoids repeating 检查 when no run has happened", () => {
   const { lastCheckCaption } = loadDesktopExports(bridge());
   assert.equal(lastCheckCaption(""), "暂无检查记录");

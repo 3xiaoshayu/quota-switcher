@@ -1,4 +1,4 @@
-import { Users, Gauge, Shuffle, Settings, RefreshCw, HelpCircle } from 'lucide-react';
+import { AtSign, Gauge, Shuffle, Settings, RefreshCw, HelpCircle } from 'lucide-react';
 import { motion } from 'motion/react';
 import { DaemonState } from '../types';
 import appIcon from '../assets/app-icon.png';
@@ -19,7 +19,7 @@ export default function Sidebar({
   onShowUpdates,
 }: SidebarProps) {
   const menuItems = [
-    { id: 'accounts', label: '账号管理', icon: Users },
+    { id: 'accounts', label: '账号管理', icon: AtSign },
     { id: 'quotas', label: '配额总览', icon: Gauge },
     { id: 'autoswitch', label: '自动切号', icon: Shuffle },
     { id: 'settings', label: '系统设置', icon: Settings },

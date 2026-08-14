@@ -1,6 +1,6 @@
 {
   "name": "codex-account-manager",
-  "version": "0.1.0-beta.19",
+  "version": "0.1.0-beta.20",
   "private": true,
   "description": "Local-first Windows desktop manager for Codex accounts, quotas, tokens, and automatic switching",
   "main": "src/main/main.js",
@@ -9,6 +9,7 @@
     "dev": "npm run renderer:build && electron . --dev",
     "renderer:build": "vite build --config vite.renderer.config.ts",
     "renderer:check": "tsc --noEmit -p tsconfig.renderer.json",
+    "installer:art": "node scripts/make-installer-art.js",
     "check:syntax": "node scripts/check-syntax.js",
     "check:security": "node scripts/check-security-config.js",
     "check:docs": "node scripts/check-doc-links.js",

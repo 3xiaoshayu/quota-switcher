@@ -1,6 +1,8 @@
 node_modules/
 dist/
+dist-installer/
 src/renderer-dist/
+tmp-*.png
 coverage/
 .vscode/
 .idea/

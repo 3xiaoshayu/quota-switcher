@@ -24,12 +24,22 @@ win:
 nsis:
   oneClick: false
   perMachine: false
-  # Default true plus per-user mode hides the folder page (electron-builder#1104).
-  allowElevation: false
+  # Per-user is the default. Elevation stays on so "all users" is a real
+  # choice instead of a disabled control with English "must run as admin".
+  # The folder page comes from resources/installer.nsh, not the builder one.
+  allowElevation: true
   # Builder skips its own directory page on upgrades; resources/installer.nsh
   # adds one that still appears so the user can pick a folder.
   allowToChangeInstallationDirectory: false
   include: installer.nsh
+  installerLanguages:
+    - zh_CN
+    - en_US
+  language: 2052
+  uninstallDisplayName: Codex Account Manager
+  installerSidebar: installerSidebar.bmp
+  uninstallerSidebar: installerSidebar.bmp
+  installerHeader: installerHeader.bmp
   createDesktopShortcut: true
   createStartMenuShortcut: true
   artifactName: "Codex-Account-Manager-Setup-${version}-${arch}.${ext}"
