@@ -5,6 +5,12 @@ All notable changes to Codex Account Manager are documented here.
 The project follows [Semantic Versioning](https://semver.org/) once a stable
 release is published.
 
+## [0.1.0-beta.18] - 2026-08-15
+
+- Cut transparent rounded corners into the app icon so the desktop, taskbar,
+  and installer show a squircle instead of a sharp black square.
+- Show the install-folder page even when upgrading an existing copy.
+
 ## [0.1.0-beta.17] - 2026-08-14
 
 - Redraw the app icon as a restrained cyan-to-violet twisted loop on a black
