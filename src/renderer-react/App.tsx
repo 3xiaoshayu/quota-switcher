@@ -36,6 +36,7 @@ import AutoSwitchView from './components/AutoSwitchView';
 import AccountsView from './components/AccountsView';
 import SettingsView from './components/SettingsView';
 import AuthStatusBanner from './components/AuthStatusBanner';
+import FloatLens from './components/FloatLens';
 import { 
   Bell, 
   X, 
@@ -103,7 +104,11 @@ function settingsFromDesktopState(
   };
 }
 
-export default function App() {
+function isFloatRenderer() {
+  return window.location.hash.replace(/^#\/?/, '') === 'float';
+}
+
+function DashboardApp() {
   // Authentication state - persistence in localStorage for robustness
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
     const saved = localStorage.getItem('codex_auth_status');
@@ -1267,6 +1272,7 @@ export default function App() {
                   accountCount={accounts.length}
                   repositoryUrl={appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}
                   onOpenLogs={desktopBridgeAvailable ? async () => { await desktopApi.openLogs(); } : undefined}
+                  onShowFloatWindow={desktopBridgeAvailable ? async () => { await desktopApi.showFloatWindow(); } : undefined}
                 />
               )}
                 </>
@@ -1515,4 +1521,9 @@ export default function App() {
       </AnimatePresence>
     </div>
   );
+}
+
+export default function App() {
+  if (isFloatRenderer()) return <FloatLens />;
+  return <DashboardApp />;
 }

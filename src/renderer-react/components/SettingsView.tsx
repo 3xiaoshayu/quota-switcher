@@ -13,7 +13,8 @@ import {
   Github, 
   Activity,
   Zap,
-  FolderOpen
+  FolderOpen,
+  Gauge
 } from 'lucide-react';
 import { SystemSettings, DaemonState } from '../types';
 
@@ -33,6 +34,7 @@ interface SettingsProps {
   accountCount?: number;
   repositoryUrl?: string;
   onOpenLogs?: () => Promise<void>;
+  onShowFloatWindow?: () => Promise<void>;
 }
 
 export default function SettingsView({
@@ -51,6 +53,7 @@ export default function SettingsView({
   accountCount = 128,
   repositoryUrl = 'https://github.com',
   onOpenLogs,
+  onShowFloatWindow,
 }: SettingsProps) {
   const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
   const [isVerifyingTokens, setIsVerifyingTokens] = useState(false);
@@ -273,6 +276,32 @@ export default function SettingsView({
               </motion.button>
             </div>
           </div>
+
+          {onShowFloatWindow && (
+            <div className="glass-card rounded-2xl p-6 flex items-center justify-between" id="card-float-lens">
+              <div className="flex items-center gap-3.5">
+                <div className="w-10 h-10 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent">
+                  <Gauge className="w-4 h-4" />
+                </div>
+                <div className="flex flex-col text-left">
+                  <h3 className="font-bold text-label text-sm tracking-wide font-sans">桌面额度</h3>
+                  <span className="text-[11px] text-label-2 mt-0.5">在桌面上放一块小仪表，随时看还剩多少额度</span>
+                </div>
+              </div>
+              <motion.button
+                onClick={() => {
+                  onShowFloatWindow().catch((error) => onAddLog(error instanceof Error ? error.message : String(error), 'error'));
+                }}
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.97 }}
+                transition={{ type: 'spring', stiffness: 450, damping: 20 }}
+                className="px-4 py-2 rounded-[10px] bg-fill hover:bg-fill-2 text-label text-[13px] font-medium cursor-pointer transition-colors"
+                id="btn-show-float-lens"
+              >
+                打开
+              </motion.button>
+            </div>
+          )}
         </div>
 
         {/* Right Column: Tokens integrity & Updates (5 cols) */}

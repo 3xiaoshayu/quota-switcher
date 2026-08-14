@@ -13,6 +13,12 @@ const api = {
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
   toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggleMaximize'),
   closeWindow: () => ipcRenderer.invoke('window:close'),
+  showMainWindow: () => ipcRenderer.invoke('window:showMain'),
+  showFloatWindow: () => ipcRenderer.invoke('float:show'),
+  hideFloatWindow: () => ipcRenderer.invoke('float:hide'),
+  setFloatAlwaysOnTop: (value) => ipcRenderer.invoke('float:setAlwaysOnTop', value),
+  getFloatState: () => ipcRenderer.invoke('float:getState'),
+  setFloatHeight: (height) => ipcRenderer.invoke('float:setHeight', height),
 
   // 账号管理
   listAccounts: () => ipcRenderer.invoke('account:list'),

@@ -9,6 +9,12 @@ import '@fontsource/inter/latin-700.css';
 import '@fontsource/inter/latin-800.css';
 import App from './App';
 import './index.css';
+import './components/FloatLens.css';
+
+if (window.location.hash.replace(/^#\/?/, '') === 'float') {
+  document.documentElement.classList.add('float-lens-root');
+  document.body.classList.add('float-lens-root');
+}
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

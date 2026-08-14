@@ -16,6 +16,8 @@ export interface AccountQuota {
   tokenValidityPct?: number | null;
   resetInFiveHour: string;
   resetInWeekly: string;
+  fiveHourResetAt?: string | number | null;
+  weeklyResetAt?: string | number | null;
   warning?: string | null;
   isCurrent?: boolean;
   quotaUpdatedAt?: string | number | null;

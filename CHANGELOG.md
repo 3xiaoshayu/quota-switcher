@@ -5,6 +5,13 @@ All notable changes to Codex Account Manager are documented here.
 The project follows [Semantic Versioning](https://semver.org/) once a stable
 release is published.
 
+## [0.1.0-beta.21] - 2026-08-15
+
+- Close the main window to the tray so auto-switch keeps running; quit only
+  from the tray menu.
+- Add a desktop quota lens: a compact Codex ring for remaining usage, with
+  account paging, pin, refresh, and switch without opening the main window.
+
 ## [0.1.0-beta.20] - 2026-08-15
 
 - Replace the default NSIS wizard chrome with branded sidebar and header art,

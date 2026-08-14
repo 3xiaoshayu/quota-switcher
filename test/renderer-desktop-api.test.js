@@ -307,6 +307,27 @@ test("quota bar color turns green at 55 and red below 25", () => {
   assert.equal(quotaBarColor(24), "bg-danger");
 });
 
+test("quota hero uses the tighter remaining window", () => {
+  const { quotaHero, quotaStroke } = loadDesktopExports(bridge());
+  const hero = quotaHero({
+    fiveHourQuotaRemaining: 18,
+    fiveHourQuotaPresent: true,
+    weeklyQuotaRemaining: 97,
+    weeklyQuotaPresent: true,
+  });
+  assert.equal(hero.key, "fiveHour");
+  assert.equal(hero.percent, 18);
+  assert.equal(hero.label, "5 小时");
+  assert.equal(quotaStroke(18), "#ff453a");
+  assert.equal(quotaStroke(97), "#30d158");
+  assert.equal(quotaHero({
+    fiveHourQuotaPresent: false,
+    fiveHourQuotaRemaining: null,
+    weeklyQuotaPresent: true,
+    weeklyQuotaRemaining: 41,
+  }).key, "weekly");
+});
+
 test("last check caption avoids repeating 检查 when no run has happened", () => {
   const { lastCheckCaption } = loadDesktopExports(bridge());
   assert.equal(lastCheckCaption(""), "暂无检查记录");

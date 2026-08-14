@@ -102,6 +102,12 @@ interface DesktopBridge {
   minimizeWindow: () => Promise<ApiResponse<boolean>>;
   toggleMaximizeWindow: () => Promise<ApiResponse<boolean>>;
   closeWindow: () => Promise<ApiResponse<boolean>>;
+  showMainWindow: () => Promise<ApiResponse<boolean>>;
+  showFloatWindow: () => Promise<ApiResponse<boolean>>;
+  hideFloatWindow: () => Promise<ApiResponse<boolean>>;
+  setFloatAlwaysOnTop: (value: boolean) => Promise<ApiResponse<boolean>>;
+  getFloatState: () => Promise<ApiResponse<{ visible: boolean; alwaysOnTop: boolean }>>;
+  setFloatHeight: (height: number) => Promise<ApiResponse<boolean>>;
   listAccounts: () => Promise<ApiResponse<DesktopAccount[]>>;
   getCurrentAccount: () => Promise<ApiResponse<DesktopAccount | null>>;
   addAccount: () => Promise<ApiResponse<DesktopOAuthResult>>;
@@ -322,6 +328,60 @@ export function quotaBarColor(remainingPercent: number | null | undefined): stri
   return 'bg-warn';
 }
 
+export function quotaTone(remainingPercent: number | null | undefined): 'ok' | 'warn' | 'danger' | 'muted' {
+  if (remainingPercent == null || !Number.isFinite(remainingPercent)) return 'muted';
+  if (remainingPercent < 25) return 'danger';
+  if (remainingPercent >= 55) return 'ok';
+  return 'warn';
+}
+
+export function quotaStroke(remainingPercent: number | null | undefined): string {
+  const tone = quotaTone(remainingPercent);
+  if (tone === 'ok') return '#30d158';
+  if (tone === 'warn') return '#ff9f0a';
+  if (tone === 'danger') return '#ff453a';
+  return 'rgba(255, 255, 255, 0.14)';
+}
+
+export function quotaHero(account: AccountQuota | null | undefined): {
+  percent: number | null;
+  key: 'weekly' | 'fiveHour' | 'none';
+  label: string;
+} {
+  if (!account) return { percent: null, key: 'none', label: '额度' };
+  if (account.weeklyBlocksFiveHour && (account.weeklyQuotaRemaining === 0 || account.weeklyQuotaRemaining == null)) {
+    return { percent: 0, key: 'weekly', label: '周额度' };
+  }
+  const candidates: Array<{ percent: number; key: 'weekly' | 'fiveHour'; label: string }> = [];
+  if (account.fiveHourQuotaPresent !== false && account.fiveHourQuotaRemaining != null) {
+    candidates.push({
+      percent: account.fiveHourQuotaRemaining,
+      key: 'fiveHour',
+      label: '5 小时',
+    });
+  }
+  if (account.weeklyQuotaPresent !== false && account.weeklyQuotaRemaining != null) {
+    candidates.push({
+      percent: account.weeklyQuotaRemaining,
+      key: 'weekly',
+      label: '周额度',
+    });
+  }
+  if (candidates.length === 0) return { percent: null, key: 'none', label: '额度' };
+  candidates.sort((left, right) => left.percent - right.percent);
+  return candidates[0];
+}
+
+export function formatResetLine(value: string | number | null | undefined): string {
+  const remain = formatReset(value);
+  if (!value) return '';
+  if (remain === '等待中' || remain === '未知') return remain;
+  if (remain === '已过期') return '已重置';
+  const clock = formatDateTime(value);
+  if (clock && clock !== '未知') return `${remain}  ·  ${clock}`;
+  return remain;
+}
+
 export function lastCheckCaption(lastChecked: string | null | undefined): string {
   const text = String(lastChecked || '').trim();
   if (!text || text === '尚未检查' || text === '未知') return '暂无检查记录';
@@ -485,6 +545,8 @@ export function mapAccountForUi(
     tokenValidityPct,
     resetInFiveHour: formatReset(account.quota?.hourly_reset_time),
     resetInWeekly: formatReset(account.quota?.weekly_reset_time),
+    fiveHourResetAt: account.quota?.hourly_reset_time ?? null,
+    weeklyResetAt: account.quota?.weekly_reset_time ?? null,
     warning: account.requires_reauth
       ? '该账号需要重新授权后才能刷新 Token。'
       : account.reauth_reason || quotaError,
@@ -679,6 +741,22 @@ export const desktopApi = {
     };
   },
 
+  async loadFloatAccounts() {
+    const api = bridge();
+    const [accountsResponse, currentResponse, configResponse] = await Promise.all([
+      captureResponse(() => api.listAccounts(), 'Read accounts'),
+      captureResponse(() => api.getCurrentAccount(), 'Read current account'),
+      captureResponse(() => api.getAutoSwitchConfig(), 'Read auto-switch config'),
+    ]);
+    const config = optionalData(configResponse, defaultConfig()) || defaultConfig();
+    const rawAccounts = expectData(accountsResponse, 'Read accounts') || [];
+    const currentAccount = optionalData(currentResponse, null);
+    return {
+      accounts: rawAccounts.map((account) => mapAccountForUi(account, currentAccount, config)),
+      currentAccount,
+    };
+  },
+
   async refreshQuota(id: string, force = true) {
     return expectData(await bridge().refreshQuota(id, force), 'Refresh quota');
   },
@@ -779,6 +857,30 @@ export const desktopApi = {
 
   async closeWindow() {
     return expectData(await bridge().closeWindow(), 'Close window');
+  },
+
+  async showMainWindow() {
+    return expectData(await bridge().showMainWindow(), 'Show main window');
+  },
+
+  async showFloatWindow() {
+    return expectData(await bridge().showFloatWindow(), 'Show float window');
+  },
+
+  async hideFloatWindow() {
+    return expectData(await bridge().hideFloatWindow(), 'Hide float window');
+  },
+
+  async setFloatAlwaysOnTop(value: boolean) {
+    return expectData(await bridge().setFloatAlwaysOnTop(value), 'Set float always on top');
+  },
+
+  async getFloatState() {
+    return expectData(await bridge().getFloatState(), 'Read float state');
+  },
+
+  async setFloatHeight(height: number) {
+    return expectData(await bridge().setFloatHeight(height), 'Resize float window');
   },
 
   subscribe(events: {

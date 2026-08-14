@@ -59,7 +59,7 @@ export default function Login({ onLogin, userEmail, appVersion = '0.1.0', showDe
         <button
           onClick={() => void desktopApi.closeWindow()}
           className="app-no-drag fixed top-3 right-3 p-2 rounded-lg text-label-3 hover:bg-danger hover:text-white transition-all cursor-pointer z-10"
-          title="关闭"
+          title="关闭到托盘"
           id="login-window-close"
         >
           <X className="w-4 h-4" />

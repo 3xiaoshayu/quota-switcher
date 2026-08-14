@@ -85,7 +85,7 @@ export default function Header({
               <button
                 onClick={() => void desktopApi.closeWindow()}
                 className="p-2 hover:bg-danger hover:text-white rounded-lg text-label-2 transition-colors cursor-pointer"
-                title="关闭"
+                title="关闭到托盘"
                 id="window-btn-close"
               >
                 <X className="w-4 h-4" />

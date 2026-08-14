@@ -3,10 +3,22 @@ const path = require("path");
 const fs = require("fs");
 const { registerIpcHandlers } = require("./ipc-handlers");
 const { createUpdateService } = require("./updater");
+const { createAppTray } = require("./tray");
+const { createFloatWindowController } = require("./float-window");
 const { writeJsonAtomic } = require(path.resolve(__dirname, "..", "..", "engine", "atomic-file"));
 
 let mainWindow = null;
+let appTray = null;
+let floatWindow = null;
+let isQuitting = false;
+const trustedSenderIds = new Set();
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
+
+function trustWebContents(webContents) {
+    if (!webContents || webContents.isDestroyed()) return;
+    trustedSenderIds.add(webContents.id);
+    webContents.once("destroyed", () => trustedSenderIds.delete(webContents.id));
+}
 
 function windowStatePath() {
     return path.join(app.getPath("userData"), "window-state.json");
@@ -61,6 +73,22 @@ function focusMainWindow() {
     mainWindow.focus();
 }
 
+function destroyAppTray() {
+    if (!appTray) return;
+    appTray.destroy();
+    appTray = null;
+}
+
+function quitApplication() {
+    isQuitting = true;
+    if (floatWindow) {
+        floatWindow.destroy();
+        floatWindow = null;
+    }
+    destroyAppTray();
+    app.quit();
+}
+
 function startApplication() {
     const eng = require("../../engine");
     if (!safeStorage.isEncryptionAvailable()) {
@@ -105,15 +133,40 @@ function startApplication() {
     let lastKnownMaximized = !!savedWindowState?.isMaximized;
     win.on("maximize", () => { lastKnownMaximized = true; });
     win.on("unmaximize", () => { lastKnownMaximized = false; });
-    win.on("close", () => saveWindowState(win, lastKnownMaximized));
+    win.on("close", (event) => {
+        saveWindowState(win, lastKnownMaximized);
+        if (!isQuitting) {
+            event.preventDefault();
+            win.hide();
+        }
+    });
     win.on("closed", () => {
         if (mainWindow === win) mainWindow = null;
     });
     win.setMenuBarVisibility(false);
+    floatWindow = createFloatWindowController({
+        app,
+        BrowserWindow,
+        screen,
+        trustWebContents,
+        rendererHtml: path.join(__dirname, "..", "renderer-dist", "index.html"),
+        preloadPath: path.join(__dirname, "..", "preload", "preload.js"),
+        iconPath: path.join(__dirname, "..", "..", "resources", "icon.ico"),
+        isQuitting: () => isQuitting,
+        writeJsonAtomic,
+    });
+    appTray = createAppTray({
+        onShow: focusMainWindow,
+        onShowFloat: () => floatWindow?.show(),
+        onQuit: quitApplication,
+    });
     const daemon = registerIpcHandlers(eng, {
         updateService,
-        trustedWebContentsId: win.webContents.id,
+        trustedSenderIds,
+        floatWindow,
+        showMainWindow: focusMainWindow,
     });
+    trustWebContents(win.webContents);
 
     const openExternalUrl = (url) => {
         if (!/^https?:\/\//i.test(String(url || ""))) return;
@@ -173,6 +226,14 @@ if (!hasSingleInstanceLock) {
     app.quit();
 } else {
     app.on("second-instance", focusMainWindow);
+    app.on("before-quit", () => {
+        isQuitting = true;
+        if (floatWindow) {
+            floatWindow.destroy();
+            floatWindow = null;
+        }
+        destroyAppTray();
+    });
     app.whenReady().then(() => {
         try {
             startApplication();

@@ -96,12 +96,12 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     const updateService = services.updateService || null;
     const setDaemonInterval = services.setInterval || setInterval;
     const clearDaemonInterval = services.clearInterval || clearInterval;
-    const trustedWebContentsId = Number.isInteger(services.trustedWebContentsId)
-        ? services.trustedWebContentsId
+    const trustedSenderIds = services.trustedSenderIds instanceof Set
+        ? services.trustedSenderIds
         : null;
     const isTrustedSender = (event) => {
-        if (trustedWebContentsId == null) return true;
-        return event?.sender?.id === trustedWebContentsId;
+        if (!trustedSenderIds) return true;
+        return trustedSenderIds.has(event?.sender?.id);
     };
     const handle = (channel, listener) => {
         ipcMain.handle(channel, async (event, ...args) => {
@@ -165,6 +165,30 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     });
     handle("window:close", (event) => {
         BrowserWindow.fromWebContents(event.sender)?.close();
+        return ok(true);
+    });
+    handle("window:showMain", () => {
+        if (typeof services.showMainWindow === "function") services.showMainWindow();
+        return ok(true);
+    });
+    handle("float:show", () => {
+        services.floatWindow?.show();
+        return ok(true);
+    });
+    handle("float:hide", () => {
+        services.floatWindow?.hide();
+        return ok(true);
+    });
+    handle("float:setAlwaysOnTop", (event, value) => {
+        services.floatWindow?.setAlwaysOnTop(!!value);
+        return ok(true);
+    });
+    handle("float:getState", () => ok(services.floatWindow?.getState() || {
+        visible: false,
+        alwaysOnTop: false,
+    }));
+    handle("float:setHeight", (event, height) => {
+        services.floatWindow?.setHeight(height);
         return ok(true);
     });
     handle("storage:diagnostics", () => ok(eng.getStorageDiagnostics()));

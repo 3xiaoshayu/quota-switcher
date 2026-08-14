@@ -19,8 +19,9 @@ requirePattern(mainSource, /app\.on\(["']second-instance["']/, "A second launch 
 requirePattern(mainSource, /setWindowOpenHandler/, "New renderer windows must be intercepted.");
 requirePattern(mainSource, /webContents\.on\(["']will-navigate["']\s*,\s*guardNavigation\)/, "Renderer navigation must use guardNavigation.");
 requirePattern(mainSource, /webContents\.on\(["']will-redirect["']\s*,\s*guardNavigation\)/, "Renderer redirects must use guardNavigation.");
-requirePattern(mainSource, /trustedWebContentsId\s*:\s*win\.webContents\.id/, "IPC handlers must be scoped to the main window webContents.");
-requirePattern(ipcSource, /event\?\.sender\?\.id\s*===\s*trustedWebContentsId/, "IPC handlers must reject untrusted senders.");
+requirePattern(mainSource, /trustWebContents\(win\.webContents\)/, "IPC handlers must trust the main window webContents.");
+requirePattern(mainSource, /trustedSenderIds/, "IPC trust must be an allow-list of renderer webContents.");
+requirePattern(ipcSource, /trustedSenderIds\.has\(event\?\.sender\?\.id\)/, "IPC handlers must reject untrusted senders.");
 requirePattern(ipcSource, /Untrusted IPC sender/, "Untrusted IPC requests must fail without running handlers.");
 
 const navigationGuard = mainSource.match(/const guardNavigation\s*=\s*\([\s\S]*?\n\s*\};/u)?.[0] || "";
