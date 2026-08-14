@@ -5,6 +5,10 @@ All notable changes to Codex Account Manager are documented here.
 The project follows [Semantic Versioning](https://semver.org/) once a stable
 release is published.
 
+## [0.1.0-beta.19] - 2026-08-15
+
+- Fix the Windows installer script so the setup executable actually builds.
+
 ## [0.1.0-beta.18] - 2026-08-15
 
 - Cut transparent rounded corners into the app icon so the desktop, taskbar,
