@@ -150,11 +150,7 @@ export default function SettingsView({
         </p>
       </div>
 
-      {/* Main Settings Cards Grid - Matches exact screen 4 layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 mb-8" id="settings-cards-grid">
-        {/* Left Column: Daemon Service config (7 cols) */}
-        <div className="lg:col-span-7 flex flex-col gap-6" id="settings-left-col">
-          {/* Card 1: Daemon Service */}
+      <div className="flex flex-col gap-6" id="settings-cards-grid">
           <div className="glass-card rounded-2xl p-6 flex flex-col" id="card-daemon-settings">
             {/* Daemon Card Header */}
             <div className="flex items-start justify-between pb-5 border-b border-sep" id="daemon-header">
@@ -244,8 +240,11 @@ export default function SettingsView({
             </div>
           </div>
 
-          {/* Card 2: Official Codex install check */}
-          <div className="glass-card rounded-2xl p-6 flex items-center justify-between" id="card-client-detect">
+        <div
+          className={`grid grid-cols-1 gap-6 ${onShowFloatWindow ? 'lg:grid-cols-2' : ''}`}
+          id="settings-local-row"
+        >
+          <div className="glass-card rounded-2xl p-6 flex items-center justify-between gap-4 h-full" id="card-client-detect">
             <div className="flex items-center gap-3.5">
               <div className="w-10 h-10 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent">
                 <Monitor className="w-4 h-4" />
@@ -278,7 +277,7 @@ export default function SettingsView({
           </div>
 
           {onShowFloatWindow && (
-            <div className="glass-card rounded-2xl p-6 flex items-center justify-between" id="card-float-lens">
+            <div className="glass-card rounded-2xl p-6 flex items-center justify-between gap-4 h-full" id="card-float-lens">
               <div className="flex items-center gap-3.5">
                 <div className="w-10 h-10 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent">
                   <Gauge className="w-4 h-4" />
@@ -304,10 +303,8 @@ export default function SettingsView({
           )}
         </div>
 
-        {/* Right Column: Tokens integrity & Updates (5 cols) */}
-        <div className="lg:col-span-5 flex flex-col gap-6" id="settings-right-col">
-          {/* Card 3: Tokens */}
-          <div className="glass-card rounded-2xl p-6 flex flex-col gap-6" id="card-tokens">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch" id="settings-account-row">
+          <div className="glass-card rounded-2xl p-6 flex flex-col gap-6 h-full" id="card-tokens">
             <div className="flex items-start justify-between" id="tokens-header">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent">
@@ -320,7 +317,7 @@ export default function SettingsView({
               </div>
             </div>
 
-            <div className="flex items-end justify-between" id="tokens-body">
+            <div className="flex flex-col gap-6 mt-auto" id="tokens-body">
               <div className="flex flex-col text-left" id="tokens-stat-box">
                 <span className="text-[28px] font-semibold text-label tracking-tight tabular-nums">{accountCount}</span>
                 <span className="text-[12px] text-label-3 font-medium mt-1">已管理账号</span>
@@ -329,10 +326,10 @@ export default function SettingsView({
               <motion.button
                 onClick={handleBatchVerify}
                 disabled={isVerifyingTokens}
-                whileHover={{ scale: 1.03 }}
-                whileTap={{ scale: 0.96 }}
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
                 transition={{ type: 'spring', stiffness: 450, damping: 20 }}
-                className="px-4 py-2.5 bg-accent/15 hover:bg-accent/25 disabled:opacity-50 text-accent rounded-[10px] text-[13px] font-medium flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                className="w-full py-2.5 bg-accent/15 hover:bg-accent/25 disabled:opacity-50 text-accent rounded-[10px] text-[13px] font-medium flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
                 id="btn-batch-login-check"
               >
                 <ShieldCheck className="w-3.5 h-3.5 text-accent" />
@@ -342,7 +339,7 @@ export default function SettingsView({
           </div>
 
           {/* Card 4: Update Channels */}
-          <div className="glass-card rounded-2xl p-6 flex flex-col gap-5" id="card-software-update">
+          <div className="glass-card rounded-2xl p-6 flex flex-col gap-5 h-full" id="card-software-update">
             <div className="flex items-start justify-between" id="updates-header">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent">
@@ -355,7 +352,7 @@ export default function SettingsView({
               </div>
             </div>
 
-            <div className="flex flex-col gap-3" id="updates-body">
+            <div className="flex flex-col gap-3 mt-auto" id="updates-body">
               <div className="flex items-center justify-between text-xs font-semibold px-1" id="updates-status-labels">
                 <span className="text-label-2">更新通道</span>
                 <span className="px-2 py-0.5 bg-accent/15 text-accent rounded-md font-medium text-[11px]">{settings.updateChannel.replace('Beta Channel', 'Beta 通道').replace('Stable Channel', '稳定通道').replace('Developer Channel', '开发通道')}</span>
@@ -399,9 +396,7 @@ export default function SettingsView({
             </div>
           </div>
         </div>
-      </div>
 
-      {/* Card 5: Banner footer link */}
       <div 
         className="glass-card rounded-2xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 overflow-hidden relative"
         id="card-footer-banner"
@@ -449,6 +444,7 @@ export default function SettingsView({
             GitHub
           </motion.a>
         </div>
+      </div>
       </div>
     </div>
   );
