@@ -23,8 +23,13 @@ win:
 
 nsis:
   oneClick: false
-  allowToChangeInstallationDirectory: true
   perMachine: false
+  # Default true plus per-user mode hides the folder page (electron-builder#1104).
+  allowElevation: false
+  # Builder skips its own directory page on upgrades; resources/installer.nsh
+  # adds one that still appears so the user can pick a folder.
+  allowToChangeInstallationDirectory: false
+  include: installer.nsh
   createDesktopShortcut: true
   createStartMenuShortcut: true
   artifactName: "Codex-Account-Manager-Setup-${version}-${arch}.${ext}"
