@@ -11,7 +11,7 @@ export interface AccountQuota {
   weeklyQuotaPresent?: boolean;
   weeklyBlocksFiveHour?: boolean;
   priority: 'High' | 'Normal' | 'Low' | 'Ultra';
-  plan: 'Pro Plan' | 'Standard' | 'Enterprise';
+  plan: 'Plus' | 'Pro' | 'Go' | 'Standard' | 'Enterprise';
   tokenValidity: string;
   tokenValidityPct?: number | null;
   resetInFiveHour: string;

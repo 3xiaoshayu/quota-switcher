@@ -29,16 +29,15 @@ function execFileAsync(file, args, options = {}) {
 
 async function defaultListProcesses(runCommand = execFileAsync) {
   const script = [
-    "$items = Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('Codex.exe','node_repl.exe') }",
-    "$codex = @($items | Where-Object { $_.Name -eq 'Codex.exe' -and (($_.ExecutablePath -like '*WindowsApps*OpenAI.Codex*') -or ($_.CommandLine -like '*OpenAI.Codex*')) })",
+    "$items = Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('ChatGPT.exe','Codex.exe','node_repl.exe') }",
+    "$codex = @($items | Where-Object { $_.Name -in @('ChatGPT.exe','Codex.exe') -and (($_.ExecutablePath -like '*WindowsApps*OpenAI.Codex*') -or ($_.ExecutablePath -like '*WindowsApps*OpenAI.ChatGPT*') -or ($_.CommandLine -like '*OpenAI.Codex*') -or ($_.CommandLine -like '*OpenAI.ChatGPT*')) })",
     "$ids = New-Object 'System.Collections.Generic.HashSet[int]'",
     "$codex | ForEach-Object { [void]$ids.Add([int]$_.ProcessId) }",
-    // Orphaned helpers (parent Codex.exe already exited) never join the
-    // ancestor closure; seed them directly by their own identity so they
-    // cannot survive a switch and rewrite auth.json with stale tokens.
-    "$items | Where-Object { $_.Name -eq 'node_repl.exe' -and (($_.ExecutablePath -like '*WindowsApps*OpenAI.Codex*') -or ($_.CommandLine -like '*OpenAI.Codex*')) } | ForEach-Object { [void]$ids.Add([int]$_.ProcessId) }",
+    // Orphaned helpers (parent GUI already exited) never join the ancestor
+    // closure; seed them directly so they cannot survive a switch.
+    "$items | Where-Object { $_.Name -eq 'node_repl.exe' -and (($_.ExecutablePath -like '*WindowsApps*OpenAI.Codex*') -or ($_.ExecutablePath -like '*WindowsApps*OpenAI.ChatGPT*') -or ($_.CommandLine -like '*OpenAI.Codex*') -or ($_.CommandLine -like '*OpenAI.ChatGPT*')) } | ForEach-Object { [void]$ids.Add([int]$_.ProcessId) }",
     "do { $changed = $false; foreach ($item in $items) { if ($ids.Contains([int]$item.ParentProcessId) -and -not $ids.Contains([int]$item.ProcessId)) { [void]$ids.Add([int]$item.ProcessId); $changed = $true } } } while ($changed)",
-    "@($items | Where-Object { $ids.Contains([int]$_.ProcessId) } | Select-Object Name,ProcessId,ParentProcessId,ExecutablePath) | ConvertTo-Json -Compress",
+    "@($items | Where-Object { $ids.Contains([int]$_.ProcessId) } | ForEach-Object { $title = ''; try { $title = [string](Get-Process -Id $_.ProcessId -ErrorAction Stop).MainWindowTitle } catch {}; [pscustomobject]@{ Name = $_.Name; ProcessId = $_.ProcessId; ParentProcessId = $_.ParentProcessId; ExecutablePath = $_.ExecutablePath; MainWindowTitle = $title } }) | ConvertTo-Json -Compress",
   ].join("; ");
   try {
     const { stdout } = await runCommand("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
@@ -54,6 +53,7 @@ async function defaultListProcesses(runCommand = execFileAsync) {
       pid: Number(item.ProcessId),
       parentPid: Number(item.ParentProcessId),
       executablePath: item.ExecutablePath || null,
+      windowTitle: item.MainWindowTitle || "",
     })).filter((item) => Number.isInteger(item.pid) && item.pid > 0);
   } catch (error) {
     const wrapped = new Error(`Could not enumerate official Codex processes: ${error.message}`, { cause: error });
@@ -63,10 +63,40 @@ async function defaultListProcesses(runCommand = execFileAsync) {
   }
 }
 
+function processPath(item) {
+  return String(item?.executablePath || "").replace(/\//g, "\\").toLowerCase();
+}
+
+function isOfficialGuiProcess(item) {
+  const name = String(item?.name || "").toLowerCase();
+  const exe = processPath(item);
+  if (name === "chatgpt.exe") return true;
+  if (name !== "codex.exe") return false;
+  if (!exe) return true;
+  return !exe.includes("\\resources\\");
+}
+
+function isCrashWindow(item) {
+  const title = String(item?.windowTitle || "");
+  if (!title) return false;
+  return /意外停止|unexpectedly stopped|stopped unexpectedly/i.test(title);
+}
+
 const defaultRuntime = {
   assertInstalled: assertOfficialCodexInstalled,
   listProcesses: defaultListProcesses,
   async gracefulClose(pid) {
+    try {
+      await execFileAsync("powershell.exe", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `try { $p = Get-Process -Id ${Number(pid)} -ErrorAction Stop; [void]$p.CloseMainWindow() } catch {}`,
+      ], {
+        windowsHide: true,
+        timeout: 5000,
+      });
+    } catch {}
     try {
       await execFileAsync("taskkill.exe", ["/PID", String(pid)], {
         stdio: "ignore",
@@ -173,7 +203,7 @@ async function killCodex() {
   const processes = await runtime.listProcesses();
   const pids = [...new Set(processes.map((item) => item.pid))];
   await Promise.all(pids.map((pid) => runtime.gracefulClose(pid)));
-  const remaining = await waitForProcessesToExit(pids, 2500);
+  const remaining = await waitForProcessesToExit(pids, 4000);
   await Promise.all(remaining.map((pid) => runtime.forceClose(pid)));
   const forceRemaining = await waitForProcessesToExit(remaining, 5000);
   if (forceRemaining.length > 0) {
@@ -188,14 +218,18 @@ async function startCodex(options = {}) {
   if (options.verify === false) return true;
   const deadline = Date.now() + (options.timeoutMs || 10000);
   let lastEnumerationError = null;
+  let sawCrashWindow = false;
   while (Date.now() < deadline) {
     try {
       const processes = await runtime.listProcesses();
       lastEnumerationError = null;
-      if (processes.some((item) => String(item.name).toLowerCase() === "codex.exe")) {
+      const gui = processes.filter(isOfficialGuiProcess);
+      const healthy = gui.filter((item) => !isCrashWindow(item));
+      if (healthy.length > 0) {
         logInfo("Official Codex process started");
         return true;
       }
+      if (gui.some(isCrashWindow)) sawCrashWindow = true;
     } catch (error) {
       // A transient enumeration failure (slow PowerShell, AV scan) must not
       // fail the whole switch: the launch itself may already have succeeded,
@@ -207,6 +241,9 @@ async function startCodex(options = {}) {
   if (lastEnumerationError) {
     logWarn(`Codex start verification skipped (process enumeration unavailable): ${lastEnumerationError.message}`);
     return true;
+  }
+  if (sawCrashWindow) {
+    throw new Error("Official Codex opened a crash recovery window instead of a working session");
   }
   throw new Error("Official Codex did not start within the expected time");
 }

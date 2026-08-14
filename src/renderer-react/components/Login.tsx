@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { Mail, Shield, ShieldCheck, User, ArrowRight, Activity, Cpu, X } from 'lucide-react';
+import { Mail, Shield, ShieldCheck, User, ArrowRight, Activity, X } from 'lucide-react';
 import { desktopApi, hasDesktopBridge } from '../api/desktop';
+import appIcon from '../assets/app-icon.png';
 
 interface LoginProps {
   onLogin: (email: string) => void;
@@ -73,9 +74,12 @@ export default function Login({ onLogin, userEmail, appVersion = '0.1.0', showDe
         id="login-card"
       >
         <div className="text-center mb-8" id="login-header-group">
-          <div className="inline-flex items-center justify-center w-14 h-14 bg-accent/15 rounded-2xl mb-4" id="login-icon-box">
-            <Cpu className="w-7 h-7 text-accent" />
-          </div>
+          <img
+            src={appIcon}
+            alt=""
+            className="w-14 h-14 rounded-2xl object-cover mb-4 mx-auto"
+            id="login-icon-box"
+          />
           <h1 className="text-[26px] font-semibold tracking-tight text-label" id="login-title">
             Codex 账号
           </h1>

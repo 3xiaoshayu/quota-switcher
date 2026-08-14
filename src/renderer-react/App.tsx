@@ -19,12 +19,15 @@ import {
   DaemonState,
 } from './types';
 import {
+  countUnreadAlertLogs,
   desktopApi,
   formatDateTime,
   hasDesktopBridge,
   needsQuotaAutoSync,
+  quotaAutoSyncStaleMs,
   QUOTA_AUTO_SYNC_MIN_GAP_MS,
 } from './api/desktop';
+import { logTypeLabel, toUserMessage } from './api/user-messages';
 import Login from './components/Login';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
@@ -32,6 +35,7 @@ import QuotasView from './components/QuotasView';
 import AutoSwitchView from './components/AutoSwitchView';
 import AccountsView from './components/AccountsView';
 import SettingsView from './components/SettingsView';
+import AuthStatusBanner from './components/AuthStatusBanner';
 import { 
   Bell, 
   X, 
@@ -54,7 +58,7 @@ const DEFAULT_CONFIG: DesktopAutoSwitchConfig = {
   secondary_threshold: 30,
   account_scope_mode: 'all',
   selected_account_ids: [],
-  sync_interval_minutes: 10,
+  sync_interval_minutes: 1,
 };
 
 const EMPTY_AUTH_STATE: DesktopAuthState = {
@@ -114,7 +118,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'accounts' | 'quotas' | 'autoswitch' | 'settings'>('quotas');
   const [accounts, setAccounts] = useState<AccountQuota[]>(desktopBridgeAvailable ? [] : INITIAL_ACCOUNTS);
   const [daemonState, setDaemonState] = useState<DaemonState>(
-    desktopBridgeAvailable ? { status: 'Stopped', syncInterval: 10, lastChecked: '尚未检查' } : INITIAL_DAEMON_STATE,
+    desktopBridgeAvailable ? { status: 'Stopped', syncInterval: 1, lastChecked: '' } : INITIAL_DAEMON_STATE,
   );
   const [settings, setSettings] = useState<SystemSettings>(INITIAL_SETTINGS);
   const [logs, setLogs] = useState<LogEntry[]>(desktopBridgeAvailable ? [] : INITIAL_LOGS);
@@ -160,6 +164,8 @@ export default function App() {
   // UI Interactive triggers
   const [isRefreshingAll, setIsRefreshingAll] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [authBannerDismissedKey, setAuthBannerDismissedKey] = useState<string | null>(null);
+  const [lastReadLogId, setLastReadLogId] = useState<string | null>(null);
   const [showSupport, setShowSupport] = useState(false);
   const [showUpdates, setShowUpdates] = useState(false);
   // Real switch counter for this session (manual switches, manual checks, and
@@ -174,7 +180,7 @@ export default function App() {
 
   const addToast = useCallback((msg: string, type: 'success' | 'info' | 'warning' | 'error' = 'info') => {
     const id = `toast_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-    setToasts(prev => [...prev, { id, msg, type }]);
+    setToasts(prev => [...prev, { id, msg: toUserMessage(msg), type }]);
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 4000);
@@ -185,12 +191,19 @@ export default function App() {
     const newLog: LogEntry = {
       id: `l_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
       timestamp,
-      message,
+      message: toUserMessage(message),
       type,
     };
     // Cap the in-memory feed so long sessions cannot grow it without bound.
     setLogs(prev => [newLog, ...prev].slice(0, 500));
   }, []);
+
+  useEffect(() => {
+    if (!showNotifications) return;
+    const newestId = logs[0]?.id;
+    if (!newestId) return;
+    setLastReadLogId(newestId);
+  }, [showNotifications, logs]);
 
   const runAccountOperation = useCallback(async <T,>(id: string, task: () => Promise<T>): Promise<T> => {
     if (accountOperationIds.current.has(id)) {
@@ -209,6 +222,12 @@ export default function App() {
   // refs to stale values).
   const dashboardLoadSeqRef = useRef(0);
   const wasOAuthPendingRef = useRef(false);
+  const oauthStatusRef = useRef<DesktopOAuthStatus | null>(oauthStatus);
+  const oauthReportKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    oauthStatusRef.current = oauthStatus;
+  }, [oauthStatus]);
 
   const applyDashboardState = useCallback((snapshot: Awaited<ReturnType<typeof desktopApi.loadDashboardState>>) => {
     setAccounts(snapshot.accounts);
@@ -219,17 +238,23 @@ export default function App() {
     setUpdateStatus(snapshot.updateStatus);
     setAuthState(snapshot.authState);
     authStateRef.current = snapshot.authState;
-    setOAuthStatus(snapshot.oauthStatus);
-    if (snapshot.oauthStatus.pending && !wasOAuthPendingRef.current) setActiveTab('accounts');
-    wasOAuthPendingRef.current = !!snapshot.oauthStatus.pending;
+    const incomingOAuth = snapshot.oauthStatus;
+    const localOAuth = oauthStatusRef.current;
+    const nextOAuth = localOAuth?.pending && !incomingOAuth.pending && incomingOAuth.status === 'idle'
+      ? localOAuth
+      : incomingOAuth;
+    setOAuthStatus(nextOAuth);
+    oauthStatusRef.current = nextOAuth;
+    if (nextOAuth.pending && !wasOAuthPendingRef.current) setActiveTab('accounts');
+    wasOAuthPendingRef.current = !!nextOAuth.pending;
     setSettings(settingsFromDesktopState(snapshot.config, snapshot.appInfo, snapshot.codexStatus, snapshot.updateStatus));
     setDaemonState({
       status: snapshot.daemonRunning ? 'Running' : 'Stopped',
       syncInterval: snapshot.daemonSyncInterval,
-      lastChecked: snapshot.daemonLastRunAt ? formatDateTime(snapshot.daemonLastRunAt) : '尚未检查',
+      lastChecked: snapshot.daemonLastRunAt ? formatDateTime(snapshot.daemonLastRunAt) : '',
       lastSuccessAt: snapshot.daemonLastSuccessAt,
-      lastError: snapshot.daemonLastError,
-      pausedReason: snapshot.daemonPausedReason,
+      lastError: snapshot.daemonLastError ? toUserMessage(snapshot.daemonLastError) : null,
+      pausedReason: snapshot.daemonPausedReason ? toUserMessage(snapshot.daemonPausedReason) : null,
     });
     setSelectedAccountIds(
       snapshot.config.account_scope_mode === 'selected'
@@ -262,7 +287,7 @@ export default function App() {
       return snapshot;
     } catch (error) {
       if (seq !== dashboardLoadSeqRef.current) return null;
-      const message = error instanceof Error ? error.message : String(error);
+      const message = toUserMessage(error instanceof Error ? error.message : String(error));
       addToast(message, 'error');
       addLogEntry(message, 'error');
       if (!hasLoadedDashboard.current) {
@@ -278,7 +303,11 @@ export default function App() {
     if (authStateRef.current.requiresResolution) return;
     if (Date.now() - lastQuotaAutoSyncAt.current < QUOTA_AUTO_SYNC_MIN_GAP_MS) return;
     const staleAccounts = candidateAccounts.filter((account) => (
-      !accountOperationIds.current.has(account.id) && needsQuotaAutoSync(account)
+      !accountOperationIds.current.has(account.id)
+      && needsQuotaAutoSync(
+        account,
+        quotaAutoSyncStaleMs(account, autoSwitchConfigRef.current.sync_interval_minutes),
+      )
     ));
     if (!staleAccounts.length) return;
 
@@ -328,12 +357,10 @@ export default function App() {
     addToast('已安全退出登录', 'info');
   };
 
-  // Escape closes the topmost dismissible overlay. The auth-conflict dialog
-  // intentionally ignores Escape: it requires an explicit decision.
+  // Escape closes the topmost dismissible overlay.
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      if (authStateRef.current.requiresResolution) return;
       if (deleteTarget) {
         if (!isDeletingAccount) setDeleteTarget(null);
         return;
@@ -345,6 +372,12 @@ export default function App() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [deleteTarget, isDeletingAccount, showNotifications, showSupport, showUpdates]);
+
+  useEffect(() => {
+    if (deleteTarget || showSupport || showUpdates) {
+      setShowNotifications(false);
+    }
+  }, [deleteTarget, showSupport, showUpdates]);
 
   useEffect(() => {
     if (!desktopBridgeAvailable) return;
@@ -403,28 +436,85 @@ export default function App() {
     };
   }, [addLogEntry, addToast, isAuthenticated, loadDashboardState, queueQuotaAutoSync]);
 
+  const reportOAuthFinished = useCallback((status: DesktopOAuthStatus) => {
+    if (status.pending) return;
+    if (status.status === 'idle' || status.status === 'pending') return;
+    const result = status.result;
+    const key = [
+      status.status,
+      result?.accountId || '',
+      result?.email || '',
+      result?.mismatch ? '1' : '0',
+      status.targetAccountId || '',
+      status.message || '',
+    ].join('|');
+    if (oauthReportKeyRef.current === key) return;
+    oauthReportKeyRef.current = key;
+
+    if (status.status === 'cancelled') {
+      addToast('授权已取消。', 'warning');
+      addLogEntry('授权已取消。', 'warning');
+      return;
+    }
+    if (status.status === 'error' || status.status === 'expired') {
+      const message = status.message || '授权未完成。';
+      addToast(message, 'warning');
+      addLogEntry(message, 'warning');
+      return;
+    }
+    if (status.status !== 'completed') return;
+    if (result?.mismatch) {
+      const message = result.email
+        ? `浏览器登录的不是这个账号，已另存为 ${result.email}。原来的账号仍需重新授权。`
+        : '浏览器登录的不是这个账号，已另存为新账号。原来的账号仍需重新授权。';
+      addToast(message, 'warning');
+      addLogEntry(message, 'warning');
+      return;
+    }
+    const isReauth = !!(status.targetAccountId || result?.targetAccountId);
+    const message = result?.email
+      ? (isReauth ? `已重新授权 ${result.email}` : `已添加 ${result.email}`)
+      : (isReauth ? '账号已重新授权' : '账号已添加');
+    addToast(message, 'success');
+    addLogEntry(message, 'success');
+  }, [addLogEntry, addToast]);
+
+  const markOAuthPending = useCallback((targetAccountId: string | null) => {
+    dashboardLoadSeqRef.current += 1;
+    oauthReportKeyRef.current = null;
+    const nextStatus: DesktopOAuthStatus = {
+      status: 'pending',
+      pending: true,
+      targetAccountId,
+      message: '请在浏览器完成授权，完成后会自动回来。',
+      result: null,
+      expiresAt: null,
+      callbackPort: 1455,
+    };
+    oauthStatusRef.current = nextStatus;
+    setOAuthStatus(nextStatus);
+  }, []);
+
   useEffect(() => {
     if (!isAuthenticated || !desktopBridgeAvailable || !oauthStatus?.pending) return;
     let disposed = false;
+    let seenEnginePending = false;
     const pollOAuthStatus = async () => {
       try {
         const status = await desktopApi.getOAuthStatus();
         if (disposed) return;
-        setOAuthStatus(status);
-        if (!status.pending) {
-          await loadDashboardState(false);
-          if (status.status === 'error' || status.status === 'expired') {
-            addToast(status.message || 'OAuth 授权结束，未添加账号。', 'warning');
-          } else if (status.status === 'completed' && status.result) {
-            if (status.result.mismatch) {
-              addToast(`浏览器授权了另一个账号，${status.result.email || '它'}已单独保存。`, 'warning');
-            } else {
-              addToast(status.result.email ? `已添加 ${status.result.email}` : '账号已添加', 'success');
-            }
-          }
+        if (status.pending) {
+          seenEnginePending = true;
+          setOAuthStatus(status);
+          return;
         }
+        if (!seenEnginePending) return;
+        setOAuthStatus(status);
+        await loadDashboardState(false);
+        reportOAuthFinished(status);
       } catch {}
     };
+    void pollOAuthStatus();
     const timer = window.setInterval(() => {
       void pollOAuthStatus();
     }, 1000);
@@ -432,7 +522,7 @@ export default function App() {
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [addToast, isAuthenticated, loadDashboardState, oauthStatus?.pending]);
+  }, [isAuthenticated, loadDashboardState, oauthStatus?.pending, reportOAuthFinished]);
 
   // Global Refresh All trigger
   const handleRefreshAll = async () => {
@@ -544,7 +634,11 @@ export default function App() {
         if (nextAction === 'stop') await desktopApi.stopDaemon();
         else await desktopApi.startDaemon();
         await loadDashboardState(false);
-        addToast(`守护进程已${nextAction === 'stop' ? '停止' : '启动'}`, nextAction === 'stop' ? 'warning' : 'success');
+        if (nextAction === 'stop' && autoSwitchConfigRef.current.enabled) {
+          addToast('守护进程已停止。自动切号已打开，但不会再自动换号。', 'warning');
+        } else {
+          addToast(`守护进程已${nextAction === 'stop' ? '停止' : '启动'}`, nextAction === 'stop' ? 'warning' : 'success');
+        }
         addLogEntry(`守护进程已${nextAction === 'stop' ? '停止' : '启动'}。`, nextAction === 'stop' ? 'warning' : 'success');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -565,7 +659,7 @@ export default function App() {
   };
 
   const handlePreviewSyncInterval = (val: number) => {
-    const syncInterval = Math.min(60, Math.max(1, Math.round(Number(val) || 10)));
+    const syncInterval = Math.min(60, Math.max(1, Math.round(Number(val) || 1)));
     setDaemonState(prev => ({
       ...prev,
       syncInterval,
@@ -574,7 +668,7 @@ export default function App() {
 
   // Update sync interval
   const handleUpdateSyncInterval = (val: number) => {
-    const syncInterval = Math.min(60, Math.max(1, Math.round(Number(val) || 10)));
+    const syncInterval = Math.min(60, Math.max(1, Math.round(Number(val) || 1)));
     handlePreviewSyncInterval(syncInterval);
     if (desktopBridgeAvailable) {
       if (Number(autoSwitchConfigRef.current.sync_interval_minutes) === syncInterval) return;
@@ -585,23 +679,35 @@ export default function App() {
       void saveAutoSwitchConfig(nextConfig);
       return;
     }
-    addToast(`同步间隔已调整为 ${val} 分钟`, 'info');
-    addLogEntry(`同步间隔已调整为 ${syncInterval} 分钟。`, 'info');
+    addToast(`Daemon 检查间隔已调整为 ${val} 分钟`, 'info');
+    addLogEntry(`Daemon 检查间隔已调整为 ${syncInterval} 分钟。`, 'info');
   };
 
   // Add new account
   const handleAddAccount = async (acc: Omit<AccountQuota, 'id'>) => {
     if (desktopBridgeAvailable) {
-      addToast('正在打开 OAuth 授权...', 'info');
-      addLogEntry('正在为新账号打开 OAuth 授权流程。', 'info');
+      if (oauthStatusRef.current?.pending) {
+        addToast('已有授权正在进行，请先完成或取消。', 'warning');
+        throw new Error('已有授权正在进行，请先完成或取消。');
+      }
+      markOAuthPending(null);
+      addToast('正在打开授权页面，请在浏览器里完成登录。', 'info');
+      addLogEntry('正在为新账号打开授权。', 'info');
       try {
         await desktopApi.addAccount();
         const snapshot = await loadDashboardState(false);
         if (snapshot) queueQuotaAutoSync(snapshot.accounts);
+        if (snapshot?.oauthStatus) reportOAuthFinished(snapshot.oauthStatus);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        addToast(message, 'error');
-        addLogEntry(message, 'error');
+        const snapshot = await loadDashboardState(false);
+        if (snapshot) queueQuotaAutoSync(snapshot.accounts);
+        if (snapshot?.oauthStatus && !snapshot.oauthStatus.pending) {
+          reportOAuthFinished(snapshot.oauthStatus);
+        } else {
+          const message = error instanceof Error ? error.message : String(error);
+          addToast(message, 'error');
+          addLogEntry(message, 'error');
+        }
         throw error;
       }
       return;
@@ -615,33 +721,55 @@ export default function App() {
   };
 
   const handleReauthorizeAccount = async (id: string) => {
-    const target = accountsRef.current.find(account => account.id === id);
-    const result = await desktopApi.reauthorizeAccount(id);
-    const snapshot = await loadDashboardState(false);
-    if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-    // Toasts come from the OAuth status poller (single reporting point).
-    if (result.mismatch) {
-      addLogEntry(`重新授权身份与 ${target?.email || id} 不符，新账号已单独保存。`, 'warning');
-      return;
+    if (oauthStatusRef.current?.pending) {
+      addToast('已有授权正在进行，请先完成或取消。', 'warning');
+      throw new Error('已有授权正在进行，请先完成或取消。');
     }
-    addLogEntry(`账号已重新授权：${target?.email || id}`, 'success');
+    markOAuthPending(id);
+    addToast('正在打开授权页面，请在浏览器里完成登录。', 'info');
+    addLogEntry('正在打开重新授权。', 'info');
+    try {
+      const result = await desktopApi.reauthorizeAccount(id);
+      const snapshot = await loadDashboardState(false);
+      if (snapshot) queueQuotaAutoSync(snapshot.accounts);
+      if (snapshot?.oauthStatus) {
+        reportOAuthFinished(snapshot.oauthStatus);
+        return;
+      }
+      reportOAuthFinished({
+        status: 'completed',
+        pending: false,
+        result: {
+          accountId: result.account?.id,
+          email: result.account?.email,
+          mismatch: result.mismatch,
+          targetAccountId: result.targetAccountId || id,
+        },
+        targetAccountId: id,
+      });
+    } catch (error) {
+      const snapshot = await loadDashboardState(false);
+      if (snapshot) queueQuotaAutoSync(snapshot.accounts);
+      if (snapshot?.oauthStatus && !snapshot.oauthStatus.pending) {
+        reportOAuthFinished(snapshot.oauthStatus);
+      } else {
+        const message = error instanceof Error ? error.message : String(error);
+        addToast(message, 'error');
+        addLogEntry(message, 'error');
+      }
+      throw error;
+    }
   };
 
   const handleCancelOAuth = async () => {
     await desktopApi.cancelOAuth();
-    setOAuthStatus(await desktopApi.getOAuthStatus());
-    addLogEntry('OAuth 授权已取消。', 'warning');
+    const status = await desktopApi.getOAuthStatus();
+    setOAuthStatus(status);
+    reportOAuthFinished(status);
   };
 
   const handleCompleteOAuthManually = async (callbackUrl: string) => {
-    // Reporting and reloads are owned by the add-account waiter and the OAuth
-    // status poller; doing them here as well produced duplicate toasts.
-    const result = await desktopApi.completeOAuthManually(callbackUrl);
-    if (result.mismatch) {
-      addLogEntry('手动 OAuth 回调完成，另一账号已单独保存。', 'warning');
-      return;
-    }
-    addLogEntry('手动 OAuth 回调已完成。', 'success');
+    await desktopApi.completeOAuthManually(callbackUrl);
   };
 
   const handleResolveAuthConflict = async (action: 'adopt' | 'reapply') => {
@@ -699,13 +827,21 @@ export default function App() {
   const handleSwitchCurrentAccount = async (id: string) => {
     if (desktopBridgeAvailable) {
       const selected = accountsRef.current.find(a => a.id === id);
+      const isCurrent = !!selected?.isCurrent;
       try {
-        await runAccountOperation(id, () => desktopApi.switchAccount(id));
+        await runAccountOperation(id, () => (
+          isCurrent ? desktopApi.reapplyManagedAccount(id) : desktopApi.switchAccount(id)
+        ));
         setSessionSwitchCount(count => count + 1);
         const snapshot = await loadDashboardState(false);
         if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-        addToast(`当前账号已切换至 ${selected?.email || id}`, 'success');
-        addLogEntry(`已切换当前账号：${selected?.email || id}`, 'success');
+        if (isCurrent) {
+          addToast(`已将 Codex 重新登录为 ${selected?.email || id}`, 'success');
+          addLogEntry(`已将 Codex 重新登录为 ${selected?.email || id}`, 'success');
+        } else {
+          addToast(`当前账号已切换至 ${selected?.email || id}`, 'success');
+          addLogEntry(`已切换当前账号：${selected?.email || id}`, 'success');
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         addToast(message, 'error');
@@ -720,7 +856,9 @@ export default function App() {
     setSessionSwitchCount(count => count + 1);
     const selected = accounts.find(a => a.id === id);
     if (selected) {
-      addToast(`当前主账号已切换至 ${selected.email}`, 'success');
+      addToast(selected.isCurrent
+        ? `已将 Codex 重新登录为 ${selected.email}`
+        : `当前主账号已切换至 ${selected.email}`, 'success');
     }
   };
 
@@ -839,17 +977,17 @@ export default function App() {
       const reauthorizationText = needsReauthorization.length > 0
         ? `，${needsReauthorization.length} 个需重新授权`
         : '';
-      const message = `Token 检查完成：${passed}/${total} 通过${reauthorizationText}，${failed.length} 个失败。`;
+      const message = `令牌检查完成：${passed}/${total} 通过${reauthorizationText}，${failed.length} 个失败。`;
       addToast(message, 'warning');
       throw new Error(message);
     }
     if (needsReauthorization.length > 0) {
-      const message = `Token 检查完成：${passed}/${total} 通过，${needsReauthorization.length} 个需重新授权。`;
+      const message = `令牌检查完成：${passed}/${total} 通过，${needsReauthorization.length} 个需重新授权。`;
       addToast(message, 'warning');
       addLogEntry(message, 'warning');
       return;
     }
-    const message = total > 0 ? `已检查 ${total} 个账号 Token` : '没有可检查的账号 Token';
+    const message = total > 0 ? `已检查 ${total} 个账号的令牌` : '没有可检查的账号';
     addToast(message, total > 0 ? 'success' : 'info');
     addLogEntry(message, total > 0 ? 'success' : 'info');
   };
@@ -859,7 +997,7 @@ export default function App() {
     const status = await desktopApi.getCodexStatus();
     setCodexStatus(status);
     setSettings(prev => ({ ...prev, clientDetected: !!status?.installed }));
-    addToast(status?.installed ? '已检测到 Codex 客户端' : '未检测到 Codex 客户端', status?.installed ? 'success' : 'warning');
+    addToast(status?.installed ? '已检测到官方 Codex' : '未检测到官方 Codex', status?.installed ? 'success' : 'warning');
   };
 
   const handleCheckUpdates = async () => {
@@ -910,20 +1048,32 @@ export default function App() {
     if (result?.switched) {
       setSessionSwitchCount(count => count + 1);
       addToast(`已切换至 ${result.to?.email || '新账号'}`, 'success');
-    } else {
-      addToast(result?.reason || '无需切换', 'info');
+    } else if (result?.reason === 'disabled') {
+      addToast('额度已低于阈值，但全局开关已关闭，未切换账号。', 'warning');
     }
     return result;
   };
 
   const handleScopeModeChange = async (mode: 'all' | 'selected') => {
     if (!desktopBridgeAvailable) return;
-    const nextConfig = {
+    const nextConfig: DesktopAutoSwitchConfig = {
       ...autoSwitchConfigRef.current,
       account_scope_mode: mode,
     };
+    if (mode === 'selected') {
+      const existing = autoSwitchConfigRef.current.selected_account_ids || [];
+      const seeded = existing.length > 0
+        ? existing
+        : selectedAccountIdsRef.current.filter((id) => String(id || '').trim() !== '');
+      nextConfig.selected_account_ids = seeded;
+      selectedAccountIdsRef.current = seeded;
+      setSelectedAccountIds(seeded);
+    }
     await saveAutoSwitchConfig(nextConfig);
   };
+
+  const authBannerKey = `${authState.status}:${authState.currentAccountId || ''}:${authState.officialIdentity?.email || ''}`;
+  const showAuthBanner = desktopBridgeAvailable && authState.requiresResolution && authBannerDismissedKey !== authBannerKey;
 
   if (!isAuthenticated) {
     return <Login onLogin={handleLogin} userEmail={userEmail} appVersion={settings.version} showDemoShortcuts={!desktopBridgeAvailable} />;
@@ -978,9 +1128,24 @@ export default function App() {
         <Header 
           currentUserEmail={userEmail}
           onLogout={handleLogout}
-          unreadNotificationsCount={logs.filter(l => l.type === 'warning' || l.type === 'error').length}
+          unreadNotificationsCount={showNotifications ? 0 : countUnreadAlertLogs(logs, lastReadLogId)}
           onToggleNotifications={() => setShowNotifications(!showNotifications)}
         />
+
+        {showAuthBanner && (
+          <div className="shrink-0 px-8 pt-6" id="auth-status-banner-wrap">
+            <AuthStatusBanner
+              authState={authState}
+              isResolving={isResolvingAuth}
+              currentEmail={accounts.find((account) => account.isCurrent)?.email || null}
+              needsReauthCount={accounts.filter((account) => account.status === 'SUSPENDED').length}
+              onReload={() => void loadDashboardState(false)}
+              onAdopt={() => void handleResolveAuthConflict('adopt')}
+              onReapply={() => void handleResolveAuthConflict('reapply')}
+              onDismiss={() => setAuthBannerDismissedKey(authBannerKey)}
+            />
+          </div>
+        )}
 
         {/* Dashboard Content Scroller with Transition animations */}
         <main className="flex-1 overflow-hidden flex flex-col relative" id="main-content">
@@ -1080,6 +1245,8 @@ export default function App() {
                   onAddLog={addLogEntry}
                   oauthMode={desktopBridgeAvailable}
                   oauthStatus={oauthStatus}
+                  authState={desktopBridgeAvailable ? authState : null}
+                  onOpenModal={() => setShowNotifications(false)}
                 />
               )}
 
@@ -1131,7 +1298,7 @@ export default function App() {
       <AnimatePresence>
       {deleteTarget && (
         <motion.div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 p-4"
+          className="app-dialog-overlay bg-black/50"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -1142,7 +1309,7 @@ export default function App() {
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.96 }}
             transition={{ duration: 0.16, ease: 'easeOut' }}
-            className="glass-card w-full max-w-sm rounded-2xl border border-sep bg-surface-2 p-7 text-left shadow-2xl"
+            className="glass-card glass-sheet w-full max-w-sm rounded-2xl border border-sep p-7 text-left shadow-2xl"
             id="delete-confirm-modal"
             role="alertdialog"
             aria-modal="true"
@@ -1169,78 +1336,6 @@ export default function App() {
               >
                 {isDeletingAccount ? '删除中...' : '确认删除'}
               </button>
-            </div>
-          </motion.div>
-        </motion.div>
-      )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-      {authState.requiresResolution && (
-        <motion.div
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/55 p-4"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.15 }}
-        >
-          <motion.div
-            initial={{ opacity: 0, scale: 0.94 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.96 }}
-            transition={{ duration: 0.16, ease: 'easeOut' }}
-            className="w-full max-w-md rounded-2xl border border-sep bg-surface-2 p-7 text-left shadow-2xl"
-            id="auth-conflict-modal"
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="auth-conflict-title"
-          >
-            <ShieldAlert className="mb-4 h-10 w-10 text-warn" />
-            <h3 id="auth-conflict-title" className="text-lg font-bold text-white">
-              {authState.status === 'unknown' ? '认证状态不可用' : '官方 Codex 登录已变更'}
-            </h3>
-            <p className="mt-2 text-xs leading-relaxed text-label-2">
-              {authState.message || '官方 Codex 登录与本管理器记录的当前账号不一致。'}
-            </p>
-            {authState.officialIdentity?.email && (
-              <div className="mt-4 rounded-xl border border-sep bg-fill px-4 py-3 text-xs text-label-2">
-                官方账号：<strong className="text-white">{authState.officialIdentity.email}</strong>
-              </div>
-            )}
-            <p className="mt-4 text-[11px] leading-relaxed text-label-2">
-              在处理此冲突之前，自动切号与认证写入将保持暂停。
-            </p>
-            <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {authState.status === 'unknown' && (
-                <button
-                  onClick={() => void loadDashboardState(false)}
-                  disabled={isResolvingAuth}
-                  className="rounded-xl border border-accent/20 bg-accent/12 px-4 py-3 text-xs font-bold text-accent hover:bg-accent/20 disabled:opacity-50"
-                  id="auth-conflict-reload"
-                >
-                  重新加载状态
-                </button>
-              )}
-              {(authState.status === 'conflict' || authState.status === 'unmanaged_official_auth') && (
-                <button
-                  onClick={() => void handleResolveAuthConflict('adopt')}
-                  disabled={isResolvingAuth}
-                  className="rounded-xl border border-accent/20 bg-accent/12 px-4 py-3 text-xs font-bold text-accent hover:bg-accent/20 disabled:opacity-50"
-                  id="auth-conflict-adopt"
-                >
-                  采用官方账号
-                </button>
-              )}
-              {authState.currentAccountId && (
-                <button
-                  onClick={() => void handleResolveAuthConflict('reapply')}
-                  disabled={isResolvingAuth}
-                  className="rounded-xl border border-warn/20 bg-warn/12 px-4 py-3 text-xs font-bold text-warn hover:bg-warn/15 disabled:opacity-50"
-                  id="auth-conflict-reapply"
-                >
-                  重写为管理账号
-                </button>
-              )}
             </div>
           </motion.div>
         </motion.div>
@@ -1293,7 +1388,7 @@ export default function App() {
                   return (
                     <div className="p-3 bg-white/[0.06] rounded-xl text-xs space-y-1" key={log.id}>
                       <div className="flex items-center justify-between">
-                        <span className={`font-bold capitalize text-[10px] ${color}`}>{log.type}</span>
+                        <span className={`font-bold text-[10px] ${color}`}>{logTypeLabel(log.type)}</span>
                         <span className="text-[9px] text-label-3 tabular-nums">{log.timestamp}</span>
                       </div>
                       <p className="text-label-2 leading-relaxed text-[11px] font-sans font-medium">{log.message}</p>
@@ -1310,7 +1405,7 @@ export default function App() {
       <AnimatePresence>
       {showSupport && (
           <motion.div
-            className="fixed inset-0 bg-black/55 z-50 flex items-center justify-center p-4"
+            className="app-dialog-overlay bg-black/55 z-50"
             initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -1337,15 +1432,14 @@ export default function App() {
                 如果您在使用 Codex 账号管理器时遇到配额验证、客户端连接或服务问题，请通过 GitHub Issues 提交可复现信息。
               </p>
 
-              <div className="space-y-3 mb-6" id="support-channels-list">
+              <div className="mb-6" id="support-channels-list">
                 <div className="p-3 bg-white/[0.06] rounded-xl flex items-center justify-between text-xs font-semibold">
                   <span className="text-label-2">GitHub Issues</span>
                   <a className="text-accent" href={`${appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}/issues`} target="_blank" rel="noopener noreferrer">Open issue tracker</a>
                 </div>
-                <div className="p-3 bg-white/[0.06] rounded-xl flex items-center justify-between text-xs font-semibold">
-                  <span className="text-label-2">支持方式</span>
-                  <span className="text-ok">Community / Best effort</span>
-                </div>
+                <p className="mt-2 px-1 text-[11px] text-label-3 leading-5">
+                  支持方式：Community / Best effort
+                </p>
               </div>
 
               <button
@@ -1363,7 +1457,7 @@ export default function App() {
       <AnimatePresence>
       {showUpdates && (
           <motion.div
-            className="fixed inset-0 bg-black/55 z-50 flex items-center justify-center p-4"
+            className="app-dialog-overlay bg-black/55 z-50"
             initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}

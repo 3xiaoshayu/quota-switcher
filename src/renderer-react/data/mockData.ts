@@ -28,7 +28,7 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
     weeklyQuotaRemaining: 4200,
     weeklyQuotaTotal: 50000,
     priority: 'High',
-    plan: 'Pro Plan',
+    plan: 'Plus',
     tokenValidity: '剩余 18h 30m',
     tokenValidityPct: 75,
     resetInFiveHour: '1h 20m',
@@ -62,7 +62,7 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
     weeklyQuotaRemaining: 48600,
     weeklyQuotaTotal: 50000,
     priority: 'Normal',
-    plan: 'Pro Plan',
+    plan: 'Plus',
     tokenValidity: '剩余 1d 23h',
     tokenValidityPct: 95,
     resetInFiveHour: '4h 45m',
@@ -78,7 +78,7 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
     weeklyQuotaRemaining: 120,
     weeklyQuotaTotal: 200,
     priority: 'High',
-    plan: 'Pro Plan',
+    plan: 'Plus',
     tokenValidity: '剩余 12h 45m',
     tokenValidityPct: 60,
     resetInFiveHour: '2h',
@@ -144,7 +144,7 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
     weeklyQuotaRemaining: 22500,
     weeklyQuotaTotal: 50000,
     priority: 'High',
-    plan: 'Pro Plan',
+    plan: 'Plus',
     tokenValidity: '剩余 12h 45m',
     tokenValidityPct: 60,
     resetInFiveHour: '2h',
@@ -173,7 +173,7 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
 
 export const INITIAL_DAEMON_STATE: DaemonState = {
   status: 'Running',
-  syncInterval: 10,
+  syncInterval: 1,
   lastChecked: '刚刚',
 };
 

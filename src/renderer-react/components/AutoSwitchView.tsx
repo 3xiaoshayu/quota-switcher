@@ -4,11 +4,13 @@ import {
   Zap, 
   Check, 
   CheckCircle2, 
-  Clock, 
-  Users
+  Clock,
+  AlertCircle,
+  Info
 } from 'lucide-react';
 import { AccountQuota, AutoSwitchRunResult, LogEntry, SystemSettings, DaemonState } from '../types';
-import { STATUS_DOT, STATUS_TEXT } from '../api/desktop';
+import { STATUS_DOT, STATUS_TEXT, autoSwitchStatusBanner, isCurrentQuotaSufficient, lastCheckCaption, planLabel, quotaScopeCaption } from '../api/desktop';
+import { toUserMessage } from '../api/user-messages';
 
 interface AutoSwitchProps {
   accounts: AccountQuota[];
@@ -27,40 +29,42 @@ interface AutoSwitchProps {
   onRunCheckNow?: () => Promise<AutoSwitchRunResult | void>;
 }
 
-function manualCheckLog(result: AutoSwitchRunResult | void): {
+function autoSwitchCheckLog(result: AutoSwitchRunResult | void): {
   message: string;
   type: 'success' | 'info' | 'warning' | 'error';
 } {
-  if (!result) return { message: '手动额度检查已完成。', type: 'success' };
+  if (!result) return { message: '检查完成。', type: 'success' };
   if (result.switched) {
     return {
-      message: `手动检查已切换至 ${result.to?.email || '另一账号'}。`,
+      message: `已切换至 ${result.to?.email || '另一账号'}。`,
       type: 'success',
     };
   }
 
   switch (result.reason) {
     case 'quota_sufficient':
-      return { message: '手动检查完成，当前额度充足。', type: 'success' };
+      return { message: '检查完成：当前额度未低于阈值，无需切换。', type: 'success' };
     case 'no_monitored':
-      return { message: '已跳过：请至少选择一个账号，或使用全部账号范围。', type: 'warning' };
+      return { message: '已跳过：生效范围内没有账号。', type: 'warning' };
     case 'current_not_monitored':
-      return { message: '已跳过：当前账号不在选定范围内。', type: 'warning' };
+      return { message: '已跳过：当前账号不在生效范围内。', type: 'warning' };
     case 'no_candidates':
-      return { message: '检查完成：暂无可用的替换账号。', type: 'warning' };
+      return { message: '检查完成：额度已低于阈值，但范围内没有可切换的账号。', type: 'warning' };
     case 'no_accounts':
       return { message: '已跳过：没有可用的管理账号。', type: 'warning' };
     case 'no_quota_data':
-      return { message: '未能获取当前账号的额度数据。', type: 'warning' };
+      return { message: '未能获取当前账号额度，无法判断是否切换。', type: 'warning' };
     case 'auth_conflict':
-      return { message: '手动检查已暂停：请先处理官方 Codex 登录冲突。', type: 'error' };
+      return { message: '检查已暂停：官方登录未就绪或与管理器不一致。', type: 'error' };
     case 'current_quota_refresh_failed':
-      return { message: `手动检查失败：${result.error || '当前账号额度刷新失败'}。`, type: 'error' };
+      return { message: `检查失败：${toUserMessage(result.error || '当前账号额度刷新失败')}。`, type: 'error' };
     case 'cancelled':
-      return { message: '手动检查已取消。', type: 'warning' };
+      return { message: '检查已取消。', type: 'warning' };
+    case 'disabled':
+      return { message: '检查完成：额度已低于阈值，但全局开关已关闭，未切换账号。', type: 'warning' };
     default:
       return {
-        message: `手动检查完成${result.reason ? `：${result.reason}` : '。'}`,
+        message: `检查完成${result.reason ? `：${toUserMessage(result.reason)}` : '。'}`,
         type: 'info',
       };
   }
@@ -92,18 +96,57 @@ export default function AutoSwitchView({
 
   const scopeAccounts = accounts;
   const currentAccount = accounts.find((account) => account.isCurrent);
-  const currentQuotaSufficient = !!currentAccount && currentAccount.status === 'ACTIVE';
+  const currentQuotaSufficient = isCurrentQuotaSufficient(
+    currentAccount,
+    settings.fiveHourThreshold,
+    settings.weeklyThreshold,
+  );
+  const daemonRunning = daemonState.status === 'Running';
+  const daemonPaused = daemonRunning && !!daemonState.pausedReason;
+  const selectedScopeEmpty = scopeMode === 'selected' && selectedAccountIds.length === 0;
+  const statusBanner = autoSwitchStatusBanner({
+    hasCurrentAccount: !!currentAccount,
+    quotaSufficient: currentQuotaSufficient,
+    globalSwitch: settings.globalSwitch,
+    daemonRunning,
+    pausedReason: daemonState.pausedReason,
+  });
+  const bannerTone = {
+    ok: {
+      box: 'bg-ok/12',
+      icon: 'text-ok',
+      title: 'text-ok',
+      detail: 'text-ok/80',
+    },
+    warn: {
+      box: 'bg-warn/12',
+      icon: 'text-warn',
+      title: 'text-warn',
+      detail: 'text-warn/80',
+    },
+    neutral: {
+      box: 'bg-fill',
+      icon: 'text-label-2',
+      title: 'text-label',
+      detail: 'text-label-2',
+    },
+  }[statusBanner.tone];
+  const BannerIcon = statusBanner.tone === 'ok'
+    ? CheckCircle2
+    : statusBanner.tone === 'warn'
+      ? AlertCircle
+      : Info;
 
   const handleCheckNow = async () => {
     setIsCheckingNow(true);
-    onAddLog('正在执行手动额度检查...', 'info');
+    onAddLog('正在检查是否需要切换账号...', 'info');
     if (onRunCheckNow) {
       try {
         const result = await onRunCheckNow();
-        const log = manualCheckLog(result);
+        const log = autoSwitchCheckLog(result);
         onAddLog(log.message, log.type);
       } catch (error) {
-        onAddLog(error instanceof Error ? error.message : String(error), 'error');
+        onAddLog(toUserMessage(error instanceof Error ? error.message : String(error)), 'error');
       } finally {
         setIsCheckingNow(false);
       }
@@ -111,7 +154,7 @@ export default function AutoSwitchView({
     }
     setTimeout(() => {
       setIsCheckingNow(false);
-      onAddLog('手动额度检查完成。', 'success');
+      onAddLog('检查完成。', 'success');
     }, 1500);
   };
 
@@ -134,10 +177,6 @@ export default function AutoSwitchView({
     </span>
   );
 
-  const getPriorityBadge = (priority: AccountQuota['priority']) => (
-    <span className="text-[11px] text-label-3 tabular-nums">优先级 {priority}</span>
-  );
-
   return (
     <div className="flex-1 p-8 overflow-y-auto select-none" id="autoswitch-view-container">
       {/* Page Title & Check Now Header Bar */}
@@ -147,7 +186,7 @@ export default function AutoSwitchView({
             自动切号
           </h2>
           <p className="text-[13px] text-label-2 mt-1.5 font-sans">
-            智能配额监控与自动化账号轮转
+            额度低于阈值时自动换号。需要全局开关和 Daemon 同时开着。
           </p>
         </div>
 
@@ -155,9 +194,11 @@ export default function AutoSwitchView({
         <div className="flex items-center gap-3" id="autoswitch-trigger-group">
           {/* Daemon active widget */}
           <div className="flex items-center gap-2 px-3.5 py-2 bg-fill rounded-[10px] text-[12px] font-medium" id="daemon-capsule-autoswitch">
-            <span className={`w-1.5 h-1.5 rounded-full ${daemonState.status === 'Running' ? 'bg-ok' : 'bg-danger'}`} />
+            <span className={`w-1.5 h-1.5 rounded-full ${
+              daemonPaused ? 'bg-warn' : daemonRunning ? 'bg-ok' : 'bg-danger'
+            }`} />
             <span className="text-label-2">Daemon</span>
-            <span className="text-label">{daemonState.status === 'Running' ? '运行中' : '已停止'}</span>
+            <span className="text-label">{daemonPaused ? '已暂停' : daemonRunning ? '运行中' : '已停止'}</span>
           </div>
 
           {/* Session switch counter */}
@@ -265,14 +306,14 @@ export default function AutoSwitchView({
             <h4 className="text-[13px] font-semibold text-label mb-4">状态日志</h4>
 
             {/* Green banner */}
-            <div className={`p-4 rounded-[10px] flex items-start gap-3 mb-4 ${currentQuotaSufficient ? 'bg-ok/12' : 'bg-warn/12'}`} id="autoswitch-log-banner">
-              <CheckCircle2 className={`w-5 h-5 shrink-0 mt-0.5 ${currentQuotaSufficient ? 'text-ok' : 'text-warn'}`} />
+            <div className={`p-4 rounded-[10px] flex items-start gap-3 mb-4 ${bannerTone.box}`} id="autoswitch-log-banner">
+              <BannerIcon className={`w-5 h-5 shrink-0 mt-0.5 ${bannerTone.icon}`} />
               <div className="flex flex-col" id="autoswitch-banner-text">
-                <span className={`text-xs font-bold ${currentQuotaSufficient ? 'text-ok' : 'text-warn'}`}>
-                  {currentAccount ? (currentQuotaSufficient ? '当前额度充足' : '当前账号需要关注') : '暂无当前账号'}
+                <span className={`text-xs font-bold ${bannerTone.title}`}>
+                  {statusBanner.title}
                 </span>
-                <span className={`text-[11px] mt-0.5 ${currentQuotaSufficient ? 'text-ok/80' : 'text-warn/80'}`}>
-                  {settings.globalSwitch ? '自动轮换已启用' : '自动轮换已禁用'}
+                <span className={`text-[11px] mt-0.5 leading-5 ${bannerTone.detail}`}>
+                  {statusBanner.detail}
                 </span>
               </div>
             </div>
@@ -280,7 +321,7 @@ export default function AutoSwitchView({
             {/* Checked time banner */}
             <div className="flex items-center gap-2 text-xs text-label-2 mb-4 px-1" id="autoswitch-lastcheck-row">
               <Clock className="w-3.5 h-3.5 text-label-2" />
-              <span>最近检查：{daemonState.lastChecked}</span>
+              <span>{lastCheckCaption(daemonState.lastChecked)}</span>
             </div>
 
             {/* Log Scroll Container */}
@@ -356,26 +397,29 @@ export default function AutoSwitchView({
           </div>
 
           {/* Account check list */}
-          <div className="flex-1 space-y-4" id="scope-accounts-list">
+          <div className="flex-1" id="scope-accounts-list">
+            {selectedScopeEmpty && (
+              <p className="text-[12px] text-warn px-1 pb-3" id="scope-empty-hint">
+                还没选账号，自动切号不会换号。
+              </p>
+            )}
             {scopeAccounts.map((account) => {
               const isChecked = selectedAccountIds.includes(account.id);
+              const caption = quotaScopeCaption(account);
               return (
                 <motion.div
                   key={account.id}
                   onClick={() => onToggleAccountSelection(account.id)}
                   whileTap={{ scale: 0.99 }}
                   transition={{ type: 'spring', stiffness: 450, damping: 24 }}
-                  className={`p-4 rounded-xl border flex items-center justify-between transition-all cursor-pointer group ${
-                    isChecked 
-                      ? 'bg-white/[0.04] border-sep hover:border-white/15' 
-                      : 'bg-transparent border-transparent opacity-60 hover:opacity-80'
+                  className={`row-sep flex items-start justify-between gap-4 py-4 cursor-pointer group ${
+                    isChecked ? '' : 'opacity-55 hover:opacity-80'
                   }`}
                   id={`scope-acc-card-${account.id}`}
                 >
-                  <div className="flex items-center gap-4" id={`scope-acc-left-${account.id}`}>
-                    {/* Custom Checkbox */}
+                  <div className="flex items-start gap-3.5 min-w-0" id={`scope-acc-left-${account.id}`}>
                     <div 
-                      className={`w-5 h-5 rounded-md border flex items-center justify-center transition-all shrink-0 ${
+                      className={`mt-0.5 w-5 h-5 rounded-md border flex items-center justify-center transition-all shrink-0 ${
                         isChecked 
                           ? 'bg-accent border-accent text-white' 
                           : 'border-white/20 group-hover:border-white/30'
@@ -385,25 +429,26 @@ export default function AutoSwitchView({
                       {isChecked && <Check className="w-3.5 h-3.5 stroke-[3]" />}
                     </div>
 
-                    {/* Account Icon */}
-                    <div className="w-10 h-10 rounded-full bg-fill flex items-center justify-center text-label-2" id={`scope-icon-${account.id}`}>
-                      <Users className="w-4 h-4 text-label-2" />
-                    </div>
-
-                    {/* Title and details */}
-                    <div className="flex flex-col text-left" id={`scope-titles-${account.id}`}>
-                      <span className="font-bold text-label text-sm font-sans">{account.name}</span>
-                      <span className="text-[11px] text-label-2 tabular-nums mt-0.5">
-                        5 小时剩余: {account.fiveHourQuotaRemaining == null
-                          ? '--'
-                          : `${Math.round((account.fiveHourQuotaRemaining / account.fiveHourQuotaTotal) * 100)}%`}
-                      </span>
+                    <div className="flex flex-col text-left min-w-0" id={`scope-titles-${account.id}`}>
+                      <span className="font-semibold text-label text-[13px] font-sans truncate" title={account.email}>{account.email}</span>
+                      {caption.shared ? (
+                        <span className="text-[12px] text-label-3 mt-1 leading-5">{caption.shared}</span>
+                      ) : (
+                        <div className="mt-1.5 space-y-1">
+                          {caption.rows.map((row) => (
+                            <div key={row.label} className="flex items-baseline gap-3 text-[12px] leading-5">
+                              <span className="w-12 shrink-0 text-label-3">{row.label}</span>
+                              <span className="text-label-2 tabular-nums">{row.text}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  <div className="flex flex-col items-end text-right gap-1" id={`scope-acc-right-${account.id}`}>
+                  <div className="flex flex-col items-end text-right gap-1.5 shrink-0 pt-0.5" id={`scope-acc-right-${account.id}`}>
                     {getScopeStatusBadge(account.status)}
-                    {getPriorityBadge(account.priority)}
+                    <span className="text-[11px] text-label-3">{planLabel(account.plan)}</span>
                   </div>
                 </motion.div>
               );

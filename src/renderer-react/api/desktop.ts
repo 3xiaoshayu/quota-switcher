@@ -7,6 +7,7 @@ import {
   DesktopCodexStatus,
   DesktopOAuthStatus,
   DesktopUpdateStatus,
+  LogEntry,
   StorageDiagnostic,
 } from '../types';
 
@@ -163,6 +164,8 @@ export interface DashboardState {
   daemonPausedReason?: string | null;
 }
 
+export const DEFAULT_SYNC_INTERVAL_MINUTES = 1;
+export const CURRENT_QUOTA_AUTO_SYNC_STALE_MS = 60 * 1000;
 export const QUOTA_AUTO_SYNC_STALE_MS = 10 * 60 * 1000;
 export const QUOTA_AUTO_SYNC_MIN_GAP_MS = 60 * 1000;
 
@@ -214,12 +217,12 @@ function defaultConfig(): DesktopAutoSwitchConfig {
     secondary_threshold: 30,
     account_scope_mode: 'all',
     selected_account_ids: [],
-    sync_interval_minutes: 10,
+    sync_interval_minutes: DEFAULT_SYNC_INTERVAL_MINUTES,
   };
 }
 
 function defaultDaemonStatus(): DesktopDaemonStatus {
-  return { running: false, syncIntervalMinutes: 10 };
+  return { running: false, syncIntervalMinutes: DEFAULT_SYNC_INTERVAL_MINUTES };
 }
 
 function defaultAuthState(): DesktopAuthState {
@@ -240,7 +243,7 @@ function unverifiedAuthState(message?: string): DesktopAuthState {
     currentAccountId: null,
     matchedAccountId: null,
     officialIdentity: null,
-    message: message || 'Authentication state could not be verified. Background sync is paused until this check succeeds.',
+    message: message || '无法确认官方登录状态，自动同步已暂停',
   };
 }
 
@@ -250,8 +253,39 @@ function defaultOAuthStatus(): DesktopOAuthStatus {
 
 function clampSyncIntervalMinutes(value: unknown): number {
   const number = Number(value);
-  if (!Number.isFinite(number)) return 10;
+  if (!Number.isFinite(number)) return DEFAULT_SYNC_INTERVAL_MINUTES;
   return Math.min(60, Math.max(1, Math.round(number)));
+}
+
+export function quotaAutoSyncStaleMs(
+  account: AccountQuota,
+  syncIntervalMinutes?: number,
+): number {
+  if (!account.isCurrent) return QUOTA_AUTO_SYNC_STALE_MS;
+  return Math.min(
+    clampSyncIntervalMinutes(syncIntervalMinutes) * 60 * 1000,
+    CURRENT_QUOTA_AUTO_SYNC_STALE_MS,
+  );
+}
+
+function isAlertLogType(type: LogEntry['type'] | string): boolean {
+  return type === 'warning' || type === 'error';
+}
+
+export function countUnreadAlertLogs(
+  logs: Array<Pick<LogEntry, 'id' | 'type'>>,
+  lastReadLogId?: string | null,
+): number {
+  let end = logs.length;
+  if (lastReadLogId) {
+    const index = logs.findIndex((log) => log.id === lastReadLogId);
+    end = index < 0 ? logs.length : index;
+  }
+  let count = 0;
+  for (let i = 0; i < end; i++) {
+    if (isAlertLogType(logs[i].type)) count += 1;
+  }
+  return count;
 }
 
 function clampPercent(value: unknown): number | null {
@@ -279,6 +313,12 @@ export function formatDateTime(value: string | number | null | undefined): strin
     minute: '2-digit',
     hour12: false,
   }).format(date);
+}
+
+export function lastCheckCaption(lastChecked: string | null | undefined): string {
+  const text = String(lastChecked || '').trim();
+  if (!text || text === '尚未检查' || text === '未知') return '暂无检查记录';
+  return `最近检查：${text}`;
 }
 
 export function formatDuration(seconds: unknown): string {
@@ -344,10 +384,18 @@ export function avatarGradient(id: string): string {
 }
 
 function planForUi(planType: string | null | undefined): AccountQuota['plan'] {
-  const value = String(planType || '').toLowerCase();
+  const value = String(planType || '').toLowerCase().trim();
   if (value.includes('enterprise') || value.includes('team') || value.includes('business')) return 'Enterprise';
-  if (value.includes('plus') || value.includes('pro')) return 'Pro Plan';
+  if (value.includes('plus')) return 'Plus';
+  if (value.includes('pro')) return 'Pro';
+  if (value === 'go') return 'Go';
   return 'Standard';
+}
+
+export function planLabel(plan: AccountQuota['plan'] | string | null | undefined): string {
+  const name = String(plan || '').trim();
+  if (!name) return 'Plan';
+  return name.endsWith(' Plan') ? name : `${name} Plan`;
 }
 
 function priorityForUi(account: DesktopAccount): AccountQuota['priority'] {
@@ -443,7 +491,116 @@ export function mapAccountForUi(
   };
 }
 
-export function needsQuotaAutoSync(account: AccountQuota): boolean {
+export function isCurrentQuotaSufficient(
+  account: AccountQuota | null | undefined,
+  fiveHourThreshold: number,
+  weeklyThreshold: number,
+): boolean {
+  if (!account) return false;
+  const hourlyPresent = account.fiveHourQuotaPresent !== false;
+  const weeklyPresent = account.weeklyQuotaPresent !== false;
+  const hourly = hourlyPresent && account.fiveHourQuotaRemaining != null
+    ? Number(account.fiveHourQuotaRemaining)
+    : null;
+  const weekly = weeklyPresent && account.weeklyQuotaRemaining != null
+    ? Number(account.weeklyQuotaRemaining)
+    : null;
+  if (hourly == null && weekly == null) return false;
+  if (hourly != null && Number.isFinite(hourly) && hourly <= fiveHourThreshold) return false;
+  if (weekly != null && Number.isFinite(weekly) && weekly <= weeklyThreshold) return false;
+  return true;
+}
+
+export function autoSwitchStatusBanner(options: {
+  hasCurrentAccount: boolean;
+  quotaSufficient: boolean;
+  globalSwitch: boolean;
+  daemonRunning: boolean;
+  pausedReason?: string | null;
+}): { title: string; detail: string; tone: 'ok' | 'warn' | 'neutral' } {
+  if (!options.hasCurrentAccount) {
+    return {
+      title: '未选定当前账号',
+      detail: '请先在账号管理中指定当前账号。',
+      tone: 'neutral',
+    };
+  }
+  if (!options.globalSwitch) {
+    return {
+      title: '自动切号未启用',
+      detail: '全局开关已关闭。启用开关并启动 Daemon 后，将在额度低于阈值时切换账号。',
+      tone: 'neutral',
+    };
+  }
+  if (!options.daemonRunning) {
+    return {
+      title: '自动切号未运行',
+      detail: '全局开关已启用，但 Daemon 已停止，不会自动切换账号。',
+      tone: 'warn',
+    };
+  }
+  const paused = String(options.pausedReason || '').trim();
+  if (paused) {
+    return {
+      title: '自动切号已暂停',
+      detail: /[。.!！]$/.test(paused) ? paused : `${paused}。`,
+      tone: 'warn',
+    };
+  }
+  if (options.quotaSufficient) {
+    return {
+      title: '额度充足，暂不切换',
+      detail: '自动切号已启用。额度低于阈值后将自动切换账号。',
+      tone: 'ok',
+    };
+  }
+  return {
+    title: '当前额度偏低',
+    detail: '自动切号已启用，将在下次检查时尝试切换账号。',
+    tone: 'warn',
+  };
+}
+
+export function quotaWindowSummary(
+  window: 'fiveHour' | 'weekly',
+  account: AccountQuota,
+): { label: string; text: string } {
+  const label = window === 'fiveHour' ? '5 小时' : '周额度';
+  if (account.status === 'SUSPENDED') {
+    return { label, text: '需重新授权后刷新' };
+  }
+  if (window === 'fiveHour' && account.weeklyBlocksFiveHour) {
+    return { label, text: '周额度已用尽' };
+  }
+  const present = window === 'fiveHour' ? account.fiveHourQuotaPresent !== false : account.weeklyQuotaPresent !== false;
+  const remaining = window === 'fiveHour' ? account.fiveHourQuotaRemaining : account.weeklyQuotaRemaining;
+  const total = window === 'fiveHour' ? account.fiveHourQuotaTotal : account.weeklyQuotaTotal;
+  if (account.quotaError && remaining == null) {
+    return { label, text: '额度刷新失败' };
+  }
+  if (!present || remaining == null) {
+    return { label, text: '上游暂未提供' };
+  }
+  const pct = total > 0 ? Math.round((Number(remaining) / total) * 100) : Math.round(Number(remaining));
+  if (!Number.isFinite(pct)) return { label, text: '暂无数据' };
+  if (pct <= 0) return { label, text: '已用尽' };
+  return { label, text: `${pct}%` };
+}
+
+export function quotaScopeCaption(account: AccountQuota): {
+  shared: string | null;
+  rows: Array<{ label: string; text: string }>;
+} {
+  const fiveHour = quotaWindowSummary('fiveHour', account);
+  const weekly = quotaWindowSummary('weekly', account);
+  const sameReason = fiveHour.text === weekly.text && !/^\d+%$/.test(fiveHour.text);
+  if (sameReason) {
+    return { shared: fiveHour.text, rows: [] };
+  }
+  return { shared: null, rows: [fiveHour, weekly] };
+}
+
+export function needsQuotaAutoSync(account: AccountQuota, staleMs = QUOTA_AUTO_SYNC_STALE_MS): boolean {
   // An expired access token with a usable refresh token is repaired inside
   // quota:refresh, so only exclude accounts with no path back to a token.
   if ((account.tokenExpired || account.tokenAccessAvailable === false) && account.tokenRefreshAvailable === false) return false;
@@ -453,7 +610,7 @@ export function needsQuotaAutoSync(account: AccountQuota): boolean {
   if (!account.quotaUpdatedAt || account.quotaError) return true;
   const date = toDate(account.quotaUpdatedAt);
   if (!date) return true;
-  return Date.now() - date.getTime() > QUOTA_AUTO_SYNC_STALE_MS;
+  return Date.now() - date.getTime() > staleMs;
 }
 
 export const desktopApi = {

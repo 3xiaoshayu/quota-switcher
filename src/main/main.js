@@ -76,6 +76,7 @@ function startApplication() {
         encrypt: (plainText) => safeStorage.encryptString(plainText).toString("base64"),
         decrypt: (encoded) => safeStorage.decryptString(Buffer.from(encoded, "base64")),
     });
+    eng.setOpenUrlHandler((url) => shell.openExternal(url));
     eng.initLogger();
     eng.restorePendingOAuth();
 

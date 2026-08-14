@@ -74,6 +74,30 @@ body {
   pointer-events: none;
 }
 
+/*
+ * Dialogs sit over account cards. The default 4.5% wash is for page cards
+ * on #131315; over content it reads as a hole. Keep the hairline, use a
+ * surface-2 tint that still lets the dimmed page show through a little.
+ */
+.glass-card.glass-sheet {
+  background: rgba(36, 36, 38, 0.92);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  backdrop-filter: blur(24px) saturate(150%);
+}
+
+.app-dialog-overlay {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 15rem;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
 /* Inset grouped surface (iOS settings-style rows). */
 .inset-group {
   background: rgba(255, 255, 255, 0.045);

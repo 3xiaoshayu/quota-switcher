@@ -16,8 +16,9 @@ import {
   Link,
   RefreshCw
 } from 'lucide-react';
-import { AccountQuota, DesktopOAuthStatus } from '../types';
-import { avatarGradient, STATUS_DOT, STATUS_TEXT } from '../api/desktop';
+import { AccountQuota, DesktopAuthState, DesktopOAuthStatus } from '../types';
+import { avatarGradient, planLabel, STATUS_DOT, STATUS_TEXT } from '../api/desktop';
+import { toUserMessage } from '../api/user-messages';
 
 interface AccountsProps {
   accounts: AccountQuota[];
@@ -31,6 +32,8 @@ interface AccountsProps {
   onCompleteOAuthManually?: (callbackUrl: string) => void | Promise<void>;
   oauthMode?: boolean;
   oauthStatus?: DesktopOAuthStatus | null;
+  authState?: DesktopAuthState | null;
+  onOpenModal?: () => void;
 }
 
 export default function AccountsView({
@@ -45,6 +48,8 @@ export default function AccountsView({
   onCompleteOAuthManually,
   oauthMode = false,
   oauthStatus = null,
+  authState = null,
+  onOpenModal,
 }: AccountsProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterTab, setFilterTab] = useState<'all' | 'current' | 'warning'>('all');
@@ -60,7 +65,7 @@ export default function AccountsView({
   // New account form state
   const [newEmail, setNewEmail] = useState('');
   const [newName, setNewName] = useState('');
-  const [newPlan, setNewPlan] = useState<'Pro Plan' | 'Standard' | 'Enterprise'>('Pro Plan');
+  const [newPlan, setNewPlan] = useState<AccountQuota['plan']>('Plus');
   const [newPriority, setNewPriority] = useState<AccountQuota['priority']>('Normal');
   const [formError, setFormError] = useState('');
 
@@ -71,17 +76,26 @@ export default function AccountsView({
       setShowAddModal(true);
       setIsAdding(true);
       setReauthorizeId(oauthStatus.targetAccountId || null);
+      setFormError('');
       return;
     }
     if (!isRecoveredOAuth) return;
     setIsRecoveredOAuth(false);
     setIsAdding(false);
-    if (!formError) {
-      setShowAddModal(false);
-      setReauthorizeId(null);
-      setManualCallbackUrl('');
+    if (oauthStatus?.status === 'error' || oauthStatus?.status === 'expired') {
+      setFormError(toUserMessage(oauthStatus.message || '授权未完成'));
+      setShowAddModal(true);
+      return;
     }
-  }, [formError, isRecoveredOAuth, oauthMode, oauthStatus?.pending, oauthStatus?.targetAccountId]);
+    setShowAddModal(false);
+    setReauthorizeId(null);
+    setManualCallbackUrl('');
+    setFormError('');
+  }, [isRecoveredOAuth, oauthMode, oauthStatus?.message, oauthStatus?.pending, oauthStatus?.status, oauthStatus?.targetAccountId]);
+
+  useEffect(() => {
+    if (showAddModal) onOpenModal?.();
+  }, [showAddModal, onOpenModal]);
 
   // Escape closes the add-account modal, except while an OAuth authorization
   // is pending (cancelling that must be an explicit choice).
@@ -157,6 +171,17 @@ export default function AccountsView({
     return true;
   });
 
+  const startReauthorize = (id: string) => {
+    if (!onReauthorizeAccount || oauthStatus?.pending) return;
+    setFormError('');
+    setReauthorizeId(id);
+    void Promise.resolve(onReauthorizeAccount(id)).catch((error) => {
+      setFormError(toUserMessage(error instanceof Error ? error.message : String(error)));
+      setShowAddModal(true);
+      setIsAdding(false);
+    });
+  };
+
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!oauthMode && (!newEmail || !newName)) {
@@ -187,17 +212,17 @@ export default function AccountsView({
       if (reauthorizeId && onReauthorizeAccount) await onReauthorizeAccount(reauthorizeId);
       else await onAddAccount(formAccount);
 
-      onAddLog(oauthMode ? 'OAuth account flow completed.' : `Created new account: ${newEmail} (${newPlan})`, 'success');
+      if (!oauthMode) onAddLog(`已添加账号：${newEmail} (${newPlan})`, 'success');
       setNewEmail('');
       setNewName('');
-      setNewPlan('Pro Plan');
+      setNewPlan('Plus');
       setNewPriority('Normal');
       setFormError('');
       setReauthorizeId(null);
       setManualCallbackUrl('');
       setShowAddModal(false);
     } catch (error) {
-      setFormError(error instanceof Error ? error.message : String(error));
+      setFormError(toUserMessage(error instanceof Error ? error.message : String(error)));
     } finally {
       setIsAdding(false);
     }
@@ -229,7 +254,7 @@ export default function AccountsView({
             whileHover={{ scale: 1.04 }}
             whileTap={{ scale: 0.96 }}
             transition={{ type: 'spring', stiffness: 400, damping: 20 }}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-[10px] bg-accent hover:bg-accent-hi text-white text-[13px] font-medium transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 px-4 py-2 rounded-[10px] bg-accent/15 hover:bg-accent/25 border border-accent/20 text-accent text-[13px] font-medium transition-colors cursor-pointer"
             id="btn-add-account-modal-trigger"
           >
             <Plus className="w-4 h-4" />
@@ -344,7 +369,7 @@ export default function AccountsView({
       )}
 
       {/* Cards Double Column Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6" id="accounts-cards-grid">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch" id="accounts-cards-grid">
         <AnimatePresence initial={false}>
         {filteredAccounts.map((account) => {
           const isCardRefreshing = refreshingIds.has(account.id);
@@ -355,6 +380,10 @@ export default function AccountsView({
             ? null
             : Math.round((account.weeklyQuotaRemaining / account.weeklyQuotaTotal) * 100);
           const hasWarningBanner = account.status === 'WARNING' || account.status === 'EXPIRED' || account.status === 'LOW_QUOTA' || account.status === 'SUSPENDED';
+          const officialAligned = !oauthMode || (
+            authState?.status === 'aligned' &&
+            authState.currentAccountId === account.id
+          );
 
           // Progress colors
           const color5h = fiveHourPct == null
@@ -373,7 +402,7 @@ export default function AccountsView({
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.97 }}
               transition={{ type: 'spring', stiffness: 350, damping: 28 }}
-              className="glass-card rounded-2xl p-6 flex flex-col relative overflow-hidden group"
+              className="glass-card rounded-2xl p-6 flex flex-col relative overflow-hidden group h-full"
               id={`account-manage-card-${account.id}`}
             >
               {/* Highlight glass background on hover */}
@@ -402,23 +431,26 @@ export default function AccountsView({
                         <span className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT[account.status] || 'bg-fill-3'}`} />
                         {STATUS_TEXT[account.status] || account.status}
                       </span>
-                      <span className="text-[11px] text-label-3">{account.plan}</span>
+                      <span className="text-[11px] text-label-3">{planLabel(account.plan)}</span>
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* Red Warning Banner if needed */}
-              {hasWarningBanner && (
-                <div className="mb-5 p-3 bg-danger/12 rounded-[10px] flex items-center gap-2 text-xs text-danger" id={`warning-banner-${account.id}`}>
-                  <AlertTriangle className="w-4 h-4 text-danger shrink-0" />
-                  <span className="font-medium">
-                    {account.warning || (account.weeklyBlocksFiveHour
-                      ? '周额度已用尽，5 小时额度暂不可用。'
-                      : '额度状态需要关注。')}
-                  </span>
-                </div>
-              )}
+              <div
+                className={`mb-5 min-h-[46px] p-3 rounded-[10px] flex items-center gap-2 text-xs ${
+                  hasWarningBanner ? 'bg-danger/12 text-danger' : 'invisible'
+                }`}
+                id={`warning-banner-${account.id}`}
+                aria-hidden={!hasWarningBanner}
+              >
+                <AlertTriangle className="w-4 h-4 text-danger shrink-0" />
+                <span className="font-medium">
+                  {account.warning || (account.weeklyBlocksFiveHour
+                    ? '周额度已用尽，5 小时额度暂不可用。'
+                    : '额度状态需要关注。')}
+                </span>
+              </div>
 
               {/* Token Validity Slider/Progress Info */}
               <div className="space-y-5 flex-1" id={`account-m-details-${account.id}`}>
@@ -489,15 +521,12 @@ export default function AccountsView({
 
                 {account.status === 'SUSPENDED' && onReauthorizeAccount && (
                   <motion.button
-                    onClick={() => {
-                      setReauthorizeId(account.id);
-                      setFormError('');
-                      setShowAddModal(true);
-                    }}
+                    onClick={() => startReauthorize(account.id)}
+                    disabled={!!oauthStatus?.pending}
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.95 }}
                     transition={{ type: 'spring', stiffness: 450, damping: 20 }}
-                    className="flex-1 py-3 px-2 bg-warn/12 hover:bg-warn/20 rounded-[10px] text-warn text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
+                    className="flex-1 py-3 px-2 bg-warn/12 hover:bg-warn/20 rounded-[10px] text-warn text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
                     id={`action-reauthorize-${account.id}`}
                   >
                     <KeyRound className="w-3.5 h-3.5" />
@@ -508,12 +537,37 @@ export default function AccountsView({
                 {/* 2. Switch/Check (Star/Switch) */}
                 {account.isCurrent ? (
                   <motion.button
-                    className="flex-1 py-3 px-2 bg-accent/15 rounded-[10px] text-accent transition-all text-xs font-semibold flex items-center justify-center gap-1.5 cursor-not-allowed"
-                    disabled
+                    onClick={() => {
+                      if (officialAligned) return
+                      void handleSwitchAccount(account.id)
+                    }}
+                    disabled={officialAligned || account.status === 'SUSPENDED' || switchingId !== null || deletingId === account.id}
+                    aria-busy={switchingId === account.id}
+                    title={
+                      account.status === 'SUSPENDED'
+                        ? '该账号需要重新授权后才能重新登录'
+                        : officialAligned
+                          ? '官方已是此账号'
+                          : '将此账号写入官方 Codex 并登录'
+                    }
+                    whileHover={officialAligned ? {} : { scale: 1.02 }}
+                    whileTap={officialAligned ? {} : { scale: 0.95 }}
+                    transition={{ type: 'spring', stiffness: 450, damping: 20 }}
+                    className={`flex-1 py-3 px-2 bg-accent/15 rounded-[10px] text-accent transition-all text-xs font-semibold flex items-center justify-center gap-1.5 ${
+                      officialAligned
+                        ? 'cursor-not-allowed'
+                        : 'hover:bg-accent/25 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40'
+                    }`}
                     id={`action-current-${account.id}`}
                   >
-                    <Star className="w-3.5 h-3.5 fill-accent" />
-                    当前
+                    <Star className={`w-3.5 h-3.5 fill-accent ${switchingId === account.id ? 'animate-pulse' : ''}`} />
+                    {switchingId === account.id
+                      ? '登录中...'
+                      : account.status === 'SUSPENDED'
+                        ? '不可用'
+                        : officialAligned
+                          ? '当前'
+                          : '重新登录 Codex'}
                   </motion.button>
                 ) : (
                   <motion.button
@@ -567,7 +621,7 @@ export default function AccountsView({
       <AnimatePresence>
       {showAddModal && (
           <motion.div
-            className="fixed inset-0 bg-black/55 z-50 flex items-center justify-center p-4"
+            className="app-dialog-overlay bg-black/55 z-50"
             id="add-account-modal-overlay"
             initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -602,108 +656,92 @@ export default function AccountsView({
                 {reauthorizeId ? '重新授权账号' : '添加配置账号'}
               </h3>
               <p className="text-xs text-label-2 mb-6 font-sans">
-                {oauthMode ? '将打开 OpenAI OAuth 授权页面，邮箱、套餐与凭证会在授权完成后自动读取。' : '为 Codex 账号管理器配置一个新的接入凭证和配额检测对象。'}
+                {oauthMode
+                  ? (reauthorizeId
+                    ? '将打开登录授权页面。请用这个账号登录，完成后会自动回来。'
+                    : '将打开登录授权页面，邮箱、套餐与凭证会在授权完成后自动读取。')
+                  : '为 Codex 账号管理器配置一个新的接入凭证和配额检测对象。'}
               </p>
 
               <form onSubmit={handleAddSubmit} className="space-y-5" id="add-account-form">
-                {/* Email input */}
-                <div className="space-y-2">
-                  <label className="text-[13px] font-medium text-label-2 block ml-1">
-                    电子邮箱
-                  </label>
-                  <div className="relative">
-                    <span className="absolute inset-y-0 left-0 flex items-center pl-4 text-label-3">
-                      <Mail className="w-4 h-4" />
-                    </span>
-                    <input
-                      type="text"
-                      value={oauthMode ? '' : newEmail}
-                      onChange={(e) => setNewEmail(e.target.value)}
-                      placeholder={oauthMode ? '由 OAuth 自动读取' : 'user@example.com'}
-                      readOnly={oauthMode}
-                      className="w-full pl-11 pr-4 py-3 bg-fill border border-sep rounded-xl text-white placeholder-label-3 focus:outline-none focus:ring-2 focus:ring-accent/60 transition-all font-sans text-xs"
-                      id="input-add-email"
-                    />
-                  </div>
-                </div>
-
-                {/* Name input */}
-                <div className="space-y-2">
-                  <label className="text-[13px] font-medium text-label-2 block ml-1">
-                    展示名称
-                  </label>
-                  <div className="relative">
-                    <span className="absolute inset-y-0 left-0 flex items-center pl-4 text-label-3">
-                      <User className="w-4 h-4" />
-                    </span>
-                    <input
-                      type="text"
-                      value={oauthMode ? '' : newName}
-                      onChange={(e) => setNewName(e.target.value)}
-                      placeholder={oauthMode ? '由账号邮箱自动生成' : 'My Operations Node'}
-                      readOnly={oauthMode}
-                      className="w-full pl-11 pr-4 py-3 bg-fill border border-sep rounded-xl text-white placeholder-label-3 focus:outline-none focus:ring-2 focus:ring-accent/60 transition-all font-sans text-xs"
-                      id="input-add-name"
-                    />
-                  </div>
-                </div>
-
-                {/* Plan select */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-[13px] font-medium text-label-2 block ml-1">
-                      {oauthMode ? '套餐（OAuth 自动识别）' : '套餐'}
-                    </label>
-                    {oauthMode ? (
-                      <div
-                        className="w-full px-4 py-3 bg-fill rounded-[10px] text-label-3 text-xs"
-                        id="input-add-plan"
-                        role="status"
-                      >
-                        授权完成后自动识别
+                {!oauthMode && (
+                  <>
+                    <div className="space-y-2">
+                      <label className="text-[13px] font-medium text-label-2 block ml-1">
+                        电子邮箱
+                      </label>
+                      <div className="relative">
+                        <span className="absolute inset-y-0 left-0 flex items-center pl-4 text-label-3">
+                          <Mail className="w-4 h-4" />
+                        </span>
+                        <input
+                          type="text"
+                          value={newEmail}
+                          onChange={(e) => setNewEmail(e.target.value)}
+                          placeholder="user@example.com"
+                          className="w-full pl-11 pr-4 py-3 bg-fill border border-sep rounded-xl text-white placeholder-label-3 focus:outline-none focus:ring-2 focus:ring-accent/60 transition-all font-sans text-xs"
+                          id="input-add-email"
+                        />
                       </div>
-                    ) : (
-                      <select
-                        value={newPlan}
-                        onChange={(e) => setNewPlan(e.target.value as any)}
-                        className="w-full px-4 py-3 bg-fill rounded-[10px] text-label-2 focus:outline-none focus:ring-2 focus:ring-accent/60 transition-all text-xs"
-                        id="input-add-plan"
-                      >
-                        <option value="Pro Plan">Pro Plan</option>
-                        <option value="Standard">Standard</option>
-                        <option value="Enterprise">Enterprise</option>
-                      </select>
-                    )}
-                  </div>
+                    </div>
 
-                  {/* Priority Select */}
-                  <div className="space-y-2">
-                    <label className="text-[13px] font-medium text-label-2 block ml-1">
-                      {oauthMode ? '轮转优先级（自动计算）' : '轮转优先级'}
-                    </label>
-                    {oauthMode ? (
-                      <div
-                        className="w-full px-4 py-3 bg-fill rounded-[10px] text-label-3 text-xs"
-                        id="input-add-priority"
-                        role="status"
-                      >
-                        根据实际套餐自动计算
+                    <div className="space-y-2">
+                      <label className="text-[13px] font-medium text-label-2 block ml-1">
+                        展示名称
+                      </label>
+                      <div className="relative">
+                        <span className="absolute inset-y-0 left-0 flex items-center pl-4 text-label-3">
+                          <User className="w-4 h-4" />
+                        </span>
+                        <input
+                          type="text"
+                          value={newName}
+                          onChange={(e) => setNewName(e.target.value)}
+                          placeholder="My Operations Node"
+                          className="w-full pl-11 pr-4 py-3 bg-fill border border-sep rounded-xl text-white placeholder-label-3 focus:outline-none focus:ring-2 focus:ring-accent/60 transition-all font-sans text-xs"
+                          id="input-add-name"
+                        />
                       </div>
-                    ) : (
-                      <select
-                        value={newPriority}
-                        onChange={(e) => setNewPriority(e.target.value as any)}
-                        className="w-full px-4 py-3 bg-fill rounded-[10px] text-label-2 focus:outline-none focus:ring-2 focus:ring-accent/60 transition-all text-xs"
-                        id="input-add-priority"
-                      >
-                        <option value="Ultra">Ultra</option>
-                        <option value="High">High</option>
-                        <option value="Normal">Normal</option>
-                        <option value="Low">Low</option>
-                      </select>
-                    )}
-                  </div>
-                </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-[13px] font-medium text-label-2 block ml-1">
+                          套餐
+                        </label>
+                        <select
+                          value={newPlan}
+                          onChange={(e) => setNewPlan(e.target.value as any)}
+                          className="w-full px-4 py-3 bg-fill rounded-[10px] text-label-2 focus:outline-none focus:ring-2 focus:ring-accent/60 transition-all text-xs"
+                          id="input-add-plan"
+                        >
+                          <option value="Plus">Plus</option>
+                          <option value="Pro">Pro</option>
+                          <option value="Go">Go</option>
+                          <option value="Standard">Standard</option>
+                          <option value="Enterprise">Enterprise</option>
+                        </select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="text-[13px] font-medium text-label-2 block ml-1">
+                          轮转优先级
+                        </label>
+                        <select
+                          value={newPriority}
+                          onChange={(e) => setNewPriority(e.target.value as any)}
+                          className="w-full px-4 py-3 bg-fill rounded-[10px] text-label-2 focus:outline-none focus:ring-2 focus:ring-accent/60 transition-all text-xs"
+                          id="input-add-priority"
+                        >
+                          <option value="Ultra">Ultra</option>
+                          <option value="High">High</option>
+                          <option value="Normal">Normal</option>
+                          <option value="Low">Low</option>
+                        </select>
+                      </div>
+                    </div>
+                  </>
+                )}
 
                 {formError && (
                   <p className="text-xs text-danger font-semibold bg-danger/12 p-3 rounded-[10px] text-center break-words">
@@ -714,7 +752,7 @@ export default function AccountsView({
                 {isAdding && oauthMode && (
                   <div className="space-y-3 rounded-xl border border-sep bg-fill p-4">
                     <p className="text-xs text-label-2">
-                      正在等待浏览器回调。如果浏览器无法自动返回，请粘贴完整的回调网址。
+                      请在浏览器完成授权，完成后会自动回来。如果浏览器没有自动跳回，请粘贴完整的回调网址。
                     </p>
                     <div className="flex gap-2">
                       <input
@@ -729,7 +767,7 @@ export default function AccountsView({
                         onClick={() => {
                           setFormError('');
                           Promise.resolve(onCompleteOAuthManually?.(manualCallbackUrl))
-                            .catch(error => setFormError(error instanceof Error ? error.message : String(error)));
+                            .catch(error => setFormError(toUserMessage(error instanceof Error ? error.message : String(error))));
                         }}
                         disabled={!manualCallbackUrl || !onCompleteOAuthManually}
                         className="p-2.5 rounded-xl bg-accent/12 border border-accent/20 text-accent disabled:opacity-40"
@@ -742,7 +780,7 @@ export default function AccountsView({
                   </div>
                 )}
 
-                <div className="flex gap-3 pt-4 border-t border-sep">
+                <div className={`flex gap-3 ${oauthMode && !isAdding && !formError ? '' : 'pt-4 border-t border-sep'}`}>
                   <button
                     type="button"
                     onClick={() => {
@@ -755,14 +793,14 @@ export default function AccountsView({
                     }}
                     className="flex-1 py-3 bg-fill hover:bg-fill-2 text-white rounded-xl text-xs font-semibold cursor-pointer transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {isAdding ? '取消 OAuth' : '取消'}
+                    {isAdding ? '取消授权' : '取消'}
                   </button>
                   <button
                     type="submit"
                     disabled={isAdding}
                     className="flex-1 py-3 bg-accent/12 hover:bg-accent/20 border border-accent/20 text-accent hover:text-accent-hi rounded-xl text-xs font-bold transition-all cursor-pointer"
                   >
-                    {isAdding ? '正在打开授权...' : oauthMode ? '打开 OAuth 授权' : '添加配置'}
+                    {isAdding ? '等待浏览器授权...' : oauthMode ? '打开登录授权' : '添加配置'}
                   </button>
                 </div>
               </form>

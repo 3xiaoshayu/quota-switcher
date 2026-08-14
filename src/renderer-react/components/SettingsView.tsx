@@ -11,7 +11,6 @@ import {
   RotateCw, 
   ShieldCheck, 
   Github, 
-  FileText,
   Activity,
   Zap,
   FolderOpen
@@ -74,13 +73,13 @@ export default function SettingsView({
   const handleBatchVerify = async () => {
     if (isVerifyingTokens) return;
     setIsVerifyingTokens(true);
-    onAddLog('开始批量校验账号 Token...', 'info');
+    onAddLog('正在检查各账号令牌...', 'info');
     try {
       if (onBatchVerifyTokens) {
         await onBatchVerifyTokens();
       } else {
         await new Promise((resolve) => setTimeout(resolve, 1500));
-        onAddLog(`批量 Token 校验完成，共 ${accountCount} 个账号。`, 'success');
+        onAddLog(`令牌检查完成，共 ${accountCount} 个账号。`, 'success');
       }
     } catch (error) {
       onAddLog(error instanceof Error ? error.message : String(error), 'error');
@@ -92,19 +91,19 @@ export default function SettingsView({
   const handleDetectClient = () => {
     if (onDetectClient) {
       setIsDetectingClient(true);
-      onAddLog('正在检测 Codex 客户端环境...', 'info');
+      onAddLog('正在检测官方 Codex...', 'info');
       onDetectClient()
-        .then(() => onAddLog('客户端环境检测已更新。', 'success'))
+        .then(() => onAddLog('官方 Codex 检测已更新。', 'success'))
         .catch((error) => onAddLog(error instanceof Error ? error.message : String(error), 'error'))
         .finally(() => setIsDetectingClient(false));
       return;
     }
 
     setIsDetectingClient(true);
-    onAddLog('正在检测 Codex 客户端环境...', 'info');
+    onAddLog('正在检测官方 Codex...', 'info');
     setTimeout(() => {
       setIsDetectingClient(false);
-      onAddLog('已检测到客户端环境。', 'success');
+      onAddLog('已检测到官方 Codex。', 'success');
     }, 1200);
   };
 
@@ -162,7 +161,7 @@ export default function SettingsView({
                 </div>
                 <div className="flex flex-col text-left">
                   <h3 className="font-bold text-label text-sm tracking-wide font-sans">Daemon 服务</h3>
-                  <span className="text-[11px] text-label-2 mt-0.5">控制后台同步守护进程</span>
+                  <span className="text-[11px] text-label-2 mt-0.5">定期续登录，并检查是否切号</span>
                 </div>
               </div>
 
@@ -206,8 +205,11 @@ export default function SettingsView({
                   }`} />
                   <span className="font-medium text-sm text-label">{daemonState.status === 'Running' ? '运行中' : '已停止'}</span>
                 </div>
-                {daemonState.pausedReason && (
+                {daemonState.status === 'Running' && daemonState.pausedReason && (
                   <span className="block text-[10px] text-warn">已暂停：{daemonState.pausedReason}</span>
+                )}
+                {daemonState.status !== 'Running' && settings.globalSwitch && (
+                  <span className="block text-[10px] text-warn">自动切号已启用，但 Daemon 已停止</span>
                 )}
                 {daemonState.lastError && (
                   <span className="block max-w-xs truncate text-[10px] text-danger" title={daemonState.lastError}>
@@ -218,45 +220,43 @@ export default function SettingsView({
 
               {/* Sync Interval Slider */}
               <div className="space-y-2 text-left" id="daemon-interval-box">
-                <div className="flex items-center justify-between text-[12px] font-medium text-label-3">
-                  <span>同步间隔（分钟）</span>
-                  <span className="text-label tabular-nums text-xs">{daemonState.syncInterval}</span>
+                <div className="flex items-center justify-between text-[12px] font-medium" id="daemon-interval-labels">
+                  <span className="text-label-3">检查间隔</span>
+                  <span className="text-accent font-bold tabular-nums text-xs">{daemonState.syncInterval} 分钟</span>
                 </div>
-                <div className="flex items-center gap-4">
-                  <input
-                    type="range"
-                    min="1"
-                    max="60"
-                    value={daemonState.syncInterval}
-                    onChange={(e) => onPreviewSyncInterval(Number(e.target.value))}
-                    onPointerUp={(e) => onUpdateSyncInterval(Number(e.currentTarget.value))}
-                    onKeyUp={(e) => onUpdateSyncInterval(Number(e.currentTarget.value))}
-                    onBlur={(e) => onUpdateSyncInterval(Number(e.currentTarget.value))}
-                    className="flex-1 h-1 bg-fill-2 rounded-lg appearance-none cursor-pointer accent-accent outline-none"
-                    id="sync-interval-slider"
-                  />
-                  <span className="text-label font-bold tabular-nums text-sm">{daemonState.syncInterval}</span>
-                </div>
+                <input
+                  type="range"
+                  min="1"
+                  max="60"
+                  value={daemonState.syncInterval}
+                  onChange={(e) => onPreviewSyncInterval(Number(e.target.value))}
+                  onPointerUp={(e) => onUpdateSyncInterval(Number(e.currentTarget.value))}
+                  onKeyUp={(e) => onUpdateSyncInterval(Number(e.currentTarget.value))}
+                  onBlur={(e) => onUpdateSyncInterval(Number(e.currentTarget.value))}
+                  className="w-full h-1 bg-fill-2 rounded-lg appearance-none cursor-pointer accent-accent outline-none"
+                  id="sync-interval-slider"
+                />
+                <p className="text-[11px] text-label-3">不影响界面额度刷新</p>
               </div>
             </div>
           </div>
 
-          {/* Card 2: Codex Client environment */}
+          {/* Card 2: Official Codex install check */}
           <div className="glass-card rounded-2xl p-6 flex items-center justify-between" id="card-client-detect">
             <div className="flex items-center gap-3.5">
               <div className="w-10 h-10 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent">
                 <Monitor className="w-4 h-4" />
               </div>
               <div className="flex flex-col text-left">
-                <h3 className="font-bold text-label text-sm tracking-wide font-sans">Codex Client</h3>
-                <span className="text-[11px] text-label-2 mt-0.5">客户端环境检测</span>
+                <h3 className="font-bold text-label text-sm tracking-wide font-sans">官方 Codex</h3>
+                <span className="text-[11px] text-label-2 mt-0.5">检测本机是否已安装微软商店版</span>
               </div>
             </div>
 
             <div className="flex items-center gap-4" id="client-detect-actions">
               <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-label-2">
                 <span className={`w-1.5 h-1.5 rounded-full ${settings.clientDetected ? 'bg-ok' : 'bg-danger'}`} />
-                Microsoft Store 版本{settings.clientDetected ? '已检测' : '未找到'}
+                {settings.clientDetected ? '已安装' : '未安装'}
               </span>
 
               <motion.button
@@ -285,8 +285,8 @@ export default function SettingsView({
                   <Key className="w-4 h-4" />
                 </div>
                 <div className="flex flex-col text-left">
-                  <h3 className="font-bold text-label text-sm tracking-wide font-sans">Tokens 令牌</h3>
-                  <span className="text-[11px] text-label-2 mt-0.5">凭证完整性校验</span>
+                  <h3 className="font-bold text-label text-sm tracking-wide font-sans">登录令牌</h3>
+                  <span className="text-[11px] text-label-2 mt-0.5">检查各账号令牌是否仍可使用</span>
                 </div>
               </div>
             </div>
@@ -294,7 +294,7 @@ export default function SettingsView({
             <div className="flex items-end justify-between" id="tokens-body">
               <div className="flex flex-col text-left" id="tokens-stat-box">
                 <span className="text-[28px] font-semibold text-label tracking-tight tabular-nums">{accountCount}</span>
-                <span className="text-[12px] text-label-3 font-medium mt-1">管理账号总数</span>
+                <span className="text-[12px] text-label-3 font-medium mt-1">已管理账号</span>
               </div>
 
               <motion.button
@@ -307,7 +307,7 @@ export default function SettingsView({
                 id="btn-batch-login-check"
               >
                 <ShieldCheck className="w-3.5 h-3.5 text-accent" />
-                {isVerifyingTokens ? '检查中...' : '批量登录检查'}
+                {isVerifyingTokens ? '检查中...' : '检查令牌'}
               </motion.button>
             </div>
           </div>
@@ -418,19 +418,6 @@ export default function SettingsView({
           >
             <Github className="w-3.5 h-3.5" />
             GitHub
-          </motion.a>
-          <motion.a
-            href={`${repositoryUrl}#readme`}
-            target="_blank"
-            rel="noopener noreferrer"
-            whileHover={{ scale: 1.04 }}
-            whileTap={{ scale: 0.96 }}
-            transition={{ type: 'spring', stiffness: 450, damping: 20 }}
-            className="px-5 py-3 rounded-xl bg-fill hover:bg-fill-2 text-label-2 hover:text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-all border border-sep"
-            id="btn-documentation"
-          >
-            <FileText className="w-3.5 h-3.5" />
-            文档
           </motion.a>
         </div>
       </div>

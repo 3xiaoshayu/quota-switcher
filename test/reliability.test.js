@@ -676,6 +676,58 @@ test("auto-switch revalidates failed candidates and excludes accounts requiring 
   assert.notEqual(switchedTo, revoked.id);
 });
 
+test("auto-switch reports but does not switch when the global switch is off", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "disabled-current@example.com", "acct-disabled-current", "disabled-current");
+  const candidate = await addAccount(engine, "disabled-candidate@example.com", "acct-disabled-candidate", "disabled-candidate");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 0,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  candidate.quota = {
+    hourly_remaining_percentage: 90,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 90,
+    weekly_window_present: true,
+  };
+  candidate.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+
+  const switchModule = require("../engine/switch");
+  const originalSwitch = switchModule.doSwitch;
+  let switchedTo = null;
+  switchModule.doSwitch = async account => {
+    switchedTo = account.id;
+    return { account };
+  };
+  t.after(() => {
+    switchModule.doSwitch = originalSwitch;
+  });
+
+  const result = await engine.autoSwitchTick({
+    enabled: false,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+
+  assert.equal(result.switched, false);
+  assert.equal(result.reason, "disabled");
+  assert.equal(switchedTo, null);
+  assert.equal(engine.loadIdx().current_account_id, current.id);
+});
+
 test("daemon pauses before network work when official authentication conflicts", async t => {
   const { engine } = freshEngine(t);
   const account = await addAccount(engine, "daemon@example.com", "acct-daemon", "daemon");
@@ -953,6 +1005,46 @@ test("switch transaction commits on success and restores state when launch fails
   assert.equal(engine.inspectAuthState().status, "aligned");
 });
 
+test("aligned current account skips rewrite unless switch is forced", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "current@example.com", "acct-current-reapply", "current-reapply");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+
+  let running = true;
+  let launchCount = 0;
+  engine.setSwitchRuntimeForTests({
+    assertInstalled() {},
+    listProcesses: () => running ? [{ name: "Codex.exe", pid: 99 }] : [],
+    gracefulClose: () => { running = false; return true; },
+    forceClose: () => { running = false; return true; },
+    launch: () => {
+      running = true;
+      launchCount += 1;
+    },
+    sleep() {},
+  });
+
+  const skipped = await engine.doSwitch(engine.loadAcct(current.id));
+  assert.equal(skipped.already, true);
+  assert.equal(launchCount, 0);
+  assert.equal(engine.inspectAuthState().status, "aligned");
+
+  const forced = await engine.doSwitch(engine.loadAcct(current.id), { force: true });
+  assert.equal(forced.already, false);
+  assert.equal(launchCount, 1);
+  assert.equal(engine.inspectAuthState().status, "aligned");
+
+  const reapplied = await engine.reapplyManagedAuth(current.id);
+  assert.equal(reapplied.already, false);
+  assert.equal(launchCount, 2);
+  assert.equal(engine.loadIdx().current_account_id, current.id);
+  assert.equal(engine.inspectAuthState().status, "aligned");
+});
+
 test("process enumeration failure blocks credential switching", async t => {
   const { engine } = freshEngine(t);
   const current = await addAccount(engine, "enumeration-current@example.com", "acct-enumeration-current", "enumeration-current");
@@ -1009,6 +1101,69 @@ test("official Codex launcher does not treat the explorer activation exit code a
   assert.equal(options.detached, true);
   assert.equal(options.stdio, "ignore");
   assert.equal(unrefCalled, true);
+});
+
+test("Codex start verification waits for the GUI process and rejects a crash window", async t => {
+  const { engine } = freshEngine(t);
+  const helperOnly = [{
+    name: "codex.exe",
+    pid: 10,
+    executablePath: "C:\\Program Files\\WindowsApps\\OpenAI.Codex_1\\app\\resources\\codex.exe",
+  }];
+  const crashGui = [{
+    name: "ChatGPT.exe",
+    pid: 11,
+    executablePath: "C:\\Program Files\\WindowsApps\\OpenAI.Codex_1\\app\\ChatGPT.exe",
+    windowTitle: "ChatGPT 意外停止",
+  }];
+  const healthyGui = [{
+    name: "ChatGPT.exe",
+    pid: 12,
+    executablePath: "C:\\Program Files\\WindowsApps\\OpenAI.Codex_1\\app\\ChatGPT.exe",
+    windowTitle: "ChatGPT",
+  }];
+
+  let ticks = 0;
+  engine.setSwitchRuntimeForTests({
+    assertInstalled() {},
+    listProcesses: () => {
+      ticks += 1;
+      return ticks < 3 ? helperOnly : healthyGui;
+    },
+    launch() {},
+    sleep() {},
+  });
+  assert.equal(await engine.startCodex({ timeoutMs: 2000 }), true);
+  assert.ok(ticks >= 3);
+
+  engine.setSwitchRuntimeForTests({
+    assertInstalled() {},
+    listProcesses: () => crashGui,
+    launch() {},
+    sleep() {},
+  });
+  await assert.rejects(engine.startCodex({ timeoutMs: 400 }), /crash recovery window/i);
+});
+
+test("OAuth browser open uses the injected opener and keeps the authorize query string", async t => {
+  const { engine } = freshEngine(t);
+  const opened = [];
+  engine.setOpenUrlHandler((url) => {
+    opened.push(url);
+  });
+  const pendingPromise = engine.oauthLoginFlow({
+    exchangeCode: async () => tokens("browser@example.com", "acct-browser", "browser"),
+  });
+  const startedAt = Date.now();
+  while (!opened.length && Date.now() - startedAt < 2000) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.equal(opened.length, 1);
+  assert.match(opened[0], /^https:\/\/auth\.openai\.com\/oauth\/authorize\?/);
+  assert.match(opened[0], /response_type=code/);
+  assert.match(opened[0], /client_id=/);
+  assert.equal(engine.cancelOAuth(), true);
+  await assert.rejects(pendingPromise, /cancelled/);
 });
 
 test("OAuth pending state is encrypted, recoverable, cancellable, and target mismatch is saved separately", async t => {
@@ -1087,6 +1242,39 @@ test("OAuth manual callback waits for completion and honors cancellation", async
   assert.equal(second.engine.listAccts().some(account => account.email === "cancelled@example.com"), false);
 });
 
+test("OAuth callback page waits for token save and uses Chinese copy", async t => {
+  const { engine, codec } = freshEngine(t);
+  const pendingPromise = engine.oauthLoginFlow({
+    openBrowser: false,
+    exchangeCode: async () => tokens("callback-page@example.com", "acct-callback-page", "callback"),
+  });
+  const pendingPath = require("../engine/oauth").PENDING_PATH;
+  const startedAt = Date.now();
+  while (!fs.existsSync(pendingPath) && Date.now() - startedAt < 2000) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  const envelope = JSON.parse(fs.readFileSync(pendingPath, "utf8"));
+  const pending = JSON.parse(codec.decrypt(envelope.protected_payload));
+  const callbackUrl = `${pending.redirectUri}?code=oauth-code&state=${pending.state}`;
+
+  let html = "";
+  const fetchStarted = Date.now();
+  while (Date.now() - fetchStarted < 4000) {
+    try {
+      const response = await fetch(callbackUrl);
+      html = await response.text();
+      break;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+  assert.match(html, /授权已保存/);
+  assert.match(html, /可以回到 Codex 账号管理器/);
+  assert.equal(html.includes("Authorization received"), false);
+  const result = await pendingPromise;
+  assert.equal(result.account.email, "callback-page@example.com");
+});
+
 test("persistent logger removes credentials and personal email from messages", t => {
   freshEngine(t);
   const { sanitizeMessage } = require("../engine/logger");
@@ -1115,6 +1303,12 @@ test("auto-switch config normalization clamps user-edited values", t => {
   assert.equal(cfg.account_scope_mode, "selected");
   assert.deepEqual(cfg.selected_account_ids, ["42", "codex_valid"]);
   assert.equal(cfg.sync_interval_minutes, 1);
+});
+
+test("auto-switch default sync interval is one minute", t => {
+  freshEngine(t);
+  const { loadAutoSwitchCfg } = require("../engine/config-manager");
+  assert.equal(loadAutoSwitchCfg().sync_interval_minutes, 1);
 });
 
 test("config resolves CODEX_HOME with quotes stripped and manager override first", t => {

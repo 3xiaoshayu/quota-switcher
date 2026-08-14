@@ -6,7 +6,7 @@ const TOKEN_URL = "https://auth.openai.com/oauth/token";
 const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const SCOPES = "openid profile email offline_access";
 const CALLBACK_PORT = Number(process.env.CODEX_MANAGER_CALLBACK_PORT || 1455);
-const REFRESH_MINUTES = 10;
+const REFRESH_MINUTES = 1;
 const TOKEN_SKEW_SEC = 300;
 const REFRESH_TIMEOUT = 25000;
 

@@ -157,6 +157,12 @@ async function autoSwitchTick(cfg, options = {}) {
   if (!best) return { switched: false, reason: "no_best_candidate" };
 
   if (isCancelled()) return cancelled();
+  // Manual "check now" still inspects quota, but the global switch is the
+  // only permission to actually change the official account.
+  if (!cfg.enabled) {
+    return { switched: false, reason: "disabled", metrics };
+  }
+
   return withAccountLocks(["__switch__", curId, best.id], async () => {
     if (isCancelled()) return cancelled();
     const latestIdx = loadIdx();

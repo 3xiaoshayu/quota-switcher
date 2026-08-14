@@ -1,6 +1,7 @@
 import { Users, Gauge, Shuffle, Settings, RefreshCw, HelpCircle } from 'lucide-react';
 import { motion } from 'motion/react';
 import { DaemonState } from '../types';
+import appIcon from '../assets/app-icon.png';
 
 interface SidebarProps {
   activeTab: 'accounts' | 'quotas' | 'autoswitch' | 'settings';
@@ -32,18 +33,23 @@ export default function Sidebar({
       {/* Top Profile / Daemon Area */}
       <div className="app-drag px-5 pt-6 pb-5" id="sidebar-profile-header">
         <div className="flex items-center gap-3" id="sidebar-manager-profile">
-          <div className="relative" id="sidebar-avatar-wrapper">
-            <div className="w-10 h-10 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent font-semibold text-lg">
-              C
-            </div>
-            <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-base ${
-              daemonState.status === 'Running' ? 'bg-ok' : 'bg-danger'
-            }`} />
-          </div>
+          <img
+            src={appIcon}
+            alt=""
+            className="w-10 h-10 rounded-[10px] object-cover shrink-0"
+            id="sidebar-avatar-wrapper"
+          />
           <div className="flex flex-col select-none" id="sidebar-profile-text">
             <span className="font-semibold text-label text-[13px]">Codex Manager</span>
-            <span className="text-[11px] text-label-3 mt-0.5">
-              {daemonState.status === 'Running' ? 'Daemon 运行中' : 'Daemon 已停止'}
+            <span className="flex items-center gap-1.5 text-[11px] text-label-3 mt-0.5">
+              <span className={`w-1.5 h-1.5 rounded-full ${
+                daemonState.status === 'Running'
+                  ? (daemonState.pausedReason ? 'bg-warn' : 'bg-ok')
+                  : 'bg-danger'
+              }`} />
+              {daemonState.status === 'Running'
+                ? (daemonState.pausedReason ? 'Daemon 已暂停' : 'Daemon 运行中')
+                : 'Daemon 已停止'}
             </span>
           </div>
         </div>

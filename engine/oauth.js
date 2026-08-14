@@ -22,6 +22,7 @@ const PENDING_PATH = path.join(DATA_DIR, "codex_oauth_pending.json");
 const OAUTH_TTL_MS = 5 * 60 * 1000;
 let active = null;
 let lastStatus = { status: "idle", message: null, targetAccountId: null, result: null };
+let openUrlHandler = null;
 
 function publicAccountResult(result) {
   if (!result?.account) return null;
@@ -51,9 +52,35 @@ function getOAuthStatus() {
   };
 }
 
+function setOpenUrlHandler(handler) {
+  if (handler == null) {
+    openUrlHandler = null;
+    return;
+  }
+  if (typeof handler !== "function") {
+    throw new TypeError("OAuth URL opener must be a function");
+  }
+  openUrlHandler = handler;
+}
+
 function openBrowser(url) {
+  const target = String(url || "");
+  if (!/^https:\/\//i.test(target)) {
+    logWarn("Refused to open a non-HTTPS OAuth URL");
+    return;
+  }
+  logInfo("Opening the OAuth authorization page in the browser");
+  if (openUrlHandler) {
+    Promise.resolve(openUrlHandler(target)).catch((error) => {
+      logWarn(`Could not open OAuth browser: ${error.message}`);
+    });
+    return;
+  }
   try {
-    const child = cp.spawn("explorer.exe", [url], {
+    // explorer.exe treats ? and = in URLs as folder-search wildcards, so the
+    // OAuth authorize link never reaches the browser. FileProtocolHandler
+    // goes through ShellExecute and keeps the query string.
+    const child = cp.spawn("rundll32.exe", ["url.dll,FileProtocolHandler", target], {
       detached: true,
       stdio: "ignore",
       windowsHide: true,
@@ -134,10 +161,18 @@ function buildAuthorizationUrl(pending) {
   return `${AUTH_URL}?${params.toString()}`;
 }
 
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function callbackHtml(success, message) {
   const color = success ? "#3fb950" : "#f85149";
-  const title = success ? "Authorization received" : "Authorization failed";
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>body{font-family:Segoe UI,sans-serif;display:grid;place-items:center;height:100vh;margin:0;background:#0d1117;color:#c9d1d9}.card{padding:40px;border:1px solid #30363d;border-radius:14px;background:#161b22;text-align:center;max-width:420px}h1{color:${color};font-size:22px}p{color:#8b949e}</style></head><body><div class="card"><h1>${title}</h1><p>${message}</p></div></body></html>`;
+  const title = success ? "授权已保存" : "授权失败";
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>body{font-family:Segoe UI,sans-serif;display:grid;place-items:center;height:100vh;margin:0;background:#0d1117;color:#c9d1d9}.card{padding:40px;border:1px solid #30363d;border-radius:14px;background:#161b22;text-align:center;max-width:420px}h1{color:${color};font-size:22px}p{color:#8b949e}</style></head><body><div class="card"><h1>${title}</h1><p>${escapeHtml(message)}</p></div></body></html>`;
 }
 
 async function exchangeCode(pending, code) {
@@ -318,18 +353,20 @@ function settleActive(error, result) {
 
 async function handleAuthorizationCode(pending, code) {
   const session = active;
-  if (!session || session.settled || session.processing || session.pending !== pending) return;
+  if (!session || session.settled || session.processing || session.pending !== pending) return false;
   session.processing = true;
   try {
     const tokens = await session.exchangeCode(pending, code);
-    if (active !== session || session.settled) return;
+    if (active !== session || session.settled) return false;
     const result = await upsert(tokens, { targetAccountId: pending.targetAccountId });
-    if (active !== session || session.settled) return;
+    if (active !== session || session.settled) return false;
     settleActive(null, result);
+    return true;
   } catch (error) {
-    if (active !== session || session.settled) return;
+    if (active !== session || session.settled) return false;
     logError(`OAuth token exchange failed: ${error.message}`);
     settleActive(error);
+    return false;
   }
 }
 
@@ -350,12 +387,22 @@ function startPendingSession(pending, options = {}) {
       const state = url.searchParams.get("state");
       if (!code || state !== pending.state) {
         response.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
-        response.end(callbackHtml(false, "The callback was missing data or its state did not match."));
+        response.end(callbackHtml(false, "回调缺少数据，或状态不匹配。"));
         return;
       }
-      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      response.end(callbackHtml(true, "You can return to Codex Account Manager."));
-      void handleAuthorizationCode(pending, code);
+      void handleAuthorizationCode(pending, code).then((ok) => {
+        if (response.writableEnded) return;
+        const success = !!ok && lastStatus.status === "completed";
+        response.writeHead(success ? 200 : 400, { "Content-Type": "text/html; charset=utf-8" });
+        response.end(callbackHtml(
+          success,
+          success ? "可以回到 Codex 账号管理器查看结果。" : "授权未能完成，请回到管理器重试。",
+        ));
+      }).catch(() => {
+        if (response.writableEnded) return;
+        response.writeHead(500, { "Content-Type": "text/html; charset=utf-8" });
+        response.end(callbackHtml(false, "授权未能完成，请回到管理器重试。"));
+      });
     });
 
     active = {
@@ -441,5 +488,6 @@ module.exports = {
   cancelOAuth,
   completeOAuthManually,
   getOAuthStatus,
+  setOpenUrlHandler,
   upsert,
 };
