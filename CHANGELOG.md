@@ -5,6 +5,23 @@ All notable changes to Codex Account Manager are documented here.
 The project follows [Semantic Versioning](https://semver.org/) once a stable
 release is published.
 
+## [0.1.0-beta.17] - 2026-08-14
+
+- Redraw the app icon as a restrained cyan-to-violet twisted loop on a black
+  squircle. The same mark is used for the window, taskbar, installer, sidebar,
+  and login screen; the letter C and chip glyph are gone.
+- Open the OAuth page through the system HTTPS handler instead of explorer.exe,
+  which was dropping the query string. Callback pages and in-app errors are in
+  Chinese.
+- Treat ChatGPT.exe as the official Codex GUI, close it through the window
+  first, and fail a switch if a crash-recovery window appears instead of a
+  working session.
+- Keep "check now" from switching accounts when the global auto-switch toggle
+  is off.
+- Clarify auto-switch and settings copy, and send Beta's "Open release page"
+  to GitHub Releases. Official-login conflicts use a quiet banner instead of
+  blocking the whole window.
+
 ## [0.1.0-beta.16] - 2026-08-12
 
 A full visual redesign following Apple's dark-mode design language.
