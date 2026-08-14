@@ -90,6 +90,18 @@ official Codex login differs from its managed current account. Choose
 **Adopt official account** to import and use the official login, or
 **Reapply managed account** to restore the manager-selected identity.
 
+## The window closed but the app is still running
+
+The title-bar close button hides the main window to the tray. The auto-switch
+daemon keeps running. Left-click the tray icon, or choose **Open window**, to
+show the window again. To quit, right-click the tray icon and choose **Exit**.
+
+## The desktop quota lens does not appear
+
+Open it from the tray menu item **Open desktop quota**, or from
+**Settings > Desktop quota > Open**. If no accounts are saved yet, the lens
+shows an empty state until you add one.
+
 ## Account files appear missing
 
 Open **Settings > Logs** and inspect the latest diagnostic file. Malformed JSON

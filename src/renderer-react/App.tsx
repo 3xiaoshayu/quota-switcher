@@ -108,6 +108,10 @@ function isFloatRenderer() {
   return window.location.hash.replace(/^#\/?/, '') === 'float';
 }
 
+function wantsDesktopLoginPreview() {
+  return new URLSearchParams(window.location.search).has('desktopLogin');
+}
+
 function DashboardApp() {
   // Authentication state - persistence in localStorage for robustness
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
@@ -1081,7 +1085,7 @@ function DashboardApp() {
   const showAuthBanner = desktopBridgeAvailable && authState.requiresResolution && authBannerDismissedKey !== authBannerKey;
 
   if (!isAuthenticated) {
-    return <Login onLogin={handleLogin} userEmail={userEmail} appVersion={settings.version} showDemoShortcuts={!desktopBridgeAvailable} />;
+    return <Login onLogin={handleLogin} userEmail={userEmail} appVersion={settings.version} showDemoShortcuts={!desktopBridgeAvailable && !wantsDesktopLoginPreview()} />;
   }
 
   return (
@@ -1272,7 +1276,10 @@ function DashboardApp() {
                   accountCount={accounts.length}
                   repositoryUrl={appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}
                   onOpenLogs={desktopBridgeAvailable ? async () => { await desktopApi.openLogs(); } : undefined}
-                  onShowFloatWindow={desktopBridgeAvailable ? async () => { await desktopApi.showFloatWindow(); } : undefined}
+                  onShowFloatWindow={async () => {
+                    if (!desktopBridgeAvailable) return;
+                    await desktopApi.showFloatWindow();
+                  }}
                 />
               )}
                 </>

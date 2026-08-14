@@ -9,6 +9,7 @@ import {
   quotaStroke,
 } from '../api/desktop';
 import { toUserMessage } from '../api/user-messages';
+import { previewAccountsForLens } from '../data/mockData';
 import './FloatLens.css';
 
 const RING_SIZE = 188;
@@ -129,6 +130,13 @@ export default function FloatLens() {
 
   const loadAccounts = useCallback(async () => {
     if (!hasDesktopBridge()) {
+      const previewAccounts = previewAccountsForLens();
+      setAccounts(previewAccounts);
+      setViewedId((current) => {
+        if (current && previewAccounts.some((account) => account.id === current)) return current;
+        const live = previewAccounts.find((account) => account.isCurrent);
+        return live?.id || previewAccounts[0]?.id || null;
+      });
       setLoading(false);
       return;
     }

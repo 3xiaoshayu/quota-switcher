@@ -183,7 +183,7 @@ export const INITIAL_SETTINGS: SystemSettings = {
   weeklyThreshold: 5,
   clientDetected: true,
   updateChannel: 'Beta Channel',
-  version: '0.1.0-beta.16',
+  version: '0.1.0-beta.21',
   latestStatus: 'Up to date',
 };
 
@@ -219,3 +219,35 @@ export const INITIAL_LOGS: LogEntry[] = [
     type: 'error',
   },
 ];
+
+function remainingAsPercent(
+  remaining: number | null,
+  total: number,
+  present?: boolean,
+): number | null {
+  if (present === false) return null;
+  if (remaining == null || !Number.isFinite(remaining)) return null;
+  if (!total || total === 100) return Math.round(remaining);
+  return Math.max(0, Math.min(100, Math.round((remaining / total) * 100)));
+}
+
+export const previewAccountsForLens = (): AccountQuota[] => {
+  const now = Date.now();
+  return INITIAL_ACCOUNTS.map((account) => ({
+    ...account,
+    fiveHourQuotaRemaining: remainingAsPercent(
+      account.fiveHourQuotaRemaining,
+      account.fiveHourQuotaTotal,
+      account.fiveHourQuotaPresent,
+    ),
+    fiveHourQuotaTotal: 100,
+    weeklyQuotaRemaining: remainingAsPercent(
+      account.weeklyQuotaRemaining,
+      account.weeklyQuotaTotal,
+      account.weeklyQuotaPresent,
+    ),
+    weeklyQuotaTotal: 100,
+    fiveHourResetAt: account.fiveHourQuotaPresent === false ? null : now + (3 * 60 * 60 * 1000),
+    weeklyResetAt: account.weeklyQuotaPresent === false ? null : now + (4 * 24 * 60 * 60 * 1000),
+  }));
+};
