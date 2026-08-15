@@ -5,6 +5,17 @@ All notable changes to Codex Account Manager are documented here.
 The project follows [Semantic Versioning](https://semver.org/) once a stable
 release is published.
 
+## [0.1.0-beta.23] - 2026-08-16
+
+- Tell banned, reauthorization, usage-limited, and unclear quota states
+  apart. A ban is only recorded from Codex usage deactivation codes.
+- Check leftover access tokens for bans or remaining quota without burning
+  the refresh token, and keep auto-switch from treating a limited or dead
+  current account as healthy.
+- Treat a refresh-side `account_disabled` as “needs reauthorization”, not a
+  ban, and align the Chinese copy on account, quota, auto-switch, and the
+  desktop lens.
+
 ## [0.1.0-beta.22] - 2026-08-16
 
 - Fix the desktop quota lens: it crashed on first paint, then hid behind the
