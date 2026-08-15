@@ -8,6 +8,7 @@ import {
   Play, 
   Square, 
   CheckCircle, 
+  AlertCircle,
   RotateCw, 
   ShieldCheck, 
   Github, 
@@ -115,7 +116,6 @@ export default function SettingsView({
       setIsCheckingUpdates(true);
       onAddLog('正在检查更新...', 'info');
       onCheckUpdates()
-        .then(() => onAddLog('更新检查完成。', 'success'))
         .catch((error) => onAddLog(error instanceof Error ? error.message : String(error), 'error'))
         .finally(() => setIsCheckingUpdates(false));
       return;
@@ -137,6 +137,19 @@ export default function SettingsView({
       .catch((error) => onAddLog(error instanceof Error ? error.message : String(error), 'error'))
       .finally(() => setIsInstallingUpdate(false));
   };
+
+  const latestStatusText = settings.latestStatus || '未知';
+  const latestStatusFailed = /失败|错误/.test(latestStatusText);
+  const latestStatusBusy = /检查中/.test(latestStatusText);
+  const latestStatusMuted = /未知|禁用|手动/.test(latestStatusText);
+  const LatestStatusIcon = latestStatusFailed ? AlertCircle : latestStatusBusy ? Activity : CheckCircle;
+  const latestStatusIconClass = latestStatusFailed
+    ? 'text-danger'
+    : latestStatusBusy
+      ? 'text-accent'
+      : latestStatusMuted
+        ? 'text-label-3'
+        : 'text-ok';
 
   return (
     <div className="flex-1 p-8 overflow-y-auto select-none" id="settings-view-container">
@@ -212,7 +225,7 @@ export default function SettingsView({
                 )}
                 {daemonState.lastError && (
                   <span className="block max-w-xs truncate text-[10px] text-danger" title={daemonState.lastError}>
-                    {daemonState.lastError}
+                    最近检查：{daemonState.lastError}
                   </span>
                 )}
               </div>
@@ -360,8 +373,8 @@ export default function SettingsView({
               <div className="flex items-center justify-between text-xs font-semibold px-1 pb-1" id="updates-version-labels">
                 <span className="text-label-2">最新状态</span>
                 <span className="text-label font-medium flex items-center gap-1.5">
-                  <CheckCircle className="w-3.5 h-3.5 text-ok" />
-                  {settings.latestStatus}
+                  <LatestStatusIcon className={`w-3.5 h-3.5 ${latestStatusIconClass}`} />
+                  {latestStatusText}
                 </span>
               </div>
 

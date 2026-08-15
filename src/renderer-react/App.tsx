@@ -115,6 +115,7 @@ function wantsDesktopLoginPreview() {
 function DashboardApp() {
   // Authentication state - persistence in localStorage for robustness
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    if (desktopBridgeAvailable && !wantsDesktopLoginPreview()) return true;
     const saved = localStorage.getItem('codex_auth_status');
     return saved === 'true';
   });
@@ -327,7 +328,7 @@ function DashboardApp() {
           await desktopApi.refreshQuota(account.id, false);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          addLogEntry(`${account.email}: ${message}`, 'warning');
+          addLogEntry(`${account.email}: ${toUserMessage(message)}`, 'info');
         }
       }
       await loadDashboardState(false);
@@ -405,6 +406,9 @@ function DashboardApp() {
     loadDashboardState(true).then((snapshot) => {
       if (!disposed && snapshot) queueQuotaAutoSync(snapshot.accounts);
     });
+    const authRetryTimer = window.setTimeout(() => {
+      if (!disposed) loadDashboardState(false);
+    }, 5000);
 
     const syncTimer = window.setInterval(() => {
       if (!disposed) queueQuotaAutoSync(accountsRef.current);
@@ -440,6 +444,7 @@ function DashboardApp() {
 
     return () => {
       disposed = true;
+      window.clearTimeout(authRetryTimer);
       window.clearInterval(syncTimer);
       unsubscribe();
     };
@@ -507,21 +512,25 @@ function DashboardApp() {
   useEffect(() => {
     if (!isAuthenticated || !desktopBridgeAvailable || !oauthStatus?.pending) return;
     let disposed = false;
-    let seenEnginePending = false;
+    let failCount = 0;
     const pollOAuthStatus = async () => {
       try {
         const status = await desktopApi.getOAuthStatus();
+        failCount = 0;
         if (disposed) return;
         if (status.pending) {
-          seenEnginePending = true;
           setOAuthStatus(status);
           return;
         }
-        if (!seenEnginePending) return;
         setOAuthStatus(status);
         await loadDashboardState(false);
         reportOAuthFinished(status);
-      } catch {}
+      } catch {
+        failCount += 1;
+        if (!disposed && (failCount === 5 || failCount % 15 === 0)) {
+          addToast('授权状态读取失败，可点取消后重试。', 'error');
+        }
+      }
     };
     void pollOAuthStatus();
     const timer = window.setInterval(() => {
@@ -531,7 +540,7 @@ function DashboardApp() {
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [isAuthenticated, loadDashboardState, oauthStatus?.pending, reportOAuthFinished]);
+  }, [addToast, isAuthenticated, loadDashboardState, oauthStatus?.pending, reportOAuthFinished]);
 
   // Global Refresh All trigger
   const handleRefreshAll = async () => {
@@ -596,8 +605,15 @@ function DashboardApp() {
         await runAccountOperation(id, () => desktopApi.refreshQuota(id));
         const snapshot = await loadDashboardState(false);
         if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-        addToast(`${account?.email || id} 额度已刷新`, 'success');
-        addLogEntry(`账号额度已刷新：${account?.email || id}`, 'success');
+        const fresh = snapshot?.accounts.find(item => item.id === id);
+        if (fresh?.status === 'SYNC_FAILED') {
+          const detail = fresh.warning || '额度暂时没刷到，登录还在。';
+          addToast(detail, 'warning');
+          addLogEntry(`${account?.email || id}：${detail}`, 'warning');
+        } else {
+          addToast(`${account?.email || id} 额度已刷新`, 'success');
+          addLogEntry(`账号额度已刷新：${account?.email || id}`, 'success');
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         addToast(message, 'error');
@@ -778,7 +794,14 @@ function DashboardApp() {
   };
 
   const handleCompleteOAuthManually = async (callbackUrl: string) => {
-    await desktopApi.completeOAuthManually(callbackUrl);
+    try {
+      await desktopApi.completeOAuthManually(callbackUrl);
+    } finally {
+      const status = await desktopApi.getOAuthStatus();
+      setOAuthStatus(status);
+      await loadDashboardState(false);
+      reportOAuthFinished(status);
+    }
   };
 
   const handleResolveAuthConflict = async (action: 'adopt' | 'reapply') => {
@@ -835,8 +858,13 @@ function DashboardApp() {
   // Switch Current Active Account
   const handleSwitchCurrentAccount = async (id: string) => {
     if (desktopBridgeAvailable) {
+      if (oauthStatusRef.current?.pending) {
+        addToast('已有授权正在进行，请先完成或取消。', 'warning');
+        return;
+      }
       const selected = accountsRef.current.find(a => a.id === id);
       const isCurrent = !!selected?.isCurrent;
+      addToast(isCurrent ? '正在重新写入官方 Codex，请稍候。' : '正在切换账号，请稍候。', 'info');
       try {
         await runAccountOperation(id, () => (
           isCurrent ? desktopApi.reapplyManagedAccount(id) : desktopApi.switchAccount(id)
@@ -875,6 +903,10 @@ function DashboardApp() {
   const handleToggleAccountSelection = (id: string) => {
     const selected = accounts.find(a => a.id === id);
     if (desktopBridgeAvailable) {
+      if (autoSwitchConfigRef.current.account_scope_mode !== 'selected') {
+        addToast('当前是全部账号。要缩小范围，请先切到「指定账号」。', 'info');
+        return;
+      }
       const currentSelected = selectedAccountIdsRef.current;
       const nextSelected = currentSelected.includes(id)
         ? currentSelected.filter(item => item !== id)
@@ -947,7 +979,12 @@ function DashboardApp() {
       ...autoSwitchConfigRef.current,
       enabled: !autoSwitchConfigRef.current.enabled,
     };
-    await saveAutoSwitchConfig(nextConfig);
+    const enabled = nextConfig.enabled;
+    const saved = await saveAutoSwitchConfig(nextConfig);
+    if (saved) {
+      addToast(`全局切号已${enabled ? '启用' : '禁用'}`, enabled ? 'success' : 'warning');
+      addLogEntry(`全局自动切号已${enabled ? '启用' : '禁用'}。`, 'info');
+    }
   };
 
   const handlePreviewThreshold = (type: '5h' | 'weekly', val: number) => {
@@ -988,7 +1025,8 @@ function DashboardApp() {
         : '';
       const message = `令牌检查完成：${passed}/${total} 通过${reauthorizationText}，${failed.length} 个失败。`;
       addToast(message, 'warning');
-      throw new Error(message);
+      addLogEntry(message, 'warning');
+      return;
     }
     if (needsReauthorization.length > 0) {
       const message = `令牌检查完成：${passed}/${total} 通过，${needsReauthorization.length} 个需重新授权。`;
@@ -1136,7 +1174,7 @@ function DashboardApp() {
         {/* Navigation Utilities Header */}
         <Header 
           currentUserEmail={userEmail}
-          onLogout={handleLogout}
+          onLogout={desktopBridgeAvailable && !wantsDesktopLoginPreview() ? undefined : handleLogout}
           unreadNotificationsCount={showNotifications ? 0 : countUnreadAlertLogs(logs, lastReadLogId)}
           onToggleNotifications={() => setShowNotifications(!showNotifications)}
         />
@@ -1279,6 +1317,7 @@ function DashboardApp() {
                   onShowFloatWindow={async () => {
                     if (!desktopBridgeAvailable) return;
                     await desktopApi.showFloatWindow();
+                    addToast('桌面额度已打开。看不见时点右上角图钉置顶。', 'info');
                   }}
                 />
               )}
@@ -1392,6 +1431,11 @@ function DashboardApp() {
 
               {/* Logs stream */}
               <div className="flex-1 overflow-y-auto space-y-4 pr-1 scrollbar-thin">
+                {logs.length === 0 && (
+                  <p className="px-1 pt-8 text-center text-xs text-label-3" id="notification-empty-state">
+                    暂无动态
+                  </p>
+                )}
                 {logs.map((log) => {
                   let color = "text-accent";
                   if (log.type === 'success') color = "text-ok";
@@ -1440,7 +1484,7 @@ function DashboardApp() {
               </button>
 
               <HelpCircle className="w-12 h-12 text-accent mb-4" />
-              <h3 className="text-lg font-bold tracking-tight mb-2 font-sans">客户服务 / Technical Support</h3>
+              <h3 className="text-lg font-bold tracking-tight mb-2 font-sans">客户服务</h3>
               <p className="text-xs text-label-2 leading-relaxed mb-6 font-sans">
                 如果您在使用 Codex 账号管理器时遇到配额验证、客户端连接或服务问题，请通过 GitHub Issues 提交可复现信息。
               </p>
@@ -1448,10 +1492,16 @@ function DashboardApp() {
               <div className="mb-6" id="support-channels-list">
                 <div className="p-3 bg-white/[0.06] rounded-xl flex items-center justify-between text-xs font-semibold">
                   <span className="text-label-2">GitHub Issues</span>
-                  <a className="text-accent" href={`${appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}/issues`} target="_blank" rel="noopener noreferrer">Open issue tracker</a>
+                  <button
+                    type="button"
+                    className="text-accent cursor-pointer"
+                    onClick={() => void handleOpenExternal(`${appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}/issues`)}
+                  >
+                    打开 Issues
+                  </button>
                 </div>
                 <p className="mt-2 px-1 text-[11px] text-label-3 leading-5">
-                  支持方式：Community / Best effort
+                  支持方式：社区协助，尽力而为
                 </p>
               </div>
 
@@ -1492,26 +1542,26 @@ function DashboardApp() {
               </button>
 
               <Activity className="w-12 h-12 text-accent mb-4" />
-              <h3 className="text-lg font-bold tracking-tight mb-2 font-sans">版本更新详情 / Release Notes</h3>
+              <h3 className="text-lg font-bold tracking-tight mb-2 font-sans">版本更新详情</h3>
               <p className="text-xs text-label-2 mb-6 font-sans">
                 当前版本 <strong>{settings.version.startsWith('v') ? settings.version : `v${settings.version}`}</strong>。
               </p>
 
               <div className="space-y-4 max-h-48 overflow-y-auto pr-2 mb-6 text-xs text-label-2 leading-relaxed font-sans" id="changelog-list">
                 <div>
-                  <h4 className="font-bold text-white mb-1">发布说明校准 (Release Notes)</h4>
+                  <h4 className="font-bold text-white mb-1">本轮打磨</h4>
                   <ul className="list-disc pl-4 space-y-1 text-label-2 text-[11px]">
-                    <li>修正应用内 Release Notes 的过时说明，与当前版本保持一致。</li>
-                    <li>保留批量 Token 检查的真实反馈：区分重新授权与真正失败。</li>
-                    <li>通知日志继续记录每次检查结果，便于回看操作是否执行。</li>
+                    <li>刷新额度失败时不再提示成功；授权中途卡住可以取消或重试。</li>
+                    <li>配额页和账号页的「需要处理」口径一致；时长和套餐副标题改为中文。</li>
+                    <li>切号前检测官方 Codex 不再卡住界面；悬浮窗高度会记住。</li>
                   </ul>
                 </div>
                 <div>
-                  <h4 className="font-bold text-white mb-1">已验证修复 (Verified Fixes)</h4>
+                  <h4 className="font-bold text-white mb-1">已验证修复</h4>
                   <ul className="list-disc pl-4 space-y-1 text-label-2 text-[11px]">
                     <li>添加账号弹窗不再显示误导性的套餐和优先级下拉框。</li>
                     <li>套餐与轮转优先级继续由 OAuth 授权后的账号状态自动识别。</li>
-                    <li>本版本已重新视觉验证并发布 Windows 安装包与 zip 包。</li>
+                    <li>网络失败会显示短中文说明，而不是 Electron 报错原文。</li>
                   </ul>
                 </div>
               </div>

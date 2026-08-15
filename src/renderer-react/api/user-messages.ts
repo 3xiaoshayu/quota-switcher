@@ -26,6 +26,8 @@ const RULES: Array<{ test: RegExp; to: string }> = [
   { test: /managed current account is not available/i, to: '管理器当前账号不可用' },
   { test: /Managed current account could not be read/i, to: '无法读取管理器当前账号' },
   { test: /Account does not exist/i, to: '账号不存在' },
+  { test: /Switch to another account before deleting/i, to: '请先切到其他账号，再删除当前账号' },
+  { test: /refresh_token needs re-authorization/i, to: '刷新令牌已失效，请重新授权' },
   { test: /already has an operation in progress/i, to: '该账号已有操作正在进行，请稍候重试' },
   { test: /Desktop bridge is not available/i, to: '桌面服务未连接，请通过应用窗口打开' },
   { test: /OAuth token exchange failed/i, to: '换取登录令牌失败' },
@@ -42,22 +44,36 @@ const RULES: Array<{ test: RegExp; to: string }> = [
   { test: /Enter the complete OAuth callback URL/i, to: '请输入完整的授权回调地址' },
   { test: /missing code or has an invalid state/i, to: '回调地址缺少授权码或状态不正确' },
   { test: /Token refresh failed/i, to: 'Token 刷新失败' },
+  { test: /Authentication state is busy|Read authentication state timed out/i, to: '正在确认官方登录，稍后会自动刷新' },
+  { test: /quota refresh is waiting for retry|quota_retry_pending/i, to: '额度刷新稍后会自动重试' },
+  { test: /^HTTP \d+/i, to: '上游暂时不可用，请稍后刷新额度' },
   { test: /^auth_conflict$/i, to: '官方登录不一致' },
   { test: /^stopped$/i, to: '已停止' },
   { test: /^disabled$/i, to: '全局开关已关闭，不会切号' },
 ]
 
+const NETWORK_FAILURE = '额度暂时没刷到，登录还在。请检查代理后再刷新，或稍后再试。'
+
 function hasChinese(text: string): boolean {
   return /[\u4e00-\u9fff]/.test(text)
+}
+
+function isQuotaNetworkFailure(text: string): boolean {
+  return /网络请求失败/.test(text)
+    || /ERR_CONNECTION|ETIMEDOUT|ECONNRESET|ENOTFOUND|net::ERR_/i.test(text)
+    || /Electron network failed|Node network failed/i.test(text)
 }
 
 export function toUserMessage(raw: unknown): string {
   const text = String(raw || '').trim()
   if (!text) return FALLBACK
+  if (isQuotaNetworkFailure(text)) return NETWORK_FAILURE
   for (const rule of RULES) {
     if (rule.test.test(text)) return rule.to
   }
-  if (hasChinese(text)) return text
+  if (hasChinese(text) && !/Electron:|Node:|net::|ETIMEDOUT|ERR_CONNECTION/i.test(text)) {
+    return text
+  }
   return FALLBACK
 }
 

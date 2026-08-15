@@ -58,4 +58,12 @@ if (latestUrl !== latestPath) {
 const blockmap = `${latestPath}.blockmap`;
 assertFile(blockmap);
 
+const unpackedDir = path.join(dist, "win-unpacked");
+if (fs.existsSync(unpackedDir)) {
+  const packagedIcon = path.join(unpackedDir, "resources", "icon.ico");
+  if (!fs.existsSync(packagedIcon)) {
+    fail("Packaged extraResources icon.ico is missing from win-unpacked/resources/");
+  }
+}
+
 console.log(`Release artifacts OK: ${expected.join(", ")}`);

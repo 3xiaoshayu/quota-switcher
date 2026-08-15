@@ -4,6 +4,7 @@ const fs = require("fs");
 const { registerIpcHandlers } = require("./ipc-handlers");
 const { createUpdateService } = require("./updater");
 const { createAppTray } = require("./tray");
+const { resolveAppIcon } = require("./app-icon");
 const { createFloatWindowController } = require("./float-window");
 const { writeJsonAtomic } = require(path.resolve(__dirname, "..", "..", "engine", "atomic-file"));
 
@@ -110,6 +111,7 @@ function startApplication() {
 
     const updateService = createUpdateService({ app, BrowserWindow });
     const savedWindowState = loadWindowState();
+    const appIcon = resolveAppIcon();
     const win = new BrowserWindow({
         width: savedWindowState?.bounds?.width || 1440,
         height: savedWindowState?.bounds?.height || 900,
@@ -122,7 +124,7 @@ function startApplication() {
         title: "Codex Account Manager",
         backgroundColor: "#0f172a",
         show: false,
-        icon: path.join(__dirname, "..", "..", "resources", "icon.ico"),
+        icon: appIcon,
         webPreferences: {
             preload: path.join(__dirname, "..", "preload", "preload.js"),
             contextIsolation: true, nodeIntegration: false, sandbox: true,
@@ -151,7 +153,7 @@ function startApplication() {
         trustWebContents,
         rendererHtml: path.join(__dirname, "..", "renderer-dist", "index.html"),
         preloadPath: path.join(__dirname, "..", "preload", "preload.js"),
-        iconPath: path.join(__dirname, "..", "..", "resources", "icon.ico"),
+        iconPath: appIcon,
         isQuitting: () => isQuitting,
         writeJsonAtomic,
     });

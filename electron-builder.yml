@@ -12,6 +12,10 @@ directories:
   output: dist
   buildResources: resources
 
+extraResources:
+  - from: resources/icon.ico
+    to: icon.ico
+
 win:
   target:
     - target: nsis
@@ -53,6 +57,7 @@ files:
   - src/**/*
   - engine/**/*
   - package.json
+  - resources/icon.ico
   - "!**/*.map"
   - "!src/renderer-react/**"
   - "!src/renderer/**"

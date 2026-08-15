@@ -1,12 +1,8 @@
 const { Tray, Menu, nativeImage } = require("electron");
-const path = require("path");
-
-function trayIconPath() {
-    return path.join(__dirname, "..", "..", "resources", "icon.ico");
-}
+const { resolveAppIcon } = require("./app-icon");
 
 function createAppTray({ onShow, onShowFloat, onQuit }) {
-    const iconFile = trayIconPath();
+    const iconFile = resolveAppIcon();
     const image = nativeImage.createFromPath(iconFile);
     const tray = new Tray(image.isEmpty() ? iconFile : image);
     tray.setToolTip("Codex Account Manager");

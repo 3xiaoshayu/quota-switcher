@@ -37,6 +37,12 @@ if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(pkg.version)) {
   process.exit(1);
 }
 
+const builderYml = fs.readFileSync(path.join(root, "electron-builder.yml"), "utf8");
+if (!/from:\s*resources\/icon\.ico/.test(builderYml) || !/to:\s*icon\.ico/.test(builderYml)) {
+  console.error("electron-builder.yml must copy resources/icon.ico into extraResources as icon.ico");
+  process.exit(1);
+}
+
 if (process.env.GITHUB_REF_TYPE === "tag") {
   const expectedTag = `v${pkg.version}`;
   if (process.env.GITHUB_REF_NAME !== expectedTag) {

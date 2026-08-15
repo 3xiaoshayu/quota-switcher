@@ -2,7 +2,7 @@ export interface AccountQuota {
   id: string;
   name: string;
   email: string;
-  status: 'ACTIVE' | 'WARNING' | 'EXPIRED' | 'LOW_QUOTA' | 'READY' | 'SUSPENDED';
+  status: 'ACTIVE' | 'WARNING' | 'EXPIRED' | 'LOW_QUOTA' | 'READY' | 'SUSPENDED' | 'SYNC_FAILED';
   fiveHourQuotaRemaining: number | null;
   fiveHourQuotaTotal: number;
   weeklyQuotaRemaining: number | null;

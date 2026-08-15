@@ -409,10 +409,15 @@ export default function AutoSwitchView({
               return (
                 <motion.div
                   key={account.id}
-                  onClick={() => onToggleAccountSelection(account.id)}
+                  onClick={() => {
+                    if (scopeMode !== 'selected') return;
+                    onToggleAccountSelection(account.id);
+                  }}
                   whileTap={{ scale: 0.99 }}
                   transition={{ type: 'spring', stiffness: 450, damping: 24 }}
-                  className={`row-sep flex items-start justify-between gap-4 py-4 cursor-pointer group ${
+                  className={`row-sep flex items-start justify-between gap-4 py-4 group ${
+                    scopeMode === 'selected' ? 'cursor-pointer' : 'cursor-default'
+                  } ${
                     isChecked ? '' : 'opacity-55 hover:opacity-80'
                   }`}
                   id={`scope-acc-card-${account.id}`}

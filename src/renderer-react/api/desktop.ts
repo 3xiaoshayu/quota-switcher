@@ -10,6 +10,7 @@ import {
   LogEntry,
   StorageDiagnostic,
 } from '../types';
+import { toUserMessage } from './user-messages';
 
 type ApiResponse<T> = { success: true; data: T } | { success: false; error?: string };
 
@@ -212,6 +213,28 @@ async function captureResponse<T>(
   }
 }
 
+const DASHBOARD_OPTIONAL_TIMEOUT_MS = 2500;
+
+async function timedCapture<T>(
+  task: () => Promise<ApiResponse<T>>,
+  label: string,
+  timeoutMs = DASHBOARD_OPTIONAL_TIMEOUT_MS,
+): Promise<ApiResponse<T>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      captureResponse(task, label),
+      new Promise<ApiResponse<T>>((resolve) => {
+        timer = setTimeout(() => {
+          resolve({ success: false, error: `${label} timed out` });
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function optionalData<T>(response: ApiResponse<T>, fallback: T): T {
   return response?.success === true ? response.data : fallback;
 }
@@ -242,7 +265,22 @@ function defaultAuthState(): DesktopAuthState {
   };
 }
 
+function isBusyAuthMessage(message?: string): boolean {
+  const text = String(message || '');
+  return /timed out|busy/i.test(text);
+}
+
 function unverifiedAuthState(message?: string): DesktopAuthState {
+  if (isBusyAuthMessage(message)) {
+    return {
+      status: 'unknown',
+      requiresResolution: false,
+      currentAccountId: null,
+      matchedAccountId: null,
+      officialIdentity: null,
+      message: '正在确认官方登录，稍后会自动刷新',
+    };
+  }
   return {
     status: 'unknown',
     requiresResolution: true,
@@ -394,14 +432,19 @@ export function formatDuration(seconds: unknown): string {
   if (value <= 0) return '已过期';
   if (value < 3600) {
     const minutes = Math.max(1, Math.ceil(value / 60));
-    return minutes >= 60 ? '1h 0m' : `${minutes}m`;
+    return minutes >= 60 ? '1 小时' : `${minutes} 分钟`;
   }
   if (value < 86400) {
     const hours = Math.floor(value / 3600);
     const minutes = Math.ceil((value % 3600) / 60);
-    return minutes >= 60 ? `${hours + 1}h 0m` : `${hours}h ${minutes}m`;
+    if (minutes >= 60) return `${hours + 1} 小时`;
+    if (minutes <= 0) return `${hours} 小时`;
+    return `${hours} 小时 ${minutes} 分钟`;
   }
-  return `${Math.floor(value / 86400)}d ${Math.floor((value % 86400) / 3600)}h`;
+  const days = Math.floor(value / 86400);
+  const hours = Math.floor((value % 86400) / 3600);
+  if (hours <= 0) return `${days} 天`;
+  return `${days} 天 ${hours} 小时`;
 }
 
 function formatReset(value: string | number | null | undefined): string {
@@ -431,6 +474,7 @@ export const STATUS_DOT: Record<string, string> = {
   READY: 'bg-teal',
   WARNING: 'bg-warn',
   LOW_QUOTA: 'bg-warn',
+  SYNC_FAILED: 'bg-warn',
   EXPIRED: 'bg-danger',
   SUSPENDED: 'bg-danger',
 };
@@ -440,9 +484,16 @@ export const STATUS_TEXT: Record<string, string> = {
   READY: '就绪',
   WARNING: '注意',
   LOW_QUOTA: '额度偏低',
+  SYNC_FAILED: '同步失败',
   EXPIRED: '已耗尽',
   SUSPENDED: '需重新授权',
 };
+
+export function needsHandling(account: Pick<AccountQuota, 'status'>): boolean {
+  return account.status === 'SUSPENDED'
+    || account.status === 'EXPIRED'
+    || account.status === 'SYNC_FAILED';
+}
 
 export function avatarGradient(id: string): string {
   let hash = 0;
@@ -480,7 +531,7 @@ function statusForUi(
   const tokenUnusable = (account.token_status?.expired || account.token_status?.accessAvailable === false)
     && account.token_status?.refreshAvailable === false;
   if (tokenUnusable) return 'SUSPENDED';
-  if (account.quota_error) return 'WARNING';
+  if (account.quota_error) return 'SYNC_FAILED';
   const hasPresence = account.quota?.hourly_window_present !== undefined || account.quota?.weekly_window_present !== undefined;
   const hourlyPresent = !hasPresence || account.quota?.hourly_window_present === true;
   const weeklyPresent = !hasPresence || account.quota?.weekly_window_present === true;
@@ -511,7 +562,9 @@ export function mapAccountForUi(
   const hasPresence = account.quota?.hourly_window_present !== undefined || account.quota?.weekly_window_present !== undefined;
   const hourlyPresent = !hasPresence || account.quota?.hourly_window_present === true;
   const weeklyPresent = !hasPresence || account.quota?.weekly_window_present === true;
-  const quotaError = account.quota_error?.message || account.quota_error?.code || null;
+  const quotaError = account.quota_error?.message || account.quota_error?.code
+    ? toUserMessage(account.quota_error?.message || account.quota_error?.code)
+    : null;
   const tokenStatus = account.token_status || {};
   const expirySeconds = typeof tokenStatus.expiryDate === 'number' ? tokenStatus.expiryDate : null;
   const issuedSeconds = typeof tokenStatus.issuedAt === 'number' ? tokenStatus.issuedAt : null;
@@ -549,7 +602,7 @@ export function mapAccountForUi(
     weeklyResetAt: account.quota?.weekly_reset_time ?? null,
     warning: account.requires_reauth
       ? '该账号需要重新授权后才能刷新 Token。'
-      : account.reauth_reason || quotaError,
+      : (account.reauth_reason ? toUserMessage(account.reauth_reason) : quotaError),
     isCurrent: !!currentAccount && currentAccount.id === account.id,
     quotaUpdatedAt: account.usage_updated_at,
     quotaNextRetryAt: account.quota_next_retry_at,
@@ -689,28 +742,34 @@ export const desktopApi = {
 
   async loadDashboardState(): Promise<DashboardState> {
     const api = bridge();
+    // Local account files must not wait on Codex detection, GitHub updates,
+    // or inspectAuthState queued behind a daemon quota refresh (which can
+    // sit on chatgpt.com for more than a minute and freeze first paint).
     const [
       accountsResponse,
       currentResponse,
       daemonResponse,
       configResponse,
       appResponse,
-      codexResponse,
-      updateResponse,
-      authStateResponse,
       oauthStatusResponse,
-      diagnosticsResponse,
     ] = await Promise.all([
       captureResponse(() => api.listAccounts(), 'Read accounts'),
       captureResponse(() => api.getCurrentAccount(), 'Read current account'),
       captureResponse(() => api.getDaemonStatus(), 'Read daemon status'),
       captureResponse(() => api.getAutoSwitchConfig(), 'Read auto-switch config'),
       captureResponse(() => api.getAppInfo(), 'Read app info'),
-      captureResponse(() => api.getCodexStatus(), 'Read Codex status'),
-      captureResponse(() => api.getUpdateStatus(), 'Read update status'),
-      captureResponse(() => api.getAuthState(), 'Read authentication state'),
       captureResponse(() => api.getOAuthStatus(), 'Read OAuth status'),
-      captureResponse(() => api.getStorageDiagnostics(), 'Read storage diagnostics'),
+    ]);
+    const [
+      authStateResponse,
+      updateResponse,
+      diagnosticsResponse,
+      codexResponse,
+    ] = await Promise.all([
+      timedCapture(() => api.getAuthState(), 'Read authentication state'),
+      timedCapture(() => api.getUpdateStatus(), 'Read update status'),
+      timedCapture(() => api.getStorageDiagnostics(), 'Read storage diagnostics'),
+      timedCapture(() => api.getCodexStatus(), 'Read Codex status'),
     ]);
 
     const config = optionalData(configResponse, defaultConfig()) || defaultConfig();

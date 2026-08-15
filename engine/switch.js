@@ -6,7 +6,7 @@ const { CODEX_DIR, CODEX_AUMID, IDX_PATH } = require("./config");
 const { loadIdx, saveIdx, saveAcct, currentAcct, ensureDir, accountFilePath } = require("./storage");
 const { writeJsonAtomic, writeTextAtomic, renameWithRetry } = require("./atomic-file");
 const { writeManagedProjection, inspectAuthState } = require("./auth-state");
-const { assertOfficialCodexInstalled } = require("./codex-installation");
+const { assertOfficialCodexInstalledAsync } = require("./codex-installation");
 const { logInfo, logWarn, logError } = require("./logger");
 
 function sleep(ms) {
@@ -83,7 +83,7 @@ function isCrashWindow(item) {
 }
 
 const defaultRuntime = {
-  assertInstalled: assertOfficialCodexInstalled,
+  assertInstalled: assertOfficialCodexInstalledAsync,
   listProcesses: defaultListProcesses,
   async gracefulClose(pid) {
     try {
@@ -274,7 +274,7 @@ async function doSwitch(account, options = {}) {
     if (authState.status === "aligned") return { already: true, account };
   }
 
-  runtime.assertInstalled();
+  await runtime.assertInstalled();
   ensureDir(CODEX_DIR);
   const authPath = path.join(CODEX_DIR, "auth.json");
   const projectionPath = path.join(CODEX_DIR, "codex_auth_projection.json");

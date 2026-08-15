@@ -12,7 +12,7 @@ const { loadAutoSwitchCfg, saveAutoSwitchCfg, DEFAULT_AUTO_SWITCH_CFG } = requir
 const { withAccountLock, withAccountLocks } = require("./operation-locks");
 const { metricCrossedThreshold, buildSwitchCandidate, pickBestCandidate, resolveMonitoredIds, autoSwitchTick } = require("./auto-switch");
 const { runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes } = require("./daemon");
-const { getCodexInstallationStatus, assertOfficialCodexInstalled } = require("./codex-installation");
+const { getCodexInstallationStatus, getCodexInstallationStatusAsync, assertOfficialCodexInstalled, assertOfficialCodexInstalledAsync } = require("./codex-installation");
 
 module.exports = {
   // crypto-utils
@@ -44,5 +44,5 @@ module.exports = {
   // daemon
   runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes,
   // codex installation
-  getCodexInstallationStatus, assertOfficialCodexInstalled,
+  getCodexInstallationStatus, getCodexInstallationStatusAsync, assertOfficialCodexInstalled, assertOfficialCodexInstalledAsync,
 };

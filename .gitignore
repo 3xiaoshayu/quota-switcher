@@ -3,6 +3,7 @@ dist/
 dist-installer/
 src/renderer-dist/
 tmp-*.png
+tmp-verify/
 coverage/
 .vscode/
 .idea/

@@ -16,7 +16,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { AccountQuota, DesktopAuthState, DesktopOAuthStatus } from '../types';
-import { avatarGradient, planLabel, quotaBarColor, STATUS_DOT, STATUS_TEXT } from '../api/desktop';
+import { avatarGradient, needsHandling, planLabel, quotaBarColor, STATUS_DOT, STATUS_TEXT } from '../api/desktop';
 import { toUserMessage } from '../api/user-messages';
 
 interface AccountsProps {
@@ -60,6 +60,8 @@ export default function AccountsView({
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [isRecoveredOAuth, setIsRecoveredOAuth] = useState(false);
+  const [isSubmittingCallback, setIsSubmittingCallback] = useState(false);
+  const [isCancellingOAuth, setIsCancellingOAuth] = useState(false);
 
   // New account form state
   const [newEmail, setNewEmail] = useState('');
@@ -96,18 +98,34 @@ export default function AccountsView({
     if (showAddModal) onOpenModal?.();
   }, [showAddModal, onOpenModal]);
 
-  // Escape closes the add-account modal, except while an OAuth authorization
-  // is pending (cancelling that must be an explicit choice).
+  // Escape 关闭添加弹窗；授权进行中则取消授权，而不是把窗口卡死。
+  const cancelPendingOAuth = async () => {
+    if (isCancellingOAuth) return;
+    setIsCancellingOAuth(true);
+    try {
+      await onCancelOAuth?.();
+    } catch (error) {
+      setFormError(toUserMessage(error instanceof Error ? error.message : String(error)));
+    } finally {
+      setIsCancellingOAuth(false);
+    }
+  };
+
   useEffect(() => {
     if (!showAddModal) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || isAdding) return;
+      if (event.key !== 'Escape') return;
+      if (isAdding) {
+        event.preventDefault();
+        void cancelPendingOAuth();
+        return;
+      }
       setShowAddModal(false);
       setReauthorizeId(null);
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showAddModal, isAdding]);
+  }, [isAdding, isCancellingOAuth, onCancelOAuth, showAddModal]);
 
   // Handle single card refresh animation
   const handleSingleRefresh = async (id: string, name: string) => {
@@ -116,9 +134,8 @@ export default function AccountsView({
     onAddLog(`正在刷新账号状态：${name}...`, 'info');
     try {
       await onRefreshAccount(id);
-      onAddLog(`账号 ${name} 刷新完成。`, 'success');
-    } catch (error) {
-      onAddLog(error instanceof Error ? error.message : String(error), 'error');
+    } catch {
+      // App 层已经用 toast / 日志报过结果
     } finally {
       setRefreshingIds(prev => {
         const next = new Set(prev);
@@ -129,7 +146,7 @@ export default function AccountsView({
   };
 
   const handleSwitchAccount = async (id: string) => {
-    if (switchingId) return;
+    if (switchingId || oauthStatus?.pending) return;
     setSwitchingId(id);
     try {
       await onSwitchCurrentAccount(id);
@@ -163,9 +180,7 @@ export default function AccountsView({
 
     // Tabs filter
     if (filterTab === 'current') return acc.isCurrent;
-    if (filterTab === 'warning') {
-      return acc.status === 'WARNING' || acc.status === 'EXPIRED' || acc.status === 'SUSPENDED' || acc.status === 'LOW_QUOTA';
-    }
+    if (filterTab === 'warning') return needsHandling(acc);
     
     return true;
   });
@@ -227,7 +242,9 @@ export default function AccountsView({
     }
   };
 
-  const currentPlan = accounts.find(account => account.isCurrent)?.plan || 'Unknown';
+  const currentAccount = accounts.find(account => account.isCurrent);
+  const currentPlanText = currentAccount ? planLabel(currentAccount.plan) : '暂无';
+  const handlingCount = accounts.filter(needsHandling).length;
 
   return (
     <div className="flex-1 p-8 overflow-y-auto select-none" id="accounts-view-container">
@@ -238,7 +255,7 @@ export default function AccountsView({
             账号管理
           </h2>
           <p className="mt-1.5 text-[13px] text-label-2 font-sans" id="accounts-meta-labels">
-            {accounts.length} 个账号 · 当前套餐 {currentPlan}
+            {accounts.length} 个账号 · 当前套餐 {currentPlanText}
           </p>
         </div>
 
@@ -330,10 +347,10 @@ export default function AccountsView({
                 transition={{ type: 'spring', stiffness: 450, damping: 25 }}
               />
             )}
-            需要操作
-            {accounts.filter(acc => acc.status === 'WARNING' || acc.status === 'EXPIRED' || acc.status === 'LOW_QUOTA' || acc.status === 'SUSPENDED').length > 0 && (
+            需要处理
+            {handlingCount > 0 && (
               <span className="px-1.5 py-0.5 bg-rose-500 text-white rounded-full text-[9px] font-bold">
-                {accounts.filter(acc => acc.status === 'WARNING' || acc.status === 'EXPIRED' || acc.status === 'LOW_QUOTA' || acc.status === 'SUSPENDED').length}
+                {handlingCount}
               </span>
             )}
           </button>
@@ -534,10 +551,12 @@ export default function AccountsView({
                       if (officialAligned) return
                       void handleSwitchAccount(account.id)
                     }}
-                    disabled={officialAligned || account.status === 'SUSPENDED' || switchingId !== null || deletingId === account.id}
+                    disabled={officialAligned || account.status === 'SUSPENDED' || switchingId !== null || deletingId === account.id || !!oauthStatus?.pending}
                     aria-busy={switchingId === account.id}
                     title={
-                      account.status === 'SUSPENDED'
+                      oauthStatus?.pending
+                        ? '已有授权正在进行，请先完成或取消'
+                        : account.status === 'SUSPENDED'
                         ? '该账号需要重新授权后才能重新登录'
                         : officialAligned
                           ? '官方已是此账号'
@@ -565,9 +584,15 @@ export default function AccountsView({
                 ) : (
                   <motion.button
                     onClick={() => void handleSwitchAccount(account.id)}
-                    disabled={account.status === 'SUSPENDED' || switchingId !== null || deletingId === account.id}
+                    disabled={account.status === 'SUSPENDED' || switchingId !== null || deletingId === account.id || !!oauthStatus?.pending}
                     aria-busy={switchingId === account.id}
-                    title={account.status === 'SUSPENDED' ? '该账号需要重新授权后才能切换' : '切换到此账号'}
+                    title={
+                      oauthStatus?.pending
+                        ? '已有授权正在进行，请先完成或取消'
+                        : account.status === 'SUSPENDED'
+                          ? '该账号需要重新授权后才能切换'
+                          : '切换到此账号'
+                    }
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.95 }}
                     transition={{ type: 'spring', stiffness: 450, damping: 20 }}
@@ -758,11 +783,14 @@ export default function AccountsView({
                       <button
                         type="button"
                         onClick={() => {
+                          if (isSubmittingCallback || !manualCallbackUrl || !onCompleteOAuthManually) return;
                           setFormError('');
-                          Promise.resolve(onCompleteOAuthManually?.(manualCallbackUrl))
-                            .catch(error => setFormError(toUserMessage(error instanceof Error ? error.message : String(error))));
+                          setIsSubmittingCallback(true);
+                          Promise.resolve(onCompleteOAuthManually(manualCallbackUrl))
+                            .catch(error => setFormError(toUserMessage(error instanceof Error ? error.message : String(error))))
+                            .finally(() => setIsSubmittingCallback(false));
                         }}
-                        disabled={!manualCallbackUrl || !onCompleteOAuthManually}
+                        disabled={!manualCallbackUrl || !onCompleteOAuthManually || isSubmittingCallback}
                         className="p-2.5 rounded-xl bg-accent/12 border border-accent/20 text-accent disabled:opacity-40"
                         title="提交回调网址"
                         id="oauth-manual-callback-submit"
@@ -778,15 +806,16 @@ export default function AccountsView({
                     type="button"
                     onClick={() => {
                       if (isAdding) {
-                        Promise.resolve(onCancelOAuth?.()).catch(() => {});
+                        void cancelPendingOAuth();
                         return;
                       }
                       setShowAddModal(false);
                       setReauthorizeId(null);
                     }}
+                    disabled={isCancellingOAuth}
                     className="flex-1 py-3 bg-fill hover:bg-fill-2 text-white rounded-xl text-xs font-semibold cursor-pointer transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {isAdding ? '取消授权' : '取消'}
+                    {isCancellingOAuth ? '正在取消...' : isAdding ? '取消授权' : '取消'}
                   </button>
                   <button
                     type="submit"

@@ -193,8 +193,13 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     });
     handle("storage:diagnostics", () => ok(eng.getStorageDiagnostics()));
 
-    handle("codex:status", () => {
-        try { return ok(eng.getCodexInstallationStatus()); }
+    handle("codex:status", async () => {
+        try {
+            const detect = typeof eng.getCodexInstallationStatusAsync === "function"
+                ? eng.getCodexInstallationStatusAsync()
+                : Promise.resolve(eng.getCodexInstallationStatus());
+            return ok(await detect);
+        }
         catch (error) { return fail(error.message); }
     });
 
@@ -205,15 +210,26 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         return account ? ok(publicAccount(eng, account)) : fail("Account does not exist");
     });
     handle("account:authState", async () => {
+        let busyTimer = null;
         try {
             // inspectAuthState may write the current account file (official
             // token rotation sync); serialize it against in-flight refreshes.
+            // If the daemon already holds that lock for a quota HTTP call,
+            // do not keep the first dashboard paint waiting on chatgpt.com.
             const index = eng.loadIdx();
-            const state = index.current_account_id
-                ? await eng.withAccountLock(index.current_account_id, async () => eng.inspectAuthState())
-                : eng.inspectAuthState();
+            const inspectPromise = index.current_account_id
+                ? eng.withAccountLock(index.current_account_id, async () => eng.inspectAuthState())
+                : Promise.resolve(eng.inspectAuthState());
+            inspectPromise.catch(() => {});
+            const state = await Promise.race([
+                inspectPromise,
+                new Promise((_, reject) => {
+                    busyTimer = setTimeout(() => reject(new Error("Authentication state is busy")), 1500);
+                }),
+            ]);
             return ok(state);
         } catch (error) { return fail(error.message); }
+        finally { if (busyTimer) clearTimeout(busyTimer); }
     });
     handle("account:adoptOfficial", async () => {
         try { return ok(publicAccount(eng, await eng.adoptOfficialAuth())); }

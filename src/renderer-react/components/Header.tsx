@@ -3,7 +3,7 @@ import { avatarGradient, desktopApi, hasDesktopBridge } from '../api/desktop';
 
 interface HeaderProps {
   currentUserEmail: string;
-  onLogout: () => void;
+  onLogout?: () => void;
   unreadNotificationsCount: number;
   onToggleNotifications: () => void;
 }
@@ -51,14 +51,17 @@ export default function Header({
             </span>
           </div>
 
+          {onLogout ? (
           <button
             onClick={onLogout}
             className="p-2 hover:bg-danger/12 hover:text-danger rounded-lg text-label-2 transition-colors cursor-pointer"
-            title="退出登录"
+            title="锁定界面"
+            aria-label="锁定界面"
             id="header-btn-logout"
           >
             <LogOut className="w-4 h-4" />
           </button>
+          ) : null}
         </div>
 
         {/* Window controls */}

@@ -13,11 +13,13 @@ interface AuthStatusBannerProps {
 }
 
 function copyForStatus(authState: DesktopAuthState, needsReauthCount: number): { title: string; body: string } {
-  const reauthHint = needsReauthCount > 0 ? `另有 ${needsReauthCount} 个账号需重新授权。` : ''
+  const reauthHint = needsReauthCount > 0 && authState.status !== 'unknown'
+    ? `另有 ${needsReauthCount} 个账号需重新授权。`
+    : ''
   if (authState.status === 'unknown') {
     return {
       title: '无法确认官方登录状态',
-      body: `自动切号已暂停。可重新加载后再试。${reauthHint ? ` ${reauthHint}` : ''}`,
+      body: '自动切号已暂停。可重新加载后再试。',
     }
   }
   if (authState.status === 'missing_official_auth') {

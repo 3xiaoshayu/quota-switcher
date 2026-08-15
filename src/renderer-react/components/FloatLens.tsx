@@ -199,6 +199,10 @@ export default function FloatLens() {
 
   const refreshViewed = useCallback(async (silent = false) => {
     if (!viewed || refreshing || switching) return;
+    if (viewed.status === 'SUSPENDED') {
+      if (!silent) setErrorText('请回主窗口重新授权');
+      return;
+    }
     if (!silent) {
       setRefreshing(true);
       setErrorText(null);
@@ -370,7 +374,7 @@ export default function FloatLens() {
                 </div>
                 <div className={`float-lens-state${isCurrent ? ' is-live' : ''}`}>
                   <span className="float-lens-state-dot" />
-                  {isCurrent ? '在用' : '预览'}
+                  {isCurrent ? '在用' : '预览 · 非当前登录'}
                 </div>
               </div>
 
@@ -402,8 +406,8 @@ export default function FloatLens() {
             <button
               className="float-lens-icon"
               type="button"
-              title="刷新额度"
-              disabled={!viewed || refreshing}
+              title={viewed?.status === 'SUSPENDED' ? '请回主窗口重新授权' : '刷新额度'}
+              disabled={!viewed || refreshing || switching || viewed?.status === 'SUSPENDED'}
               onClick={() => void refreshViewed(false)}
             >
               <RefreshCw size={14} className={refreshing ? 'animate-spin' : undefined} />

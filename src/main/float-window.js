@@ -21,11 +21,23 @@ function clampFloatBounds(bounds, workArea) {
     };
 }
 
+function clampFloatHeight(height) {
+    const value = Number(height);
+    if (!Number.isFinite(value)) return FLOAT_HEIGHT;
+    return Math.max(360, Math.min(720, Math.round(value)));
+}
+
 function defaultFloatPosition(workArea, width, height, margin = FLOAT_MARGIN) {
     return {
         x: workArea.x + workArea.width - width - margin,
         y: workArea.y + margin,
     };
+}
+
+function floatBoundsVisible(bounds, workArea) {
+    const overlapX = Math.min(bounds.x + bounds.width, workArea.x + workArea.width) - Math.max(bounds.x, workArea.x);
+    const overlapY = Math.min(bounds.y + bounds.height, workArea.y + workArea.height) - Math.max(bounds.y, workArea.y);
+    return overlapX >= 80 && overlapY >= 80;
 }
 
 function floatStatePath(userDataPath) {
@@ -35,14 +47,15 @@ function floatStatePath(userDataPath) {
 function loadFloatState(userDataPath) {
     try {
         const state = JSON.parse(fs.readFileSync(floatStatePath(userDataPath), "utf8"));
-        if (!state || typeof state !== "object") return { alwaysOnTop: false, x: null, y: null };
+        if (!state || typeof state !== "object") return { alwaysOnTop: false, x: null, y: null, height: null };
         return {
             alwaysOnTop: !!state.alwaysOnTop,
             x: Number.isFinite(state.x) ? state.x : null,
             y: Number.isFinite(state.y) ? state.y : null,
+            height: Number.isFinite(state.height) ? clampFloatHeight(state.height) : null,
         };
     } catch {
-        return { alwaysOnTop: false, x: null, y: null };
+        return { alwaysOnTop: false, x: null, y: null, height: null };
     }
 }
 
@@ -61,6 +74,7 @@ function createFloatWindowController(options) {
 
     let floatWindow = null;
     let persistTimer = null;
+    let showRequested = false;
     let alwaysOnTop = false;
 
     const persistPath = () => floatStatePath(app.getPath("userData"));
@@ -76,6 +90,7 @@ function createFloatWindowController(options) {
                 alwaysOnTop,
                 x: bounds ? bounds.x : current.x,
                 y: bounds ? bounds.y : current.y,
+                height: bounds ? clampFloatHeight(bounds.height) : (current.height || FLOAT_HEIGHT),
                 ...extra,
             }, { backup: false });
         } catch {}
@@ -90,19 +105,50 @@ function createFloatWindowController(options) {
     };
 
     const resolveBounds = (saved) => {
+        const height = clampFloatHeight(saved && saved.height != null ? saved.height : FLOAT_HEIGHT);
         const hasSaved = saved && Number.isFinite(saved.x) && Number.isFinite(saved.y);
         if (hasSaved) {
             const display = screen.getDisplayNearestPoint({ x: saved.x, y: saved.y });
             if (display?.workArea) {
-                return clampFloatBounds(
-                    { x: saved.x, y: saved.y, width: FLOAT_WIDTH, height: FLOAT_HEIGHT },
+                const clamped = clampFloatBounds(
+                    { x: saved.x, y: saved.y, width: FLOAT_WIDTH, height },
                     display.workArea,
                 );
+                if (floatBoundsVisible(clamped, display.workArea)) return clamped;
             }
         }
-        const area = screen.getPrimaryDisplay().workArea;
-        const position = defaultFloatPosition(area, FLOAT_WIDTH, FLOAT_HEIGHT);
-        return { ...position, width: FLOAT_WIDTH, height: FLOAT_HEIGHT };
+        let area = screen.getPrimaryDisplay().workArea;
+        try {
+            if (typeof screen.getCursorScreenPoint === "function") {
+                const cursor = screen.getCursorScreenPoint();
+                const near = screen.getDisplayNearestPoint(cursor);
+                if (near?.workArea) area = near.workArea;
+            }
+        } catch {}
+        const position = defaultFloatPosition(area, FLOAT_WIDTH, height);
+        return { ...position, width: FLOAT_WIDTH, height };
+    };
+
+    const windowIsReady = (win) => {
+        const url = win.webContents?.getURL?.() || "";
+        if (!url) return false;
+        if (typeof win.webContents.isLoadingMainFrame === "function") {
+            return !win.webContents.isLoadingMainFrame();
+        }
+        return true;
+    };
+
+    const presentWindow = (win) => {
+        if (!showRequested || !win || win.isDestroyed()) return;
+        const saved = loadFloatState(app.getPath("userData"));
+        win.setBounds(resolveBounds(saved));
+        alwaysOnTop = true;
+        if (typeof win.setAlwaysOnTop === "function") win.setAlwaysOnTop(true, "floating");
+        if (typeof win.isMinimized === "function" && win.isMinimized()) win.restore();
+        win.show();
+        if (typeof win.moveTop === "function") win.moveTop();
+        win.focus();
+        persistNow({ alwaysOnTop: true });
     };
 
     const attachGuards = (win) => {
@@ -114,7 +160,10 @@ function createFloatWindowController(options) {
             return { action: "deny" };
         });
         const guardNavigation = (event, url) => {
-            if (url === win.webContents.getURL()) return;
+            const current = win.webContents.getURL();
+            if (url === current) return;
+            const normalized = String(url || "").replace(/\\/g, "/");
+            if (normalized.startsWith("file:") && normalized.includes("/renderer-dist/")) return;
             event.preventDefault();
             if (/^https?:\/\//i.test(String(url || ""))) {
                 const { shell } = require("electron");
@@ -175,12 +224,17 @@ function createFloatWindowController(options) {
             persistNow();
             if (!isQuitting()) {
                 event.preventDefault();
+                showRequested = false;
                 win.hide();
             }
         });
         win.on("closed", () => {
             if (floatWindow === win) floatWindow = null;
         });
+        win.once("ready-to-show", () => presentWindow(win));
+        if (typeof win.webContents?.once === "function") {
+            win.webContents.once("did-finish-load", () => presentWindow(win));
+        }
 
         win.loadFile(rendererHtml, { hash: FLOAT_HASH })
             .catch((error) => console.error("Failed to load float window:", error));
@@ -191,18 +245,18 @@ function createFloatWindowController(options) {
 
     return {
         show() {
+            showRequested = true;
             const win = ensureWindow();
-            const saved = loadFloatState(app.getPath("userData"));
-            const bounds = resolveBounds(saved);
-            win.setBounds(bounds);
-            if (alwaysOnTop) win.setAlwaysOnTop(true, "floating");
-            win.show();
-            win.focus();
+            if (windowIsReady(win) || (typeof win.isVisible === "function" && win.isVisible())) {
+                presentWindow(win);
+            }
         },
         hide() {
+            showRequested = false;
             if (floatWindow && !floatWindow.isDestroyed()) floatWindow.hide();
         },
         destroy() {
+            showRequested = false;
             if (persistTimer) {
                 clearTimeout(persistTimer);
                 persistTimer = null;
@@ -227,6 +281,18 @@ function createFloatWindowController(options) {
             const visible = !!(floatWindow && !floatWindow.isDestroyed() && floatWindow.isVisible());
             return { visible, alwaysOnTop };
         },
+        inspect() {
+            if (!floatWindow || floatWindow.isDestroyed()) {
+                return { exists: false, visible: false, alwaysOnTop };
+            }
+            return {
+                exists: true,
+                visible: floatWindow.isVisible(),
+                alwaysOnTop,
+                bounds: floatWindow.getBounds(),
+                url: floatWindow.webContents.getURL(),
+            };
+        },
         setHeight(height) {
             if (!floatWindow || floatWindow.isDestroyed()) return;
             const nextHeight = Math.max(380, Math.min(640, Math.round(Number(height) || 0)));
@@ -239,6 +305,7 @@ function createFloatWindowController(options) {
             floatWindow.setMaximumSize(FLOAT_WIDTH, 720);
             floatWindow.setSize(FLOAT_WIDTH, nextHeight);
             floatWindow.setResizable(false);
+            persistNow();
         },
         isThisWindow(win) {
             return !!(floatWindow && win === floatWindow);
@@ -252,6 +319,9 @@ module.exports = {
     FLOAT_MARGIN,
     FLOAT_HASH,
     clampFloatBounds,
+    clampFloatHeight,
+    floatBoundsVisible,
     defaultFloatPosition,
+    loadFloatState,
     createFloatWindowController,
 };

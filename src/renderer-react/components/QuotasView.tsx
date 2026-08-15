@@ -9,7 +9,7 @@ import {
   Activity
 } from 'lucide-react';
 import { AccountQuota } from '../types';
-import { avatarGradient, formatDateTime, quotaBarColor, STATUS_DOT, STATUS_TEXT } from '../api/desktop';
+import { avatarGradient, formatDateTime, needsHandling, quotaBarColor, STATUS_DOT, STATUS_TEXT } from '../api/desktop';
 
 interface QuotasProps {
   accounts: AccountQuota[];
@@ -52,9 +52,7 @@ export default function QuotasView({
 
   // Calculate dynamic stats
   const totalAccounts = accounts.length;
-  const actionRequiredCount = accounts.filter(
-    acc => acc.status === 'EXPIRED' || acc.status === 'WARNING' || acc.status === 'SUSPENDED' || acc.status === 'LOW_QUOTA',
-  ).length;
+  const actionRequiredCount = accounts.filter(needsHandling).length;
   
   // Calculate average quota remaining
   const visibleQuotaPercentages = accounts.flatMap((account) => {
@@ -244,6 +242,12 @@ export default function QuotasView({
                 </div>
                 {getStatusBadge(account.status)}
               </div>
+
+              {account.warning && account.status !== 'SUSPENDED' && (
+                <p className="mb-4 text-[12px] leading-5 text-warn" id={`quota-card-notice-${account.id}`}>
+                  {account.warning}
+                </p>
+              )}
 
               {/* Quotas Progress Info */}
               <div className="space-y-4 flex-1 select-none" id={`quota-progress-container-${account.id}`}>

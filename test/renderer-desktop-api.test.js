@@ -7,19 +7,34 @@ const ts = require("typescript");
 
 const projectRoot = path.resolve(__dirname, "..");
 
-function loadDesktopExports(bridge) {
-  const sourcePath = path.join(projectRoot, "src", "renderer-react", "api", "desktop.ts");
+function compileTs(sourcePath) {
   const source = fs.readFileSync(sourcePath, "utf8");
-  const compiled = ts.transpileModule(source, {
+  return ts.transpileModule(source, {
     compilerOptions: {
       module: ts.ModuleKind.CommonJS,
       target: ts.ScriptTarget.ES2020,
     },
   }).outputText;
+}
+
+function loadUserMessages() {
+  const sourcePath = path.join(projectRoot, "src", "renderer-react", "api", "user-messages.ts");
   const module = { exports: {} };
+  vm.runInNewContext(compileTs(sourcePath), { module, exports: module.exports }, { filename: sourcePath });
+  return module.exports;
+}
+
+function loadDesktopExports(bridge) {
+  const sourcePath = path.join(projectRoot, "src", "renderer-react", "api", "desktop.ts");
+  const module = { exports: {} };
+  const userMessages = loadUserMessages();
   const sandbox = {
     module,
     exports: module.exports,
+    require(id) {
+      if (id === "./user-messages") return userMessages;
+      throw new Error(`Unexpected require: ${id}`);
+    },
     window: { codexAccountManager: bridge },
     console,
     Date,
@@ -28,8 +43,10 @@ function loadDesktopExports(bridge) {
     Number,
     String,
     Error,
+    setTimeout,
+    clearTimeout,
   };
-  vm.runInNewContext(compiled, sandbox, { filename: sourcePath });
+  vm.runInNewContext(compileTs(sourcePath), sandbox, { filename: sourcePath });
   return module.exports;
 }
 
@@ -99,6 +116,25 @@ test("dashboard state survives optional desktop API failures", async () => {
   assert.equal(snapshot.storageDiagnostics.length, 0);
 });
 
+test("dashboard state still loads when authentication state never returns", async () => {
+  const desktopApi = loadDesktopApiWithBridge(bridge({
+    getAuthState: () => new Promise((resolve) => {
+      setTimeout(() => resolve(fail("late authentication state")), 4000);
+    }),
+    getCodexStatus: () => new Promise((resolve) => {
+      setTimeout(() => resolve(fail("late Codex status")), 4000);
+    }),
+  }));
+
+  const snapshot = await desktopApi.loadDashboardState();
+  assert.equal(snapshot.accounts.length, 1);
+  assert.equal(snapshot.accounts[0].email, "one@example.com");
+  assert.equal(snapshot.authState.status, "unknown");
+  assert.equal(snapshot.authState.requiresResolution, false);
+  assert.match(snapshot.authState.message, /正在确认官方登录/);
+  assert.equal(snapshot.codexStatus, null);
+});
+
 test("dashboard state still fails when the core account list is unavailable", async () => {
   const desktopApi = loadDesktopApiWithBridge(bridge({
     listAccounts: () => fail("account database unavailable"),
@@ -149,6 +185,38 @@ test("dashboard state replaces internal reauthorization details with actionable 
     snapshot.accounts[0].warning,
     "该账号需要重新授权后才能刷新 Token。",
   );
+});
+
+test("quota network failures become sync-failed with short Chinese copy", async () => {
+  const desktopApi = loadDesktopApiWithBridge(bridge({
+    listAccounts: () => ok([{
+      id: "online",
+      email: "online@example.com",
+      plan_type: "plus",
+      quota_error: {
+        code: "network",
+        message: "网络请求失败 (chatgpt.com)。详情：Electron: Error: net::ERR_CONNECTION_TIMED_OUT",
+      },
+      quota: {
+        weekly_remaining_percentage: 95,
+        weekly_window_present: true,
+      },
+      token_status: {
+        accessAvailable: true,
+        refreshAvailable: true,
+        expired: false,
+        timeLeft: 3600,
+      },
+    }]),
+  }));
+
+  const snapshot = await desktopApi.loadDashboardState();
+  assert.equal(snapshot.accounts[0].status, "SYNC_FAILED");
+  assert.equal(
+    snapshot.accounts[0].warning,
+    "额度暂时没刷到，登录还在。请检查代理后再刷新，或稍后再试。",
+  );
+  assert.doesNotMatch(snapshot.accounts[0].quotaError || "", /ERR_CONNECTION/);
 });
 
 test("dashboard maps OpenAI plan types to official names", async () => {
@@ -422,8 +490,33 @@ test("user-facing messages stay in Chinese", () => {
   assert.equal(toUserMessage("disabled"), "全局开关已关闭，不会切号");
   assert.equal(toUserMessage("已从管理器中删除账号 a@b.com。"), "已从管理器中删除账号 a@b.com。");
   assert.equal(toUserMessage("SomeUnknownEnglishFailureXYZ"), "操作失败，请稍后重试");
+  assert.equal(
+    toUserMessage("网络请求失败 (chatgpt.com)。已尝试可用网络栈。如果正在使用代理/TUN，请确认它允许 Codex Account Manager 访问 OpenAI。详情：Electron: Error: Electron network failed after retry: Error: net::ERR_CONNECTION_TIMED_OUT | Node: ETIMEDOUT"),
+    "额度暂时没刷到，登录还在。请检查代理后再刷新，或稍后再试。",
+  );
+  assert.equal(toUserMessage("Read authentication state timed out"), "正在确认官方登录，稍后会自动刷新");
+  assert.equal(
+    toUserMessage("Switch to another account before deleting the current account."),
+    "请先切到其他账号，再删除当前账号",
+  );
+  assert.equal(toUserMessage("refresh_token needs re-authorization"), "刷新令牌已失效，请重新授权");
   assert.equal(logTypeLabel("error"), "错误");
   assert.equal(logTypeLabel("warning"), "警告");
   assert.equal(logTypeLabel("success"), "成功");
   assert.equal(logTypeLabel("info"), "信息");
+});
+
+test("duration and handling helpers stay in Chinese", () => {
+  const { formatDuration, needsHandling } = loadDesktopExports(bridge());
+  assert.equal(formatDuration(45), "1 分钟");
+  assert.equal(formatDuration(3600), "1 小时");
+  assert.equal(formatDuration(3659), "1 小时 1 分钟");
+  assert.equal(formatDuration(86400 * 8 + 3600 * 3), "8 天 3 小时");
+  assert.equal(formatDuration(-1), "已过期");
+  assert.equal(needsHandling({ status: "SUSPENDED" }), true);
+  assert.equal(needsHandling({ status: "EXPIRED" }), true);
+  assert.equal(needsHandling({ status: "SYNC_FAILED" }), true);
+  assert.equal(needsHandling({ status: "WARNING" }), false);
+  assert.equal(needsHandling({ status: "LOW_QUOTA" }), false);
+  assert.equal(needsHandling({ status: "ACTIVE" }), false);
 });
