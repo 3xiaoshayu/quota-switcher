@@ -5,6 +5,15 @@ All notable changes to Codex Account Manager are documented here.
 The project follows [Semantic Versioning](https://semver.org/) once a stable
 release is published.
 
+## [0.1.0-beta.22] - 2026-08-16
+
+- Fix the desktop quota lens: it crashed on first paint, then hid behind the
+  main window. Opening it now pins the widget so it stays visible.
+- Stop the first screen from waiting on Codex detection, and copy the app icon
+  into packaged extraResources so the window and tray show the mark.
+- Keep quota refresh, authorization, and error toasts in short Chinese, and do
+  not report a successful refresh when the quota still failed to sync.
+
 ## [0.1.0-beta.21] - 2026-08-15
 
 - Close the main window to the tray so auto-switch keeps running; quit only
