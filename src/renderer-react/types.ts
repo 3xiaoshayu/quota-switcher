@@ -2,7 +2,7 @@ export interface AccountQuota {
   id: string;
   name: string;
   email: string;
-  status: 'ACTIVE' | 'WARNING' | 'EXPIRED' | 'LOW_QUOTA' | 'READY' | 'SUSPENDED' | 'SYNC_FAILED';
+  status: 'ACTIVE' | 'WARNING' | 'EXPIRED' | 'LOW_QUOTA' | 'READY' | 'SUSPENDED' | 'SYNC_FAILED' | 'BANNED' | 'LIMITED';
   fiveHourQuotaRemaining: number | null;
   fiveHourQuotaTotal: number;
   weeklyQuotaRemaining: number | null;
@@ -26,6 +26,7 @@ export interface AccountQuota {
   tokenExpired?: boolean;
   tokenAccessAvailable?: boolean;
   tokenRefreshAvailable?: boolean;
+  leftoverAccessUsable?: boolean;
 }
 
 export interface DaemonState {

@@ -9,7 +9,7 @@ import {
   Info
 } from 'lucide-react';
 import { AccountQuota, AutoSwitchRunResult, LogEntry, SystemSettings, DaemonState } from '../types';
-import { STATUS_DOT, STATUS_TEXT, autoSwitchStatusBanner, isCurrentQuotaSufficient, lastCheckCaption, planLabel, quotaScopeCaption } from '../api/desktop';
+import { STATUS_DOT, STATUS_TEXT, autoSwitchStatusBanner, canJoinAutoSwitch, isCurrentQuotaSufficient, lastCheckCaption, planLabel, quotaScopeCaption } from '../api/desktop';
 import { toUserMessage } from '../api/user-messages';
 
 interface AutoSwitchProps {
@@ -110,6 +110,7 @@ export default function AutoSwitchView({
     globalSwitch: settings.globalSwitch,
     daemonRunning,
     pausedReason: daemonState.pausedReason,
+    currentStatus: currentAccount?.status,
   });
   const bannerTone = {
     ok: {
@@ -404,22 +405,27 @@ export default function AutoSwitchView({
               </p>
             )}
             {scopeAccounts.map((account) => {
-              const isChecked = selectedAccountIds.includes(account.id);
+              const eligible = canJoinAutoSwitch(account);
+              const isChecked = eligible && selectedAccountIds.includes(account.id);
               const caption = quotaScopeCaption(account);
+              const canToggle = eligible && scopeMode === 'selected';
               return (
                 <motion.div
                   key={account.id}
                   onClick={() => {
-                    if (scopeMode !== 'selected') return;
+                    if (!canToggle) return;
                     onToggleAccountSelection(account.id);
                   }}
-                  whileTap={{ scale: 0.99 }}
+                  whileTap={canToggle ? { scale: 0.99 } : undefined}
                   transition={{ type: 'spring', stiffness: 450, damping: 24 }}
                   className={`row-sep flex items-start justify-between gap-4 py-4 group ${
-                    scopeMode === 'selected' ? 'cursor-pointer' : 'cursor-default'
+                    !eligible ? 'cursor-not-allowed' : (scopeMode === 'selected' ? 'cursor-pointer' : 'cursor-default')
                   } ${
-                    isChecked ? '' : 'opacity-55 hover:opacity-80'
+                    !eligible ? 'opacity-40' : (isChecked ? '' : 'opacity-55 hover:opacity-80')
                   }`}
+                  title={!eligible
+                    ? (account.status === 'BANNED' ? '账号已封号，无法加入自动切号' : '该账号需要重新授权后才能加入自动切号')
+                    : undefined}
                   id={`scope-acc-card-${account.id}`}
                 >
                   <div className="flex items-start gap-3.5 min-w-0" id={`scope-acc-left-${account.id}`}>

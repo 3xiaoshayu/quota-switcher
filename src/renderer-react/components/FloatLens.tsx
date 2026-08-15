@@ -5,8 +5,12 @@ import {
   desktopApi,
   formatResetLine,
   hasDesktopBridge,
+  canRefreshQuota,
+  canSwitchAccount,
+  hideStaleQuota,
   quotaHero,
   quotaStroke,
+  STATUS_TEXT,
 } from '../api/desktop';
 import { toUserMessage } from '../api/user-messages';
 import { previewAccountsForLens } from '../data/mockData';
@@ -31,6 +35,26 @@ function arcOffset(radius: number, percent: number | null): number {
 function percentLabel(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '—';
   return `${Math.round(value)}%`;
+}
+
+function blockedRefreshText(account: AccountQuota): string {
+  return account.status === 'BANNED' ? '账号已封号，无法刷新额度' : '该账号需要重新授权后才能刷新额度';
+}
+
+function blockedSwitchText(account: AccountQuota): string {
+  return account.status === 'BANNED' ? '账号已封号，无法切换' : '该账号需要重新授权后才能切换';
+}
+
+function identityStatusText(account: AccountQuota): string {
+  if (
+    account.status === 'BANNED'
+    || account.status === 'SUSPENDED'
+    || account.status === 'LIMITED'
+    || account.status === 'SYNC_FAILED'
+  ) {
+    return STATUS_TEXT[account.status] || account.status;
+  }
+  return String(account.plan || 'Standard').toUpperCase();
 }
 
 function QuotaDial({
@@ -185,8 +209,9 @@ export default function FloatLens() {
   const viewedIndex = viewed ? accounts.findIndex((account) => account.id === viewed.id) : -1;
   const hero = quotaHero(viewed);
   const isCurrent = !!viewed?.isCurrent;
-  const weeklyValue = viewed && viewed.weeklyQuotaPresent !== false ? viewed.weeklyQuotaRemaining : null;
-  const fiveHourValue = viewed && viewed.fiveHourQuotaPresent !== false ? viewed.fiveHourQuotaRemaining : null;
+  const hideQuota = hideStaleQuota(viewed);
+  const weeklyValue = hideQuota ? null : (viewed && viewed.weeklyQuotaPresent !== false ? viewed.weeklyQuotaRemaining : null);
+  const fiveHourValue = hideQuota ? null : (viewed && viewed.fiveHourQuotaPresent !== false ? viewed.fiveHourQuotaRemaining : null);
   const showFiveHour = viewed?.fiveHourQuotaPresent !== false && fiveHourValue != null;
   const showWeekly = viewed?.weeklyQuotaPresent !== false && weeklyValue != null;
 
@@ -199,8 +224,10 @@ export default function FloatLens() {
 
   const refreshViewed = useCallback(async (silent = false) => {
     if (!viewed || refreshing || switching) return;
-    if (viewed.status === 'SUSPENDED') {
-      if (!silent) setErrorText('请回主窗口重新授权');
+    if (!canRefreshQuota(viewed)) {
+      if (!silent) {
+        setErrorText(blockedRefreshText(viewed));
+      }
       return;
     }
     if (!silent) {
@@ -209,12 +236,12 @@ export default function FloatLens() {
     }
     try {
       await desktopApi.refreshQuota(viewed.id, true);
-      await loadAccounts();
     } catch (error) {
       if (!silent) {
         setErrorText(toUserMessage(error instanceof Error ? error.message : String(error)));
       }
     } finally {
+      await loadAccounts();
       if (!silent) setRefreshing(false);
     }
   }, [loadAccounts, refreshing, switching, viewed]);
@@ -258,6 +285,10 @@ export default function FloatLens() {
 
   const handleSwitch = useCallback(async () => {
     if (!viewed || isCurrent || switching) return;
+    if (viewed.status === 'SUSPENDED' || viewed.status === 'BANNED') {
+      setErrorText(blockedSwitchText(viewed));
+      return;
+    }
     setSwitching(true);
     setErrorText(null);
     try {
@@ -319,8 +350,10 @@ export default function FloatLens() {
 
               <div className="float-lens-identity" title={viewed.email}>
                 <div className="float-lens-name">{viewed.email}</div>
-                <div className="float-lens-plan">{String(viewed.plan || 'Standard').toUpperCase()}</div>
-                {!(showFiveHour && showWeekly) ? (
+                <div className="float-lens-plan">
+                  {identityStatusText(viewed)}
+                </div>
+                {!(showFiveHour && showWeekly) && !hideQuota ? (
                   <div className="float-lens-reset">
                     {formatResetLine(showWeekly ? viewed.weeklyResetAt : viewed.fiveHourResetAt)}
                   </div>
@@ -383,7 +416,8 @@ export default function FloatLens() {
                   <button
                     className="float-lens-switch"
                     type="button"
-                    disabled={switching}
+                    disabled={switching || !canSwitchAccount(viewed)}
+                    title={!canSwitchAccount(viewed) ? blockedSwitchText(viewed) : '切到此账号'}
                     onClick={() => void handleSwitch()}
                   >
                     {switching ? <RefreshCw size={13} className="animate-spin" /> : <ArrowLeftRight size={13} />}
@@ -406,8 +440,8 @@ export default function FloatLens() {
             <button
               className="float-lens-icon"
               type="button"
-              title={viewed?.status === 'SUSPENDED' ? '请回主窗口重新授权' : '刷新额度'}
-              disabled={!viewed || refreshing || switching || viewed?.status === 'SUSPENDED'}
+              title={!viewed || canRefreshQuota(viewed) ? '刷新额度' : blockedRefreshText(viewed)}
+              disabled={!viewed || refreshing || switching || !canRefreshQuota(viewed)}
               onClick={() => void refreshViewed(false)}
             >
               <RefreshCw size={14} className={refreshing ? 'animate-spin' : undefined} />

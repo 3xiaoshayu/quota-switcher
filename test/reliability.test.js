@@ -161,6 +161,265 @@ test("quota authorization retries once after repairing an invalidated access tok
   assert.equal(quota.hourly_remaining_percentage, 75);
 });
 
+test("usage account_deactivated does not force another token refresh", async t => {
+  freshEngine(t);
+  const { fetchQuotaWithTokenRepair } = require("../engine/quota");
+  const account = {
+    tokens: {
+      access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
+      refresh_token: "old-refresh",
+    },
+  };
+  let refreshCount = 0;
+  let err;
+  try {
+    await fetchQuotaWithTokenRepair(account, {
+      fetchQuota: async () => {
+        throw new Error("HTTP 401 account_deactivated");
+      },
+      refreshOneTok: async () => {
+        refreshCount += 1;
+        return { ok: true };
+      },
+    });
+  } catch (error) {
+    err = error;
+  }
+  assert.ok(err);
+  assert.equal(refreshCount, 0);
+  assert.equal(err.probe.status, "banned");
+});
+
+test("refresh success plus usage account_deactivated keeps the new refresh token", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "banned@example.com", "acct-banned", "banned");
+  account.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+  account.tokens.refresh_token = "old-refresh";
+  engine.saveAcct(account);
+
+  const { fetchQuotaWithTokenRepair } = require("../engine/quota");
+  let refreshCount = 0;
+  let err;
+  try {
+    await fetchQuotaWithTokenRepair(account, {
+      fetchQuota: async () => {
+        throw new Error("HTTP 401 account_deactivated");
+      },
+      refreshOneTok: async (acct) => {
+        refreshCount += 1;
+        acct.tokens.refresh_token = "rotated-refresh";
+        acct.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
+        return { ok: true };
+      },
+    });
+  } catch (error) {
+    err = error;
+  }
+  assert.ok(err);
+  assert.equal(err.probe.status, "banned");
+  assert.equal(refreshCount, 1);
+  assert.equal(account.tokens.refresh_token, "rotated-refresh");
+});
+
+test("refreshQuota stores banned and does not let a later timeout clear it", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "sticky@example.com", "acct-sticky", "sticky");
+  const quotaModule = require("../engine/quota");
+  const originalFetch = quotaModule.fetchQuotaWithTokenRepair;
+  t.after(() => {
+    quotaModule.fetchQuotaWithTokenRepair = originalFetch;
+  });
+
+  quotaModule.fetchQuotaWithTokenRepair = async () => {
+    const error = new Error("HTTP 401 account_deactivated");
+    error.probe = {
+      status: "banned",
+      error_code: "account_deactivated",
+      http_status: 401,
+      message: "账号已封号，无法继续使用。",
+      ok: false,
+    };
+    throw error;
+  };
+  let firstErr;
+  try {
+    await quotaModule.refreshQuota(account, { force: true });
+  } catch (error) {
+    firstErr = error;
+  }
+  assert.ok(firstErr);
+  let stored = engine.loadAcct(account.id);
+  assert.equal(stored.banned, true);
+  assert.equal(stored.probe.status, "banned");
+
+  quotaModule.fetchQuotaWithTokenRepair = async () => {
+    throw new Error("请求超时");
+  };
+  try {
+    await quotaModule.refreshQuota(stored, { force: true });
+  } catch {}
+  stored = engine.loadAcct(account.id);
+  assert.equal(stored.banned, true);
+  assert.equal(stored.probe.status, "banned");
+  assert.equal(stored.probe.error_code, "account_deactivated");
+});
+
+test("usage 429 does not force another token refresh", async t => {
+  freshEngine(t);
+  const { fetchQuotaWithTokenRepair } = require("../engine/quota");
+  const account = {
+    tokens: {
+      access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
+      refresh_token: "keep-refresh",
+    },
+  };
+  let refreshCount = 0;
+  let err;
+  try {
+    await fetchQuotaWithTokenRepair(account, {
+      fetchQuota: async () => {
+        throw new Error("HTTP 429 usage_limit_reached");
+      },
+      refreshOneTok: async () => {
+        refreshCount += 1;
+        return { ok: true };
+      },
+    });
+  } catch (error) {
+    err = error;
+  }
+  assert.ok(err);
+  assert.equal(refreshCount, 0);
+  assert.equal(err.probe.status, "usage_limited");
+});
+
+test("probeUsageOnly bans a reauth account without refreshing tokens", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "probe-ban@example.com", "acct-probe-ban", "probe-ban");
+  account.requires_reauth = true;
+  account.reauth_reason = "refresh_token needs re-authorization";
+  account.quota_error = { code: "refresh_token_invalidated", message: "keep me", timestamp: engine.ts() };
+  engine.saveAcct(account);
+  const originalRefresh = account.tokens.refresh_token;
+  const { probeUsageOnly } = require("../engine/quota");
+  let err;
+  try {
+    await probeUsageOnly(account, {
+      fetchQuota: async () => {
+        const error = new Error("HTTP 401 account_deactivated");
+        error.probe = {
+          status: "banned",
+          error_code: "account_deactivated",
+          http_status: 401,
+          message: "账号已封号，无法继续使用。",
+          ok: false,
+        };
+        throw error;
+      },
+    });
+  } catch (error) {
+    err = error;
+  }
+  assert.ok(err);
+  const stored = engine.loadAcct(account.id);
+  assert.equal(stored.banned, true);
+  assert.equal(stored.probe.status, "banned");
+  assert.equal(stored.requires_reauth, true);
+  assert.equal(stored.quota_error.code, "account_deactivated");
+  assert.equal(stored.tokens.refresh_token, originalRefresh);
+});
+
+test("probeUsageOnly keeps reauthorization when leftover access token still works", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "probe-ok@example.com", "acct-probe-ok", "probe-ok");
+  account.requires_reauth = true;
+  account.quota_error = { code: "refresh_token_invalidated", message: "keep me", timestamp: engine.ts() };
+  engine.saveAcct(account);
+  const { probeUsageOnly } = require("../engine/quota");
+  await probeUsageOnly(account, {
+    fetchQuota: async () => ({ hourly_remaining_percentage: 80, weekly_remaining_percentage: 80 }),
+  });
+  const stored = engine.loadAcct(account.id);
+  assert.equal(stored.banned, false);
+  assert.equal(stored.probe.status, "active");
+  assert.equal(stored.requires_reauth, true);
+  assert.equal(stored.quota_error.code, "refresh_token_invalidated");
+});
+
+test("probeUsageOnly refuses expired leftover tokens and does not call usage", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "probe-expired@example.com", "acct-probe-expired", "probe-expired");
+  account.requires_reauth = true;
+  account.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+  engine.saveAcct(account);
+  const { probeUsageOnly, needsBanProbe } = require("../engine/quota");
+  let fetchCount = 0;
+  await assert.rejects(
+    probeUsageOnly(account, {
+      fetchQuota: async () => {
+        fetchCount += 1;
+        return {};
+      },
+    }),
+    /requires reauthorization/i,
+  );
+  assert.equal(fetchCount, 0);
+  assert.equal(needsBanProbe(account), false);
+});
+
+test("probeUsageOnly stops after leftover access token is rejected", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "probe-spent@example.com", "acct-probe-spent", "probe-spent");
+  account.requires_reauth = true;
+  account.probe = {
+    status: "probe_failed",
+    error_code: "token_invalidated",
+    http_status: 401,
+    checked_at: engine.ts(),
+  };
+  engine.saveAcct(account);
+  const { probeUsageOnly, canProbeUsageWithoutRefresh, needsBanProbe } = require("../engine/quota");
+  let fetchCount = 0;
+  await assert.rejects(
+    probeUsageOnly(account, {
+      fetchQuota: async () => {
+        fetchCount += 1;
+        return {};
+      },
+    }),
+    /requires reauthorization/i,
+  );
+  assert.equal(fetchCount, 0);
+  assert.equal(canProbeUsageWithoutRefresh(account), false);
+  assert.equal(needsBanProbe(account), false);
+});
+
+test("probeUsageOnly does not ask banned leftover-dead accounts to reauthorize", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "probe-banned-dead@example.com", "acct-probe-banned-dead", "probe-banned-dead");
+  account.banned = true;
+  account.probe = {
+    status: "probe_failed",
+    error_code: "token_invalidated",
+    http_status: 401,
+    checked_at: engine.ts(),
+  };
+  engine.saveAcct(account);
+  const { probeUsageOnly } = require("../engine/quota");
+  let fetchCount = 0;
+  await assert.rejects(
+    probeUsageOnly(account, {
+      fetchQuota: async () => {
+        fetchCount += 1;
+        return {};
+      },
+    }),
+    (error) => error.code === "account_banned" && /banned and cannot refresh quotas/i.test(error.message),
+  );
+  assert.equal(fetchCount, 0);
+});
+
+
 test("token refresh IPC does not convert an engine failure into success", () => {
   const { tokenRefreshResponse } = require("../src/main/ipc-handlers");
   assert.deepEqual(
@@ -274,9 +533,229 @@ test("quota IPC skips accounts that require reauthorization", async () => {
     email: suspended.email,
     skipped: true,
     reason: "reauthorization_required",
+    banned: false,
   });
   assert.equal(allQuotas.data[1].id, active.id);
   assert.equal(quotaRefreshCount, 1);
+});
+
+test("quota IPC probes leftover access tokens on reauthorization accounts", async () => {
+  const handlers = new Map();
+  let probeCount = 0;
+  let quotaRefreshCount = 0;
+  const electron = {
+    ipcMain: {
+      handle(channel, listener) {
+        handlers.set(channel, listener);
+      },
+    },
+    BrowserWindow: { getAllWindows: () => [] },
+    app: {
+      getVersion: () => "0.1.0-beta.9",
+      isPackaged: false,
+    },
+    shell: {
+      async openExternal() {},
+      async openPath() { return ""; },
+    },
+  };
+  const suspended = {
+    id: "suspended-live",
+    email: "suspended-live@example.com",
+    requires_reauth: true,
+    tokens: { access_token: "live-token" },
+  };
+  const engine = {
+    inspectAuthState: () => ({ status: "aligned", requiresResolution: false }),
+    listAccts: () => [suspended],
+    loadAcct: () => suspended,
+    withAccountLock: async (_id, task) => task(),
+    canProbeUsageWithoutRefresh: account => !!account.tokens?.access_token,
+    async probeUsageOnly() {
+      probeCount += 1;
+      return { hourly_remaining_percentage: 40 };
+    },
+    async refreshQuota() {
+      quotaRefreshCount += 1;
+      return { hourly_remaining_percentage: 50 };
+    },
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, { electron });
+
+  const directQuota = await handlers.get("quota:refresh")({}, suspended.id, true);
+  assert.equal(directQuota.success, true);
+  assert.equal(probeCount, 1);
+  assert.equal(quotaRefreshCount, 0);
+
+  const allQuotas = await handlers.get("quota:refreshAll")({});
+  assert.equal(allQuotas.success, true);
+  assert.equal(allQuotas.data[0].id, suspended.id);
+  assert.equal(allQuotas.data[0].skipped, undefined);
+  assert.equal(probeCount, 2);
+  assert.equal(quotaRefreshCount, 0);
+});
+
+test("quota refreshAll catch includes the error code as reason", async () => {
+  const handlers = new Map();
+  const electron = {
+    ipcMain: {
+      handle(channel, listener) {
+        handlers.set(channel, listener);
+      },
+    },
+    BrowserWindow: { getAllWindows: () => [] },
+    app: {
+      getVersion: () => "0.1.0-beta.9",
+      isPackaged: false,
+    },
+    shell: {
+      async openExternal() {},
+      async openPath() { return ""; },
+    },
+  };
+  const suspended = {
+    id: "refresh-all-reason",
+    email: "refresh-all-reason@example.com",
+    requires_reauth: true,
+    tokens: { access_token: "live-token" },
+  };
+  const engine = {
+    inspectAuthState: () => ({ status: "aligned", requiresResolution: false }),
+    listAccts: () => [suspended],
+    loadAcct: () => suspended,
+    withAccountLock: async (_id, task) => task(),
+    canProbeUsageWithoutRefresh: account => !!account.tokens?.access_token,
+    async probeUsageOnly() {
+      const error = new Error("Account requires reauthorization before quotas can be refreshed.");
+      error.code = "reauthorization_required";
+      throw error;
+    },
+    async refreshQuota() {
+      throw new Error("should not refresh");
+    },
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, { electron });
+
+  const allQuotas = await handlers.get("quota:refreshAll")({});
+  assert.equal(allQuotas.success, true);
+  assert.equal(allQuotas.data[0].id, suspended.id);
+  assert.equal(allQuotas.data[0].reason, "reauthorization_required");
+  assert.match(allQuotas.data[0].error, /reauthorization/i);
+});
+
+test("quota IPC probes leftover tokens on banned accounts and skips token refresh", async () => {
+  const handlers = new Map();
+  let probeCount = 0;
+  let quotaRefreshCount = 0;
+  let tokenRefreshCount = 0;
+  const electron = {
+    ipcMain: {
+      handle(channel, listener) {
+        handlers.set(channel, listener);
+      },
+    },
+    BrowserWindow: { getAllWindows: () => [] },
+    app: {
+      getVersion: () => "0.1.0-beta.9",
+      isPackaged: false,
+    },
+    shell: {
+      async openExternal() {},
+      async openPath() { return ""; },
+    },
+  };
+  const banned = {
+    id: "banned-account",
+    email: "banned@example.com",
+    banned: true,
+    tokens: { access_token: "live-token" },
+  };
+  const engine = {
+    inspectAuthState: () => ({ status: "aligned", requiresResolution: false }),
+    listAccts: () => [banned],
+    loadAcct: () => banned,
+    withAccountLock: async (_id, task) => task(),
+    canProbeUsageWithoutRefresh: account => !!account.tokens?.access_token,
+    async probeUsageOnly() {
+      probeCount += 1;
+      return { hourly_remaining_percentage: 10 };
+    },
+    async refreshQuota() {
+      quotaRefreshCount += 1;
+      return { hourly_remaining_percentage: 50 };
+    },
+    async refreshOneTok() {
+      tokenRefreshCount += 1;
+      return { ok: true };
+    },
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, { electron });
+
+  const quota = await handlers.get("quota:refresh")({}, banned.id, true);
+  assert.equal(quota.success, true);
+  assert.equal(probeCount, 1);
+  assert.equal(quotaRefreshCount, 0);
+
+  const token = await handlers.get("token:refresh")({}, banned.id);
+  assert.equal(token.success, false);
+  assert.match(token.error, /banned/i);
+  assert.equal(tokenRefreshCount, 0);
+});
+
+test("quota IPC skips banned accounts that have no leftover access token", async () => {
+  const handlers = new Map();
+  let quotaRefreshCount = 0;
+  const electron = {
+    ipcMain: {
+      handle(channel, listener) {
+        handlers.set(channel, listener);
+      },
+    },
+    BrowserWindow: { getAllWindows: () => [] },
+    app: {
+      getVersion: () => "0.1.0-beta.9",
+      isPackaged: false,
+    },
+    shell: {
+      async openExternal() {},
+      async openPath() { return ""; },
+    },
+  };
+  const banned = {
+    id: "banned-dead",
+    email: "banned-dead@example.com",
+    banned: true,
+  };
+  const engine = {
+    inspectAuthState: () => ({ status: "aligned", requiresResolution: false }),
+    listAccts: () => [banned],
+    loadAcct: () => banned,
+    withAccountLock: async (_id, task) => task(),
+    canProbeUsageWithoutRefresh: () => false,
+    async probeUsageOnly() {
+      throw new Error("should not probe");
+    },
+    async refreshQuota() {
+      quotaRefreshCount += 1;
+      return { hourly_remaining_percentage: 50 };
+    },
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, { electron });
+
+  const quota = await handlers.get("quota:refresh")({}, banned.id, true);
+  assert.equal(quota.success, false);
+  assert.match(quota.error, /banned/i);
+  assert.equal(quotaRefreshCount, 0);
+
+  const allQuotas = await handlers.get("quota:refreshAll")({});
+  assert.equal(allQuotas.success, true);
+  assert.equal(allQuotas.data[0].skipped, true);
+  assert.equal(allQuotas.data[0].reason, "account_banned");
+  assert.equal(quotaRefreshCount, 0);
 });
 
 test("storage restores valid backups and preserves DPAPI failures", async t => {
@@ -676,6 +1155,304 @@ test("auto-switch revalidates failed candidates and excludes accounts requiring 
   assert.notEqual(switchedTo, revoked.id);
 });
 
+test("auto-switch treats a banned current account as must-leave and skips banned candidates", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "banned-current@example.com", "acct-banned-current", "banned-current");
+  const candidate = await addAccount(engine, "banned-ready@example.com", "acct-banned-ready", "banned-ready");
+  const bannedCandidate = await addAccount(engine, "banned-other@example.com", "acct-banned-other", "banned-other");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 90,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 90,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  current.banned = true;
+  current.probe = { status: "banned", error_code: "account_deactivated", http_status: 401, checked_at: now };
+  candidate.quota = {
+    hourly_remaining_percentage: 80,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 80,
+    weekly_window_present: true,
+  };
+  candidate.usage_updated_at = now;
+  bannedCandidate.quota = {
+    hourly_remaining_percentage: 100,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 100,
+    weekly_window_present: true,
+  };
+  bannedCandidate.usage_updated_at = now;
+  bannedCandidate.banned = true;
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  engine.saveAcct(bannedCandidate);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+
+  const quotaModule = require("../engine/quota");
+  const switchModule = require("../engine/switch");
+  const originalRefresh = quotaModule.refreshQuota;
+  const originalSwitch = switchModule.doSwitch;
+  let refreshedIds = [];
+  let switchedTo = null;
+  quotaModule.refreshQuota = async account => {
+    refreshedIds.push(account.id);
+    return account.quota;
+  };
+  switchModule.doSwitch = async account => {
+    switchedTo = account.id;
+    return { account };
+  };
+  t.after(() => {
+    quotaModule.refreshQuota = originalRefresh;
+    switchModule.doSwitch = originalSwitch;
+  });
+
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+
+  assert.equal(result.switched, true);
+  assert.equal(switchedTo, candidate.id);
+  assert.ok(!refreshedIds.includes(current.id));
+  assert.ok(!refreshedIds.includes(bannedCandidate.id));
+});
+
+test("auto-switch treats a reauth current account as must-leave", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "reauth-current-switch@example.com", "acct-reauth-current-switch", "reauth-current-switch");
+  const candidate = await addAccount(engine, "reauth-ready@example.com", "acct-reauth-ready", "reauth-ready");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 90,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 90,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  current.requires_reauth = true;
+  candidate.quota = {
+    hourly_remaining_percentage: 80,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 80,
+    weekly_window_present: true,
+  };
+  candidate.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+
+  const quotaModule = require("../engine/quota");
+  const switchModule = require("../engine/switch");
+  const originalRefresh = quotaModule.refreshQuota;
+  const originalSwitch = switchModule.doSwitch;
+  let refreshedIds = [];
+  let switchedTo = null;
+  quotaModule.refreshQuota = async account => {
+    refreshedIds.push(account.id);
+    return account.quota;
+  };
+  switchModule.doSwitch = async account => {
+    switchedTo = account.id;
+    return { account };
+  };
+  t.after(() => {
+    quotaModule.refreshQuota = originalRefresh;
+    switchModule.doSwitch = originalSwitch;
+  });
+
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+
+  assert.equal(result.switched, true);
+  assert.equal(switchedTo, candidate.id);
+  assert.ok(!refreshedIds.includes(current.id));
+});
+
+test("auto-switch treats a usage-limited current account as must-leave", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "limited-current-switch@example.com", "acct-limited-current-switch", "limited-current-switch");
+  const candidate = await addAccount(engine, "limited-ready@example.com", "acct-limited-ready", "limited-ready");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 90,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 90,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  current.probe = {
+    status: "usage_limited",
+    error_code: "usage_limit_reached",
+    http_status: 429,
+    checked_at: now,
+  };
+  candidate.quota = {
+    hourly_remaining_percentage: 80,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 80,
+    weekly_window_present: true,
+  };
+  candidate.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+
+  const quotaModule = require("../engine/quota");
+  const switchModule = require("../engine/switch");
+  const originalRefresh = quotaModule.refreshQuota;
+  const originalSwitch = switchModule.doSwitch;
+  let refreshedIds = [];
+  let switchedTo = null;
+  quotaModule.refreshQuota = async account => {
+    refreshedIds.push(account.id);
+    return account.quota;
+  };
+  switchModule.doSwitch = async account => {
+    switchedTo = account.id;
+    return { account };
+  };
+  t.after(() => {
+    quotaModule.refreshQuota = originalRefresh;
+    switchModule.doSwitch = originalSwitch;
+  });
+
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+
+  assert.equal(result.switched, true);
+  assert.equal(switchedTo, candidate.id);
+  assert.ok(!refreshedIds.includes(current.id));
+});
+
+test("auto-switch excludes usage-limited candidates even when cached quota is high", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "limited-cand-current@example.com", "acct-limited-cand-current", "limited-cand-current");
+  const limited = await addAccount(engine, "limited-cand@example.com", "acct-limited-cand", "limited-cand");
+  const ready = await addAccount(engine, "limited-cand-ready@example.com", "acct-limited-cand-ready", "limited-cand-ready");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 0,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  limited.quota = {
+    hourly_remaining_percentage: 99,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 99,
+    weekly_window_present: true,
+  };
+  limited.usage_updated_at = now;
+  limited.probe = {
+    status: "usage_limited",
+    error_code: "usage_limit_reached",
+    http_status: 429,
+    checked_at: now,
+  };
+  ready.quota = {
+    hourly_remaining_percentage: 70,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 70,
+    weekly_window_present: true,
+  };
+  ready.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(limited);
+  engine.saveAcct(ready);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+
+  const quotaModule = require("../engine/quota");
+  const switchModule = require("../engine/switch");
+  const originalRefresh = quotaModule.refreshQuota;
+  const originalSwitch = switchModule.doSwitch;
+  let switchedTo = null;
+  quotaModule.refreshQuota = async account => account.quota;
+  switchModule.doSwitch = async account => {
+    switchedTo = account.id;
+    return { account };
+  };
+  t.after(() => {
+    quotaModule.refreshQuota = originalRefresh;
+    switchModule.doSwitch = originalSwitch;
+  });
+
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+
+  assert.equal(result.switched, true);
+  assert.equal(switchedTo, ready.id);
+});
+
+test("the daemon does not treat leftover usage limits as worker failures", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "daemon-limited@example.com", "acct-daemon-limited", "daemon-limited");
+  account.requires_reauth = true;
+  account.quota_error = { code: "refresh_token_invalidated", message: "keep me", timestamp: engine.ts() };
+  engine.saveAcct(account);
+  const quotaModule = require("../engine/quota");
+  const originalFetch = quotaModule.fetchQuota;
+  quotaModule.fetchQuota = async () => {
+    const error = new Error("HTTP 429 usage_limit_reached");
+    error.code = "usage_limit_reached";
+    error.probe = {
+      status: "usage_limited",
+      error_code: "usage_limit_reached",
+      http_status: 429,
+      message: "额度已达上限或触发限流。",
+      ok: false,
+    };
+    throw error;
+  };
+  t.after(() => {
+    quotaModule.fetchQuota = originalFetch;
+  });
+
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.pausedReason, null);
+  assert.equal(result.failures.filter((item) => item.stage === "ban_probe").length, 0);
+  const persisted = engine.loadAcct(account.id);
+  assert.equal(persisted.probe.status, "usage_limited");
+  assert.equal(persisted.requires_reauth, true);
+});
+
 test("auto-switch reports but does not switch when the global switch is off", async t => {
   const { engine } = freshEngine(t);
   const current = await addAccount(engine, "disabled-current@example.com", "acct-disabled-current", "disabled-current");
@@ -991,6 +1768,10 @@ test("switch transaction commits on success and restores state when launch fails
   await assert.rejects(engine.doSwitch(first), /requires reauthorization/i);
   assert.equal(engine.loadIdx().current_account_id, second.id);
   first.requires_reauth = false;
+  first.banned = true;
+  await assert.rejects(engine.doSwitch(first), /banned and cannot be switched/i);
+  assert.equal(engine.loadIdx().current_account_id, second.id);
+  first.banned = false;
 
   engine.setSwitchRuntimeForTests({
     assertInstalled() {},
@@ -1650,6 +2431,7 @@ test("the daemon leaves reauth-required current accounts alone", async t => {
   account.requires_reauth = true;
   account.reauth_reason = "refresh_token needs re-authorization";
   account.quota_error = { code: "missing_refresh_token", message: "no refresh token", timestamp: engine.ts() };
+  account.probe = { status: "active", error_code: null, http_status: 200, checked_at: engine.ts() };
   engine.saveAcct(account);
 
   const result = await engine.runDaemonWorker();
@@ -1658,6 +2440,94 @@ test("the daemon leaves reauth-required current accounts alone", async t => {
   const persisted = engine.loadAcct(account.id);
   assert.equal(persisted.quota_error.code, "missing_refresh_token",
     "the self-heal marker must survive daemon ticks");
+});
+
+test("the daemon leaves banned current accounts alone", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "banned-daemon@example.com", "acct-banned-daemon", "banned-daemon");
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(account);
+  engine.writeProjection(account, auth);
+
+  account.banned = true;
+  account.probe = { status: "banned", error_code: "account_deactivated", http_status: 401, checked_at: engine.ts() };
+  account.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+  engine.saveAcct(account);
+
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.pausedReason, null);
+  assert.deepEqual(result.tokenRefreshes, []);
+  const persisted = engine.loadAcct(account.id);
+  assert.equal(persisted.banned, true);
+  assert.equal(persisted.tokens.refresh_token, account.tokens.refresh_token);
+});
+
+test("the daemon does not treat reauth token skips as worker failures", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "reauth-expired@example.com", "acct-reauth-expired", "reauth-expired");
+  account.requires_reauth = true;
+  account.reauth_reason = "refresh_token needs re-authorization";
+  account.quota_error = { code: "refresh_token_invalidated", message: "keep me", timestamp: engine.ts() };
+  account.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+  engine.saveAcct(account);
+
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.pausedReason, null);
+  assert.equal(result.failures.filter((item) => item.stage === "token_refresh").length, 0);
+  const persisted = engine.loadAcct(account.id);
+  assert.equal(persisted.requires_reauth, true);
+  assert.equal(persisted.quota_error.code, "refresh_token_invalidated");
+});
+
+test("token refreshAll skips banned accounts without counting them as passed", async t => {
+  const { engine } = freshEngine(t);
+  const banned = await addAccount(engine, "banned-token@example.com", "acct-banned-token", "banned-token");
+  banned.banned = true;
+  engine.saveAcct(banned);
+  const live = await addAccount(engine, "live-token@example.com", "acct-live-token", "live-token");
+
+  const summary = await engine.refreshAll(false);
+  const bannedResult = summary.results.find((item) => item.email === banned.email);
+  const liveResult = summary.results.find((item) => item.email === live.email);
+  assert.equal(bannedResult.ok, false);
+  assert.equal(bannedResult.skipped, true);
+  assert.equal(bannedResult.banned, true);
+  assert.equal(liveResult.ok, true);
+  assert.equal(summary.okCount, 1);
+});
+
+test("the daemon probes leftover access tokens on reauth accounts to detect bans", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "daemon-probe@example.com", "acct-daemon-probe", "daemon-probe");
+  account.requires_reauth = true;
+  account.quota_error = { code: "refresh_token_invalidated", message: "keep me", timestamp: engine.ts() };
+  engine.saveAcct(account);
+  const quotaModule = require("../engine/quota");
+  const originalFetch = quotaModule.fetchQuota;
+  quotaModule.fetchQuota = async () => {
+    const error = new Error("HTTP 401 account_deactivated");
+    error.probe = {
+      status: "banned",
+      error_code: "account_deactivated",
+      http_status: 401,
+      message: "账号已封号，无法继续使用。",
+      ok: false,
+    };
+    throw error;
+  };
+  t.after(() => {
+    quotaModule.fetchQuota = originalFetch;
+  });
+
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.pausedReason, null);
+  assert.equal(result.failures.filter((item) => item.stage === "ban_probe").length, 0);
+  const persisted = engine.loadAcct(account.id);
+  assert.equal(persisted.banned, true);
+  assert.equal(persisted.requires_reauth, true);
+  assert.equal(persisted.quota_error.code, "account_deactivated");
 });
 
 test("auto-switch trusts fresh cached quota instead of refreshing the current account again", async t => {

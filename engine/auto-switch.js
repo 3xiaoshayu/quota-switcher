@@ -7,8 +7,12 @@ function metricCrossedThreshold(metric, primaryTh, secondaryTh) {
   return false;
 }
 
+function accountMustLeave(acct) {
+  return !!acct?.banned || !!acct?.requires_reauth || acct?.probe?.status === "usage_limited";
+}
+
 function buildSwitchCandidate(acct, primaryTh, secondaryTh) {
-  if (acct.requires_reauth || acct.quota_error) return null;
+  if (accountMustLeave(acct) || acct.quota_error) return null;
   const metrics = extractQuotaMetrics(acct);
   if (metrics.length === 0) return null;
   const allAbove = metrics.every((m) => {
@@ -77,10 +81,12 @@ async function autoSwitchTick(cfg, options = {}) {
 
   const idx = loadIdx();
   const curId = idx.current_account_id;
-  if (!curId || !monitoredIds.includes(curId)) return { switched: false, reason: "current_not_monitored" };
+  if (!curId) return { switched: false, reason: "current_not_found" };
 
   let cur = accts.find((a) => a.id === curId);
   if (!cur) return { switched: false, reason: "current_not_found" };
+  const mustLeave = accountMustLeave(cur);
+  if (!mustLeave && !monitoredIds.includes(curId)) return { switched: false, reason: "current_not_monitored" };
 
   if (isCancelled()) return cancelled();
   // The daemon refreshes the current account right before this tick runs;
@@ -88,8 +94,9 @@ async function autoSwitchTick(cfg, options = {}) {
   // each tick does not hit the endpoint twice for the same account.
   const quotaIsFresh = (account) => !!account?.quota
     && !account.quota_error
+    && !accountMustLeave(account)
     && (ts() - (account.usage_updated_at || 0) <= 600);
-  if (!quotaIsFresh(cur)) {
+  if (!mustLeave && !quotaIsFresh(cur)) {
     try {
       await withAccountLock(cur.id, async () => {
         if (isCancelled()) return;
@@ -104,7 +111,9 @@ async function autoSwitchTick(cfg, options = {}) {
       // A failed refresh (e.g. retry backoff) with fresh-enough cached data
       // should not stall automatic switching for the whole backoff window.
       const cached = loadAcct(curId);
-      if (quotaIsFresh(cached)) {
+      if (accountMustLeave(cached)) {
+        cur = cached;
+      } else if (quotaIsFresh(cached)) {
         cur = cached;
       } else {
         return {
@@ -117,11 +126,11 @@ async function autoSwitchTick(cfg, options = {}) {
   }
   if (isCancelled()) return cancelled();
   if (!cur) return { switched: false, reason: "current_not_found" };
+  const leaveCurrent = accountMustLeave(cur);
   const metrics = extractQuotaMetrics(cur);
-  if (metrics.length === 0) return { switched: false, reason: "no_quota_data" };
-
   const primaryTh = cfg.primary_threshold, secondaryTh = cfg.secondary_threshold;
-  const shouldSwitch = metrics.some((m) => metricCrossedThreshold(m, primaryTh, secondaryTh));
+  const shouldSwitch = leaveCurrent || metrics.some((m) => metricCrossedThreshold(m, primaryTh, secondaryTh));
+  if (!leaveCurrent && metrics.length === 0) return { switched: false, reason: "no_quota_data" };
   if (!shouldSwitch) return { switched: false, reason: "quota_sufficient", metrics };
 
   const candidates = [];
@@ -130,7 +139,7 @@ async function autoSwitchTick(cfg, options = {}) {
     if (listed.id === curId) continue;
     if (!monitoredIds.includes(listed.id)) continue;
     let candidate = loadAcct(listed.id) || listed;
-    if (candidate.requires_reauth) continue;
+    if (accountMustLeave(candidate)) continue;
     if (!candidate.quota || candidate.quota_error || (ts() - (candidate.usage_updated_at || 0) > 600)) {
       try {
         await withAccountLock(candidate.id, async () => {
@@ -146,7 +155,7 @@ async function autoSwitchTick(cfg, options = {}) {
     }
     if (isCancelled()) return cancelled();
     if (!candidate) continue;
-    if (candidate.requires_reauth || candidate.quota_error) continue;
+    if (accountMustLeave(candidate) || candidate.quota_error) continue;
     const cand = buildSwitchCandidate(candidate, primaryTh, secondaryTh);
     if (cand) candidates.push(cand);
   }
@@ -179,6 +188,6 @@ async function autoSwitchTick(cfg, options = {}) {
 }
 
 module.exports = {
-  metricCrossedThreshold, buildSwitchCandidate, pickBestCandidate,
+  metricCrossedThreshold, accountMustLeave, buildSwitchCandidate, pickBestCandidate,
   resolveMonitoredIds, autoSwitchTick,
 };

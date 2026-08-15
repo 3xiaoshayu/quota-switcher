@@ -92,9 +92,14 @@ body.float-lens-root,
   cursor: pointer;
 }
 
-.float-lens-icon:hover {
+.float-lens-icon:hover:not(:disabled) {
   background: var(--color-fill-2);
   color: var(--color-label);
+}
+
+.float-lens-icon:disabled {
+  cursor: default;
+  opacity: 0.4;
 }
 
 .float-lens-icon.is-on {
@@ -336,7 +341,7 @@ body.float-lens-root,
 
 .float-lens-switch:disabled {
   cursor: default;
-  opacity: 0.55;
+  opacity: 0.4;
 }
 
 .float-lens-footer {

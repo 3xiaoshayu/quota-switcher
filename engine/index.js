@@ -7,10 +7,11 @@ const { oauthLoginFlow, restorePendingOAuth, cancelOAuth, completeOAuthManually,
 const { inspectAuthState, adoptOfficialAuth, reapplyManagedAuth, authFingerprint, identityMatchesAccount } = require("./auth-state");
 const { initLogger, logInfo, logWarn, logError, getLogDir, sanitizeMessage } = require("./logger");
 const { refreshOneTok, needsRefresh, refreshAll } = require("./token-refresh");
-const { fetchQuota, fetchQuotaWithTokenRepair, isQuotaAuthError, refreshQuota, extractQuotaMetrics, normalizeQuota } = require("./quota");
+const { fetchQuota, fetchQuotaWithTokenRepair, isQuotaAuthError, refreshQuota, probeUsageOnly, canProbeUsageWithoutRefresh, needsBanProbe, extractQuotaMetrics, normalizeQuota } = require("./quota");
+const { classifyProbe, isAccountBanned } = require("./account-probe");
 const { loadAutoSwitchCfg, saveAutoSwitchCfg, DEFAULT_AUTO_SWITCH_CFG } = require("./config-manager");
 const { withAccountLock, withAccountLocks } = require("./operation-locks");
-const { metricCrossedThreshold, buildSwitchCandidate, pickBestCandidate, resolveMonitoredIds, autoSwitchTick } = require("./auto-switch");
+const { metricCrossedThreshold, accountMustLeave, buildSwitchCandidate, pickBestCandidate, resolveMonitoredIds, autoSwitchTick } = require("./auto-switch");
 const { runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes } = require("./daemon");
 const { getCodexInstallationStatus, getCodexInstallationStatusAsync, assertOfficialCodexInstalled, assertOfficialCodexInstalledAsync } = require("./codex-installation");
 
@@ -34,13 +35,14 @@ module.exports = {
   // token-refresh
   refreshOneTok, needsRefresh, refreshAll,
   // quota
-  fetchQuota, fetchQuotaWithTokenRepair, isQuotaAuthError, refreshQuota, extractQuotaMetrics, normalizeQuota,
+  fetchQuota, fetchQuotaWithTokenRepair, isQuotaAuthError, refreshQuota, probeUsageOnly, canProbeUsageWithoutRefresh, needsBanProbe, extractQuotaMetrics, normalizeQuota,
+  classifyProbe, isAccountBanned,
   // config-manager
   loadAutoSwitchCfg, saveAutoSwitchCfg, DEFAULT_AUTO_SWITCH_CFG,
   // operation-locks
   withAccountLock, withAccountLocks,
   // auto-switch
-  metricCrossedThreshold, buildSwitchCandidate, pickBestCandidate, resolveMonitoredIds, autoSwitchTick,
+  metricCrossedThreshold, accountMustLeave, buildSwitchCandidate, pickBestCandidate, resolveMonitoredIds, autoSwitchTick,
   // daemon
   runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes,
   // codex installation

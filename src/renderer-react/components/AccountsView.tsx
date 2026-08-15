@@ -16,7 +16,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { AccountQuota, DesktopAuthState, DesktopOAuthStatus } from '../types';
-import { avatarGradient, needsHandling, planLabel, quotaBarColor, STATUS_DOT, STATUS_TEXT } from '../api/desktop';
+import { avatarGradient, needsHandling, planLabel, quotaBarColor, quotaSummaryPercent, quotaWindowSummary, STATUS_DOT, STATUS_TEXT, canRefreshQuota, canSwitchAccount } from '../api/desktop';
 import { toUserMessage } from '../api/user-messages';
 
 interface AccountsProps {
@@ -389,19 +389,17 @@ export default function AccountsView({
         <AnimatePresence initial={false}>
         {filteredAccounts.map((account) => {
           const isCardRefreshing = refreshingIds.has(account.id);
-          const fiveHourPct = account.fiveHourQuotaRemaining == null
-            ? null
-            : Math.round((account.fiveHourQuotaRemaining / account.fiveHourQuotaTotal) * 100);
-          const weeklyPct = account.weeklyQuotaRemaining == null || account.weeklyQuotaTotal <= 0
-            ? null
-            : Math.round((account.weeklyQuotaRemaining / account.weeklyQuotaTotal) * 100);
-          const quotaNotice = account.status === 'SUSPENDED'
-            ? null
-            : account.warning
-              || (account.weeklyBlocksFiveHour ? '周额度已用尽，5 小时额度暂不可用。' : null)
-              || ((account.status === 'WARNING' || account.status === 'EXPIRED' || account.status === 'LOW_QUOTA')
-                ? '额度状态需要关注。'
-                : null);
+          const fiveHourSummary = quotaWindowSummary('fiveHour', account);
+          const weeklySummary = quotaWindowSummary('weekly', account);
+          const fiveHourPct = quotaSummaryPercent(fiveHourSummary.text);
+          const weeklyPct = quotaSummaryPercent(weeklySummary.text);
+          const quotaNotice = account.warning
+            || (account.weeklyBlocksFiveHour ? '周额度已用尽，5 小时额度暂不可用。' : null)
+            || ((account.status === 'WARNING' || account.status === 'EXPIRED' || account.status === 'LOW_QUOTA')
+              ? '额度状态需要关注。'
+              : null);
+          const switchBlocked = !canSwitchAccount(account);
+          const refreshBlocked = !canRefreshQuota(account);
           const officialAligned = !oauthMode || (
             authState?.status === 'aligned' &&
             authState.currentAccountId === account.id
@@ -455,7 +453,7 @@ export default function AccountsView({
 
               {quotaNotice && (
                 <p
-                  className="mb-5 text-[12px] leading-5 text-warn"
+                  className={`mb-5 text-[12px] leading-5 ${account.status === 'BANNED' ? 'text-danger' : 'text-warn'}`}
                   id={`warning-banner-${account.id}`}
                 >
                   {quotaNotice}
@@ -483,30 +481,30 @@ export default function AccountsView({
                   {/* 5H QUOTA (kept visible even while upstream omits the window) */}
                   <div className="bg-fill rounded-xl p-4 text-left" id={`quota-box-5h-${account.id}`}>
                     <span className="text-[12px] font-medium text-label-3">5 小时额度</span>
-                    <span className={`text-[22px] font-semibold block mt-1.5 tracking-tight tabular-nums ${
-                      fiveHourPct === null ? 'text-label-3' : 'text-label'
-                    }`}>{fiveHourPct !== null ? `${fiveHourPct}%` : '--'}</span>
+                    <span className={`block mt-1.5 tracking-tight ${
+                      fiveHourPct === null ? 'text-[13px] leading-5 font-medium text-label-3' : 'text-[22px] font-semibold tabular-nums text-label'
+                    }`}>{fiveHourPct !== null ? `${fiveHourPct}%` : fiveHourSummary.text}</span>
                     <div className="h-1 bg-fill rounded-full overflow-hidden mt-3">
                       <div className={`h-full rounded-full ${color5h}`} style={{ width: `${fiveHourPct ?? 0}%` }} />
                     </div>
                     <span className="text-[10px] text-label-3 mt-2 block font-medium">
-                      {fiveHourPct !== null ? `重置: ${account.resetInFiveHour}` : '上游暂未提供'}
+                      {fiveHourPct !== null ? `重置: ${account.resetInFiveHour}` : ''}
                     </span>
                   </div>
 
                   {/* WEEKLY QUOTA */}
                   <div className="bg-fill rounded-xl p-4 text-left" id={`quota-box-weekly-${account.id}`}>
                     <span className="text-[12px] font-medium text-label-3">周额度</span>
-                    <span className={`text-[22px] font-semibold block mt-1.5 tracking-tight tabular-nums ${
-                      weeklyPct === null ? 'text-label-3' : 'text-label'
+                    <span className={`block mt-1.5 tracking-tight ${
+                      weeklyPct === null ? 'text-[13px] leading-5 font-medium text-label-3' : 'text-[22px] font-semibold tabular-nums text-label'
                     }`}>
-                      {weeklyPct !== null ? `${weeklyPct}%` : '--'}
+                      {weeklyPct !== null ? `${weeklyPct}%` : weeklySummary.text}
                     </span>
                     <div className="h-1 bg-fill rounded-full overflow-hidden mt-3">
                       <div className={`h-full rounded-full ${colorWeekly}`} style={{ width: `${weeklyPct ?? 0}%` }} />
                     </div>
                     <span className="text-[10px] text-label-3 mt-2 block font-medium">
-                      {weeklyPct !== null ? `重置: ${account.resetInWeekly}` : '上游暂未提供'}
+                      {weeklyPct !== null ? `重置: ${account.resetInWeekly}` : ''}
                     </span>
                   </div>
                 </div>
@@ -517,16 +515,18 @@ export default function AccountsView({
                 {/* 1. Refresh */}
                 <motion.button
                   onClick={() => handleSingleRefresh(account.id, account.name)}
-                  disabled={isCardRefreshing || account.status === 'SUSPENDED'}
+                  disabled={isCardRefreshing || refreshBlocked}
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.95 }}
                   transition={{ type: 'spring', stiffness: 450, damping: 20 }}
                   className="flex-1 py-3 px-2 bg-fill hover:bg-fill-2 rounded-[10px] text-label-2 hover:text-label transition-all text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
-                  title={account.status === 'SUSPENDED' ? '该账号需要重新授权后才能刷新额度' : '刷新此账号'}
+                  title={refreshBlocked
+                    ? (account.status === 'BANNED' ? '账号已封号，无法刷新额度' : '该账号需要重新授权后才能刷新额度')
+                    : '刷新此账号'}
                   id={`action-refresh-${account.id}`}
                 >
             <RefreshCw className={`w-3.5 h-3.5 ${isCardRefreshing ? 'animate-spin text-accent' : ''}`} />
-                  {account.status === 'SUSPENDED' ? '请先重新授权' : '刷新'}
+                  {isCardRefreshing ? '刷新中...' : '刷新'}
                 </motion.button>
 
                 {account.status === 'SUSPENDED' && onReauthorizeAccount && (
@@ -551,13 +551,15 @@ export default function AccountsView({
                       if (officialAligned) return
                       void handleSwitchAccount(account.id)
                     }}
-                    disabled={officialAligned || account.status === 'SUSPENDED' || switchingId !== null || deletingId === account.id || !!oauthStatus?.pending}
+                    disabled={officialAligned || switchBlocked || switchingId !== null || deletingId === account.id || !!oauthStatus?.pending}
                     aria-busy={switchingId === account.id}
                     title={
                       oauthStatus?.pending
                         ? '已有授权正在进行，请先完成或取消'
+                        : account.status === 'BANNED'
+                        ? '账号已封号，无法切换'
                         : account.status === 'SUSPENDED'
-                        ? '该账号需要重新授权后才能重新登录'
+                        ? '该账号需要重新授权后才能切换'
                         : officialAligned
                           ? '官方已是此账号'
                           : '将此账号写入官方 Codex 并登录'
@@ -575,21 +577,21 @@ export default function AccountsView({
                     <Star className={`w-3.5 h-3.5 fill-accent ${switchingId === account.id ? 'animate-pulse' : ''}`} />
                     {switchingId === account.id
                       ? '登录中...'
-                      : account.status === 'SUSPENDED'
-                        ? '不可用'
-                        : officialAligned
-                          ? '当前'
-                          : '重新登录 Codex'}
+                      : officialAligned
+                        ? '当前'
+                        : '重新登录 Codex'}
                   </motion.button>
                 ) : (
                   <motion.button
                     onClick={() => void handleSwitchAccount(account.id)}
-                    disabled={account.status === 'SUSPENDED' || switchingId !== null || deletingId === account.id || !!oauthStatus?.pending}
+                    disabled={switchBlocked || switchingId !== null || deletingId === account.id || !!oauthStatus?.pending}
                     aria-busy={switchingId === account.id}
                     title={
                       oauthStatus?.pending
                         ? '已有授权正在进行，请先完成或取消'
-                        : account.status === 'SUSPENDED'
+                        : account.status === 'BANNED'
+                          ? '账号已封号，无法切换'
+                          : account.status === 'SUSPENDED'
                           ? '该账号需要重新授权后才能切换'
                           : '切换到此账号'
                     }
@@ -600,7 +602,7 @@ export default function AccountsView({
                     id={`action-switch-${account.id}`}
                   >
                     <ArrowLeftRight className={`w-3.5 h-3.5 ${switchingId === account.id ? 'animate-pulse' : ''}`} />
-                    {switchingId === account.id ? '切换中...' : account.status === 'SUSPENDED' ? '不可用' : '切换'}
+                    {switchingId === account.id ? '切换中...' : '切换'}
                   </motion.button>
                 )}
 

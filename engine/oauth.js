@@ -256,6 +256,8 @@ function accountFromTokens(tokens, existing = null) {
     token_source_mode: "managed",
     requires_reauth: false,
     reauth_reason: null,
+    banned: false,
+    probe: null,
     quota: existing?.quota || null,
     quota_error: null,
     usage_updated_at: existing?.usage_updated_at || null,

@@ -94,6 +94,7 @@ test("float window persists height after setHeight", () => {
     setBackgroundColor() {}
     setHasShadow() {}
     setAlwaysOnTop() {}
+    setSkipTaskbar(value) { this.skipTaskbar = !!value; }
     isVisible() { return this.visible; }
     isMinimized() { return false; }
     restore() {}
@@ -140,7 +141,7 @@ test("float window persists height after setHeight", () => {
   assert.equal(loadFloatState(dir).height, 600);
 });
 
-test("float window shows after the renderer is ready", async () => {
+test("float window shows immediately and again after hide", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "float-window-"));
   const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
   let created = null;
@@ -171,7 +172,8 @@ test("float window shows after the renderer is ready", async () => {
     setMenuBarVisibility() {}
     setBackgroundColor() {}
     setHasShadow() {}
-    setAlwaysOnTop() {}
+    setAlwaysOnTop(_enabled, level) { this.onTopLevel = level; }
+    setSkipTaskbar(value) { this.skipTaskbar = !!value; }
     isVisible() { return this.visible; }
     isMinimized() { return false; }
     restore() {}
@@ -208,16 +210,32 @@ test("float window shows after the renderer is ready", async () => {
   });
 
   controller.show();
-  assert.equal(created.visible, false);
-  created.readyCb();
   assert.equal(created.visible, true);
+  assert.equal(created.skipTaskbar, false);
+  assert.equal(created.onTopLevel, "screen-saver");
   assert.equal(created.movedTop, true);
   assert.equal(created.focused, true);
+  assert.equal(controller.inspect().visible, true);
+
+  created.movedTop = false;
+  controller.hide();
+  assert.equal(created.visible, false);
+  assert.equal(created.skipTaskbar, true);
+
+  controller.show();
+  assert.equal(created.visible, true);
+  assert.equal(created.skipTaskbar, false);
+  assert.equal(created.movedTop, true);
   controller.destroy();
 });
 
 test("float lens footer does not crash while accounts are loading", () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "src", "renderer-react", "components", "FloatLens.tsx"), "utf8");
-  assert.match(source, /viewed\?\.status === 'SUSPENDED'/);
+  const css = fs.readFileSync(path.join(__dirname, "..", "src", "renderer-react", "components", "FloatLens.css"), "utf8");
+  assert.match(source, /!viewed \|\| canRefreshQuota\(viewed\)/);
+  assert.match(source, /该账号需要重新授权后才能刷新额度/);
+  assert.match(source, /STATUS_TEXT/);
+  assert.doesNotMatch(source, /请回主窗口重新授权/);
   assert.doesNotMatch(source, /title=\{viewed\.status/);
+  assert.match(css, /\.float-lens-icon:disabled/);
 });

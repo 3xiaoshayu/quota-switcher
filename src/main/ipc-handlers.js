@@ -17,6 +17,25 @@ function reauthorizationRequiredMessage(operation) {
     return `Account requires reauthorization before ${operation}.`;
 }
 
+async function refreshAccountQuota(eng, account, force) {
+    if (account.banned || account.requires_reauth) {
+        if (typeof eng.canProbeUsageWithoutRefresh === "function"
+            && typeof eng.probeUsageOnly === "function"
+            && eng.canProbeUsageWithoutRefresh(account)) {
+            return eng.probeUsageOnly(account, { force });
+        }
+        if (account.banned) {
+            const error = new Error("The target account is banned and cannot refresh quotas");
+            error.code = "account_banned";
+            throw error;
+        }
+        const error = new Error(reauthorizationRequiredMessage("quotas can be refreshed"));
+        error.code = "reauthorization_required";
+        throw error;
+    }
+    return eng.refreshQuota(account, { force });
+}
+
 function loadAcctById(eng, id) {
     if (!id) return null;
     try {
@@ -55,6 +74,13 @@ function publicAccount(eng, account) {
         quota_next_retry_at: account.quota_next_retry_at || null,
         requires_reauth: !!account.requires_reauth,
         reauth_reason: account.reauth_reason || null,
+        banned: !!account.banned,
+        probe: account.probe ? {
+            status: account.probe.status || null,
+            error_code: account.probe.error_code || null,
+            http_status: account.probe.http_status || null,
+            checked_at: account.probe.checked_at || null,
+        } : null,
         quota: publicQuota(eng, account.quota),
         quota_error: account.quota_error ? {
             code: account.quota_error.code || null,
@@ -172,8 +198,11 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         return ok(true);
     });
     handle("float:show", () => {
-        services.floatWindow?.show();
-        return ok(true);
+        if (!services.floatWindow) {
+            return ok({ exists: false, visible: false, alwaysOnTop: false });
+        }
+        services.floatWindow.show();
+        return ok(services.floatWindow.inspect());
     });
     handle("float:hide", () => {
         services.floatWindow?.hide();
@@ -317,10 +346,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                 }
             }
             return await withFreshAccount(eng, id, async account => {
-                if (account.requires_reauth) {
-                    return fail(reauthorizationRequiredMessage("quotas can be refreshed"));
-                }
-                const quota = await eng.refreshQuota(account, { force: force !== false });
+                const quota = await refreshAccountQuota(eng, account, force !== false);
                 return ok(publicQuota(eng, quota));
             });
         } catch (error) { return fail(error.message); }
@@ -332,12 +358,20 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                 await eng.withAccountLock(listed.id, async () => {
                     const account = eng.loadAcct(listed.id);
                     if (!account) return;
-                    if (account.requires_reauth) {
+                    if (account.banned || account.requires_reauth) {
+                        if (typeof eng.canProbeUsageWithoutRefresh === "function"
+                            && typeof eng.probeUsageOnly === "function"
+                            && eng.canProbeUsageWithoutRefresh(account)) {
+                            const quota = await eng.probeUsageOnly(account, { force: true });
+                            results.push({ id: account.id, email: account.email, quota: publicQuota(eng, quota) });
+                            return;
+                        }
                         results.push({
                             id: account.id,
                             email: account.email,
                             skipped: true,
-                            reason: "reauthorization_required",
+                            reason: account.banned ? "account_banned" : "reauthorization_required",
+                            banned: !!account.banned,
                         });
                         return;
                     }
@@ -345,7 +379,14 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                     results.push({ id: account.id, email: account.email, quota: publicQuota(eng, quota) });
                 });
             } catch (error) {
-                results.push({ id: listed.id, email: listed.email, error: error.message });
+                const latest = typeof eng.loadAcct === "function" ? eng.loadAcct(listed.id) : null;
+                results.push({
+                    id: listed.id,
+                    email: listed.email,
+                    error: error.message,
+                    banned: !!latest?.banned,
+                    reason: error.code || undefined,
+                });
             }
         }
         return ok(results);
@@ -354,6 +395,9 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     handle("token:refresh", async (event, id) => {
         try {
             return await withFreshAccount(eng, id, async account => {
+                if (account.banned) {
+                    return fail("The target account is banned and token refresh is skipped");
+                }
                 const result = await eng.refreshOneTok(account);
                 return tokenRefreshResponse(result);
             });

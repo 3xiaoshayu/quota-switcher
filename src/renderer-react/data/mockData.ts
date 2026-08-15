@@ -116,7 +116,7 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
     tokenValidityPct: 0,
     resetInFiveHour: '已过期',
     resetInWeekly: '已过期',
-    warning: '该账号需要重新授权后才能刷新 Token。',
+    warning: '该账号需要重新授权后才能使用。',
   },
   {
     id: '8',

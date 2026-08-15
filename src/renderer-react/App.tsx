@@ -23,8 +23,13 @@ import {
   desktopApi,
   formatDateTime,
   hasDesktopBridge,
+  canJoinAutoSwitch,
   needsQuotaAutoSync,
+  pruneAutoSwitchAccountIds,
   quotaAutoSyncStaleMs,
+  selectedAccountIdsEqual,
+  summarizeRefreshAllResults,
+  summarizeTokenCheckResults,
   QUOTA_AUTO_SYNC_MIN_GAP_MS,
 } from './api/desktop';
 import { logTypeLabel, toUserMessage } from './api/user-messages';
@@ -241,8 +246,23 @@ function DashboardApp() {
 
   const applyDashboardState = useCallback((snapshot: Awaited<ReturnType<typeof desktopApi.loadDashboardState>>) => {
     setAccounts(snapshot.accounts);
-    setAutoSwitchConfig(snapshot.config);
-    autoSwitchConfigRef.current = snapshot.config;
+    accountsRef.current = snapshot.accounts;
+    const prunedSelected = snapshot.config.account_scope_mode === 'selected'
+      ? pruneAutoSwitchAccountIds(snapshot.config.selected_account_ids || [], snapshot.accounts)
+      : snapshot.accounts.filter(canJoinAutoSwitch).map((account) => account.id);
+    let nextConfig = snapshot.config;
+    if (
+      snapshot.config.account_scope_mode === 'selected'
+      && !selectedAccountIdsEqual(snapshot.config.selected_account_ids || [], prunedSelected)
+    ) {
+      nextConfig = {
+        ...snapshot.config,
+        selected_account_ids: prunedSelected,
+      };
+      void desktopApi.saveAutoSwitchConfig(nextConfig).catch(() => {});
+    }
+    setAutoSwitchConfig(nextConfig);
+    autoSwitchConfigRef.current = nextConfig;
     setAppInfo(snapshot.appInfo);
     setCodexStatus(snapshot.codexStatus);
     setUpdateStatus(snapshot.updateStatus);
@@ -257,7 +277,7 @@ function DashboardApp() {
     oauthStatusRef.current = nextOAuth;
     if (nextOAuth.pending && !wasOAuthPendingRef.current) setActiveTab('accounts');
     wasOAuthPendingRef.current = !!nextOAuth.pending;
-    setSettings(settingsFromDesktopState(snapshot.config, snapshot.appInfo, snapshot.codexStatus, snapshot.updateStatus));
+    setSettings(settingsFromDesktopState(nextConfig, snapshot.appInfo, snapshot.codexStatus, snapshot.updateStatus));
     setDaemonState({
       status: snapshot.daemonRunning ? 'Running' : 'Stopped',
       syncInterval: snapshot.daemonSyncInterval,
@@ -266,14 +286,8 @@ function DashboardApp() {
       lastError: snapshot.daemonLastError ? toUserMessage(snapshot.daemonLastError) : null,
       pausedReason: snapshot.daemonPausedReason ? toUserMessage(snapshot.daemonPausedReason) : null,
     });
-    setSelectedAccountIds(
-      snapshot.config.account_scope_mode === 'selected'
-        ? snapshot.config.selected_account_ids || []
-        : snapshot.accounts.map((account) => account.id),
-    );
-    selectedAccountIdsRef.current = snapshot.config.account_scope_mode === 'selected'
-      ? snapshot.config.selected_account_ids || []
-      : snapshot.accounts.map((account) => account.id);
+    setSelectedAccountIds(prunedSelected);
+    selectedAccountIdsRef.current = prunedSelected;
     if (snapshot.currentAccount?.email) {
       setUserEmail(snapshot.currentAccount.email);
       localStorage.setItem('codex_auth_email', snapshot.currentAccount.email);
@@ -550,17 +564,23 @@ function DashboardApp() {
       addLogEntry('开始同步全部账号额度...', 'info');
       try {
         const results = await desktopApi.refreshAllQuotas();
-        const failed = results.filter((item) => item.error).length;
-        const skipped = results.filter((item) => item.skipped).length;
-        const refreshed = results.length - failed - skipped;
+        const { refreshed, reauthSkipped, bannedSkipped, failed } = summarizeRefreshAllResults(results);
         const snapshot = await loadDashboardState(false);
         if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-        if (failed) {
-          addToast(`已刷新 ${refreshed} 个，${skipped} 个需重新授权，${failed} 个失败`, 'warning');
-          addLogEntry(`额度刷新完成：跳过 ${skipped} 个，失败 ${failed} 个。`, 'warning');
-        } else if (skipped) {
-          addToast(`已刷新 ${refreshed} 个；${skipped} 个需重新授权`, 'info');
-          addLogEntry(`额度刷新完成；${skipped} 个账号需要重新授权。`, 'info');
+        if (failed || bannedSkipped) {
+          const parts = [`已刷新 ${refreshed} 个`];
+          if (reauthSkipped) parts.push(`${reauthSkipped} 个需重新授权`);
+          if (bannedSkipped) parts.push(`${bannedSkipped} 个已封号`);
+          if (failed) parts.push(`${failed} 个同步失败`);
+          addToast(parts.join('，'), 'warning');
+          const logParts = [];
+          if (reauthSkipped) logParts.push(`需重新授权 ${reauthSkipped} 个`);
+          if (bannedSkipped) logParts.push(`封号 ${bannedSkipped} 个`);
+          if (failed) logParts.push(`失败 ${failed} 个`);
+          addLogEntry(`额度刷新完成：${logParts.join('，')}。`, 'warning');
+        } else if (reauthSkipped) {
+          addToast(`已刷新 ${refreshed} 个；${reauthSkipped} 个需重新授权`, 'info');
+          addLogEntry(`额度刷新完成；${reauthSkipped} 个账号需要重新授权。`, 'info');
         } else {
           addToast(`已刷新 ${refreshed} 个账号额度`, 'success');
           addLogEntry('全部账号额度同步完成。', 'success');
@@ -601,26 +621,55 @@ function DashboardApp() {
   const handleRefreshAccount = async (id: string) => {
     if (desktopBridgeAvailable) {
       const account = accountsRef.current.find(item => item.id === id);
+      let refreshError: unknown = null;
       try {
         await runAccountOperation(id, () => desktopApi.refreshQuota(id));
-        const snapshot = await loadDashboardState(false);
-        if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-        const fresh = snapshot?.accounts.find(item => item.id === id);
-        if (fresh?.status === 'SYNC_FAILED') {
-          const detail = fresh.warning || '额度暂时没刷到，登录还在。';
-          addToast(detail, 'warning');
-          addLogEntry(`${account?.email || id}：${detail}`, 'warning');
-        } else {
-          addToast(`${account?.email || id} 额度已刷新`, 'success');
-          addLogEntry(`账号额度已刷新：${account?.email || id}`, 'success');
-        }
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        addToast(message, 'error');
-        addLogEntry(message, 'error');
-        throw error;
+        refreshError = error;
       }
-      return;
+      const snapshot = await loadDashboardState(false);
+      if (snapshot) queueQuotaAutoSync(snapshot.accounts);
+      const fresh = snapshot?.accounts.find(item => item.id === id);
+      const label = account?.email || id;
+      if (!refreshError) {
+        if (fresh?.status === 'SUSPENDED') {
+          const detail = `${label} 额度已刷新，仍需重新授权后才能继续使用`;
+          addToast(detail, 'success');
+          addLogEntry(detail, 'success');
+          return;
+        }
+        addToast(`${label} 额度已刷新`, 'success');
+        addLogEntry(`账号额度已刷新：${label}`, 'success');
+        return;
+      }
+      if (fresh?.status === 'BANNED') {
+        const detail = fresh.warning || '账号已封号，无法继续使用。';
+        addToast(detail, 'error');
+        addLogEntry(`${label}：${detail}`, 'error');
+        return;
+      }
+      if (fresh?.status === 'LIMITED') {
+        const detail = fresh.warning || '额度已达上限或触发限流。';
+        addToast(detail, 'warning');
+        addLogEntry(`${label}：${detail}`, 'warning');
+        return;
+      }
+      if (fresh?.status === 'SUSPENDED') {
+        const detail = fresh.warning || '该账号需要重新授权后才能刷新额度';
+        addToast(detail, 'warning');
+        addLogEntry(`${label}：${detail}`, 'warning');
+        return;
+      }
+      if (fresh?.status === 'SYNC_FAILED') {
+        const detail = fresh.warning || '额度同步失败，请稍后重试。';
+        addToast(detail, 'warning');
+        addLogEntry(`${label}：${detail}`, 'warning');
+        return;
+      }
+      const message = refreshError instanceof Error ? refreshError.message : String(refreshError);
+      addToast(message, 'error');
+      addLogEntry(message, 'error');
+      throw refreshError;
     }
     setAccounts(prev => prev.map(acc => {
       if (acc.id === id) {
@@ -902,6 +951,13 @@ function DashboardApp() {
   // Toggle Auto-switch scope selection
   const handleToggleAccountSelection = (id: string) => {
     const selected = accounts.find(a => a.id === id);
+    if (selected && !canJoinAutoSwitch(selected)) {
+      addToast(
+        selected.status === 'BANNED' ? '账号已封号，无法加入自动切号' : '该账号需要重新授权后才能加入自动切号',
+        'info',
+      );
+      return;
+    }
     if (desktopBridgeAvailable) {
       if (autoSwitchConfigRef.current.account_scope_mode !== 'selected') {
         addToast('当前是全部账号。要缩小范围，请先切到「指定账号」。', 'info');
@@ -910,7 +966,7 @@ function DashboardApp() {
       const currentSelected = selectedAccountIdsRef.current;
       const nextSelected = currentSelected.includes(id)
         ? currentSelected.filter(item => item !== id)
-        : [...currentSelected, id];
+        : pruneAutoSwitchAccountIds([...currentSelected, id], accountsRef.current);
       const nextConfig: DesktopAutoSwitchConfig = {
         ...autoSwitchConfigRef.current,
         account_scope_mode: 'selected',
@@ -940,12 +996,16 @@ function DashboardApp() {
 
   const saveAutoSwitchConfig = async (nextConfig: DesktopAutoSwitchConfig) => {
     const revision = ++configSaveRevision.current;
-    autoSwitchConfigRef.current = nextConfig;
-    setAutoSwitchConfig(nextConfig);
-    setSettings(settingsFromDesktopState(nextConfig, appInfo, codexStatus, updateStatus || null));
+    const prunedConfig: DesktopAutoSwitchConfig = {
+      ...nextConfig,
+      selected_account_ids: pruneAutoSwitchAccountIds(nextConfig.selected_account_ids || [], accountsRef.current),
+    };
+    autoSwitchConfigRef.current = prunedConfig;
+    setAutoSwitchConfig(prunedConfig);
+    setSettings(settingsFromDesktopState(prunedConfig, appInfo, codexStatus, updateStatus || null));
     const saveOperation = configSaveQueue.current
       .catch(() => {})
-      .then(() => desktopApi.saveAutoSwitchConfig(nextConfig));
+      .then(() => desktopApi.saveAutoSwitchConfig(prunedConfig));
     configSaveQueue.current = saveOperation.catch(() => {});
     try {
       await saveOperation;
@@ -1012,24 +1072,19 @@ function DashboardApp() {
     const summary = await desktopApi.refreshAllTokens(false);
     await loadDashboardState(false);
     const total = summary.results.length;
-    const needsReauthorization = summary.results.filter(
-      result => !result.ok && (result.reauthRequired || result.skipped),
-    );
-    const failed = summary.results.filter(
-      result => !result.ok && !needsReauthorization.includes(result),
-    );
-    const passed = summary.results.filter(result => result.ok).length;
-    if (failed.length > 0) {
-      const reauthorizationText = needsReauthorization.length > 0
-        ? `，${needsReauthorization.length} 个需重新授权`
-        : '';
-      const message = `令牌检查完成：${passed}/${total} 通过${reauthorizationText}，${failed.length} 个失败。`;
+    const { passed, reauthSkipped, bannedSkipped, failed } = summarizeTokenCheckResults(summary.results);
+    if (failed || bannedSkipped) {
+      const parts = [`${passed}/${total} 通过`];
+      if (reauthSkipped) parts.push(`${reauthSkipped} 个需重新授权`);
+      if (bannedSkipped) parts.push(`${bannedSkipped} 个已封号`);
+      if (failed) parts.push(`${failed} 个失败`);
+      const message = `令牌检查完成：${parts.join('，')}。`;
       addToast(message, 'warning');
       addLogEntry(message, 'warning');
       return;
     }
-    if (needsReauthorization.length > 0) {
-      const message = `令牌检查完成：${passed}/${total} 通过，${needsReauthorization.length} 个需重新授权。`;
+    if (reauthSkipped) {
+      const message = `令牌检查完成：${passed}/${total} 通过，${reauthSkipped} 个需重新授权。`;
       addToast(message, 'warning');
       addLogEntry(message, 'warning');
       return;
@@ -1109,9 +1164,10 @@ function DashboardApp() {
     };
     if (mode === 'selected') {
       const existing = autoSwitchConfigRef.current.selected_account_ids || [];
-      const seeded = existing.length > 0
-        ? existing
-        : selectedAccountIdsRef.current.filter((id) => String(id || '').trim() !== '');
+      const seeded = pruneAutoSwitchAccountIds(
+        existing.length > 0 ? existing : selectedAccountIdsRef.current.filter((id) => String(id || '').trim() !== ''),
+        accountsRef.current,
+      );
       nextConfig.selected_account_ids = seeded;
       selectedAccountIdsRef.current = seeded;
       setSelectedAccountIds(seeded);
@@ -1316,8 +1372,12 @@ function DashboardApp() {
                   onOpenLogs={desktopBridgeAvailable ? async () => { await desktopApi.openLogs(); } : undefined}
                   onShowFloatWindow={async () => {
                     if (!desktopBridgeAvailable) return;
-                    await desktopApi.showFloatWindow();
-                    addToast('桌面额度已打开。看不见时点右上角图钉置顶。', 'info');
+                    const state = await desktopApi.showFloatWindow();
+                    if (state?.visible) {
+                      addToast('桌面额度已打开。看不见时点任务栏或右上角。', 'info');
+                      return;
+                    }
+                    addToast('额度窗已创建，但当前看不见。请看任务栏，或把挡住的窗口挪开。', 'warning');
                   }}
                 />
               )}
@@ -1551,6 +1611,7 @@ function DashboardApp() {
                 <div>
                   <h4 className="font-bold text-white mb-1">本轮打磨</h4>
                   <ul className="list-disc pl-4 space-y-1 text-label-2 text-[11px]">
+                    <li>额度检查能区分已封号、需重新授权、额度限流和同步失败。</li>
                     <li>刷新额度失败时不再提示成功；授权中途卡住可以取消或重试。</li>
                     <li>配额页和账号页的「需要处理」口径一致；时长和套餐副标题改为中文。</li>
                     <li>切号前检测官方 Codex 不再卡住界面；悬浮窗高度会记住。</li>

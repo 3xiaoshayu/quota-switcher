@@ -3,6 +3,17 @@ const { USAGE_URL } = require("./config");
 const { httpJson, buildCodexHeaders } = require("./http-client");
 const { loadIdx, saveIdx, saveAcct } = require("./storage");
 const { logWarn } = require("./logger");
+const {
+  STATUS_BANNED,
+  STATUS_USAGE_LIMITED,
+  STATUS_PROBE_FAILED,
+  classifyProbe,
+  classifyThrownError,
+  classifyMissingToken,
+  isLeftoverAccessRejected,
+  probeError,
+  applyProbeToAccount,
+} = require("./account-probe");
 
 const TOKEN_REPAIR_CODES = new Set([
   "invalid_grant",
@@ -27,32 +38,62 @@ function isQuotaAuthError(error) {
   return TOKEN_REPAIR_CODES.has(code) || /\bHTTP\s+401\b/i.test(String(error?.message || error || ""));
 }
 
-async function ensureAccessTokenForQuota(acct) {
+function probeFromRefreshResult(result) {
+  return classifyProbe({
+    source: "refresh",
+    httpStatus: 0,
+    body: result?.detail || result?.error || "",
+    headers: {},
+    code: result?.code || null,
+  });
+}
+
+async function ensureAccessTokenForQuota(acct, refreshTask) {
+  if (!acct?.tokens?.access_token && !acct?.tokens?.refresh_token) {
+    throw probeError(classifyMissingToken());
+  }
   if (!isTokenExpired(acct.tokens?.access_token || "")) return;
 
-  const { refreshOneTok } = require("./token-refresh");
-  const result = await refreshOneTok(acct);
+  const refresh = refreshTask || require("./token-refresh").refreshOneTok;
+  const result = await refresh(acct);
   if (!result?.ok) {
-    throw new Error("Token 已过期且刷新失败: " + (result?.error || "未知错误"));
+    const probe = probeFromRefreshResult(result);
+    const error = new Error("Token 已过期且刷新失败: " + (result?.error || "未知错误"));
+    error.code = probe.error_code || result?.code || "token_refresh_failed";
+    error.probe = probe;
+    throw error;
   }
+}
+
+function shouldSkipTokenRepair(error) {
+  const probe = error?.probe || classifyThrownError(error, "usage");
+  return probe.status === STATUS_BANNED || probe.status === STATUS_USAGE_LIMITED;
 }
 
 async function fetchQuotaWithTokenRepair(acct, dependencies = {}) {
   const fetchTask = dependencies.fetchQuota || fetchQuota;
   const refreshTask = dependencies.refreshOneTok || require("./token-refresh").refreshOneTok;
-  await ensureAccessTokenForQuota(acct);
+  await ensureAccessTokenForQuota(acct, refreshTask);
   try {
     return await fetchTask(acct);
   } catch (error) {
-    if (!isQuotaAuthError(error)) throw error;
+    if (!error.probe) error.probe = classifyThrownError(error, "usage");
+    if (shouldSkipTokenRepair(error) || !isQuotaAuthError(error)) throw error;
     const refreshResult = await refreshTask(acct, { force: true });
     if (!refreshResult?.ok) {
+      const probe = probeFromRefreshResult(refreshResult);
       const repairError = new Error(`Quota authorization could not be repaired: ${refreshResult?.error || error.message || error}`);
-      repairError.code = extractCodeFromError(error) || "quota_auth_repair_failed";
+      repairError.code = probe.error_code || extractCodeFromError(error) || "quota_auth_repair_failed";
+      repairError.probe = probe;
       repairError.cause = error;
       throw repairError;
     }
-    return fetchTask(acct);
+    try {
+      return await fetchTask(acct);
+    } catch (retryError) {
+      if (!retryError.probe) retryError.probe = classifyThrownError(retryError, "usage");
+      throw retryError;
+    }
   }
 }
 
@@ -68,16 +109,34 @@ function responseDiagnostics(resp) {
 }
 
 async function fetchQuota(acct) {
+  if (!acct?.tokens?.access_token) {
+    throw probeError(classifyMissingToken());
+  }
   const headers = buildCodexHeaders(acct);
   const resp = await httpJson(USAGE_URL, { headers });
-  if (resp.status >= 400) {
-    const { extractErrorCode } = require("./http-client");
-    const code = extractErrorCode(resp.body);
-    logWarn(`Quota request failed: status=${resp.status}${code ? ` code=${code}` : ""} ${responseDiagnostics(resp)}`);
-    throw new Error("HTTP " + resp.status + (code ? " " + code : ""));
+  const probe = classifyProbe({
+    source: "usage",
+    httpStatus: resp.status,
+    body: resp.body,
+    headers: resp.headers,
+  });
+  if (probe.status !== "active") {
+    logWarn(`Quota request failed: status=${resp.status}${probe.error_code ? ` code=${probe.error_code}` : ""} ${responseDiagnostics(resp)}`);
+    const error = new Error("HTTP " + resp.status + (probe.error_code ? " " + probe.error_code : ""));
+    error.code = probe.error_code || String(resp.status);
+    error.probe = probe;
+    throw error;
   }
-  const data = JSON.parse(resp.body);
-  return parseQuotaPayload(data);
+  try {
+    return parseQuotaPayload(JSON.parse(resp.body || "{}"));
+  } catch {
+    throw probeError(classifyProbe({
+      source: "usage",
+      httpStatus: resp.status,
+      body: resp.body,
+      headers: resp.headers,
+    }));
+  }
 }
 
 // Upstream currently ships only a weekly window and puts it in
@@ -152,6 +211,95 @@ function quotaRetryDelaySeconds(acct, error) {
   return Math.min(30 * 60, 60 * (2 ** Math.min(5, failures - 1)));
 }
 
+function persistPlanType(acct, q) {
+  if (q.plan_type && acct.plan_type !== q.plan_type) {
+    acct.plan_type = q.plan_type;
+    const idx = loadIdx();
+    const ai = idx.accounts.find((a) => a.id === acct.id);
+    if (ai) ai.plan_type = q.plan_type;
+    saveIdx(idx);
+  }
+}
+
+function canProbeUsageWithoutRefresh(acct) {
+  if (!acct?.tokens?.access_token || isTokenExpired(acct.tokens.access_token)) return false;
+  if (isLeftoverAccessRejected(acct.probe)) return false;
+  return true;
+}
+
+const LEFTOVER_PROBE_STALE_SECONDS = 600;
+
+function needsBanProbe(acct, now = ts()) {
+  if (!acct?.requires_reauth && !acct?.banned) return false;
+  if (!canProbeUsageWithoutRefresh(acct)) return false;
+  if (acct.quota_next_retry_at && Number(acct.quota_next_retry_at) > now) return false;
+  const status = acct.probe?.status;
+  if (status === "active" || status === "banned" || status === "usage_limited") {
+    const checkedAt = Number(acct.probe?.checked_at || acct.usage_updated_at || 0);
+    if (checkedAt && now - checkedAt <= LEFTOVER_PROBE_STALE_SECONDS) return false;
+  }
+  return true;
+}
+
+// 只用还没过期的访问令牌打 usage，绝不去刷刷新令牌。
+// 用来把「需重新授权」和「已封号」分开。
+async function probeUsageOnly(acct, options = {}) {
+  const force = options.force !== false;
+  const fetchTask = options.fetchQuota || module.exports.fetchQuota;
+  const now = ts();
+  if (!force && acct.quota_next_retry_at && Number(acct.quota_next_retry_at) > now) {
+    const retryError = new Error(`Quota refresh is waiting for retry until ${acct.quota_next_retry_at}`);
+    retryError.code = "quota_retry_pending";
+    throw retryError;
+  }
+  if (!canProbeUsageWithoutRefresh(acct)) {
+    if (acct.banned) {
+      const error = new Error("The target account is banned and cannot refresh quotas");
+      error.code = "account_banned";
+      throw error;
+    }
+    const error = new Error("Account requires reauthorization before quotas can be refreshed.");
+    error.code = "reauthorization_required";
+    throw error;
+  }
+
+  try {
+    const q = await fetchTask(acct);
+    applyProbeToAccount(acct, {
+      status: "active",
+      error_code: null,
+      http_status: 200,
+      message: "账号可用",
+      ok: true,
+    });
+    acct.quota = q;
+    acct.usage_updated_at = now;
+    acct.quota_last_attempt_at = now;
+    acct.quota_refresh_failures = 0;
+    acct.quota_next_retry_at = null;
+    if (!acct.requires_reauth) acct.quota_error = null;
+    persistPlanType(acct, q);
+    saveAcct(acct);
+    return q;
+  } catch (err) {
+    const probe = classifyThrownError(err, "usage");
+    applyProbeToAccount(acct, probe);
+    acct.quota_last_attempt_at = now;
+    acct.quota_refresh_failures = Number(acct.quota_refresh_failures || 0) + 1;
+    acct.quota_next_retry_at = now + quotaRetryDelaySeconds(acct, err);
+    if (probe.status === STATUS_BANNED) {
+      acct.quota_error = {
+        code: probe.error_code || extractCodeFromError(err),
+        message: probe.message || err?.message || String(err),
+        timestamp: ts(),
+      };
+    }
+    saveAcct(acct);
+    logWarn(`Leftover usage probe finished without a live quota: ${err?.message || err}`);
+    throw err;
+  }
+}
+
 async function refreshQuota(acct, options = {}) {
   const force = options.force !== false;
   const now = ts();
@@ -161,32 +309,39 @@ async function refreshQuota(acct, options = {}) {
     throw retryError;
   }
   try {
-    const q = await fetchQuotaWithTokenRepair(acct);
+    const q = await module.exports.fetchQuotaWithTokenRepair(acct);
+    applyProbeToAccount(acct, {
+      status: "active",
+      error_code: null,
+      http_status: 200,
+      message: "账号可用",
+      ok: true,
+    });
     acct.quota = q;
     acct.quota_error = null;
     acct.usage_updated_at = now;
     acct.quota_last_attempt_at = now;
     acct.quota_refresh_failures = 0;
     acct.quota_next_retry_at = null;
-    if (q.plan_type && acct.plan_type !== q.plan_type) {
-      acct.plan_type = q.plan_type;
-      const idx = loadIdx();
-      const ai = idx.accounts.find((a) => a.id === acct.id);
-      if (ai) ai.plan_type = q.plan_type;
-      saveIdx(idx);
-    }
+    persistPlanType(acct, q);
     saveAcct(acct);
     return q;
   } catch (err) {
+    const probe = classifyThrownError(err, "usage");
+    const wasBanned = !!acct.banned;
+    applyProbeToAccount(acct, probe);
     acct.quota_last_attempt_at = now;
     acct.quota_refresh_failures = Number(acct.quota_refresh_failures || 0) + 1;
     acct.quota_next_retry_at = now + quotaRetryDelaySeconds(acct, err);
     // The missing_refresh_token code is the self-heal marker checked by
     // refreshOneTok; never let a generic quota failure overwrite it.
     const selfHealCode = acct.quota_error?.code === "missing_refresh_token" ? "missing_refresh_token" : null;
+    const keepBannedCode = wasBanned && probe.status !== STATUS_BANNED && acct.quota_error?.code;
     acct.quota_error = {
-      code: extractCodeFromError(err) || selfHealCode,
-      message: err?.message || String(err),
+      code: keepBannedCode || probe.error_code || extractCodeFromError(err) || selfHealCode,
+      message: probe.status === STATUS_PROBE_FAILED
+        ? (err?.message || probe.message)
+        : (probe.message || err?.message || String(err)),
       timestamp: ts(),
     };
     saveAcct(acct);
@@ -247,6 +402,9 @@ module.exports = {
   fetchQuotaWithTokenRepair,
   isQuotaAuthError,
   refreshQuota,
+  probeUsageOnly,
+  canProbeUsageWithoutRefresh,
+  needsBanProbe,
   extractQuotaMetrics,
   quotaRetryDelaySeconds,
   parseQuotaPayload,

@@ -9,7 +9,7 @@ import {
   Activity
 } from 'lucide-react';
 import { AccountQuota } from '../types';
-import { avatarGradient, formatDateTime, needsHandling, quotaBarColor, STATUS_DOT, STATUS_TEXT } from '../api/desktop';
+import { avatarGradient, canRefreshQuota, formatDateTime, hideStaleQuota, needsHandling, quotaBarColor, quotaSummaryPercent, quotaWindowSummary, STATUS_DOT, STATUS_TEXT } from '../api/desktop';
 
 interface QuotasProps {
   accounts: AccountQuota[];
@@ -56,6 +56,7 @@ export default function QuotasView({
   
   // Calculate average quota remaining
   const visibleQuotaPercentages = accounts.flatMap((account) => {
+    if (hideStaleQuota(account)) return [];
     const percentages: number[] = [];
     if (account.fiveHourQuotaRemaining != null) {
       percentages.push((account.fiveHourQuotaRemaining / account.fiveHourQuotaTotal) * 100);
@@ -203,19 +204,18 @@ export default function QuotasView({
         <AnimatePresence initial={false}>
         {gridAccounts.map((account) => {
           const isCardRefreshing = refreshingCardIds.has(account.id);
-          const fiveHourPercentage = account.fiveHourQuotaRemaining == null
-            ? null
-            : Math.min((account.fiveHourQuotaRemaining / account.fiveHourQuotaTotal) * 100, 100);
-          const weeklyPercentage = account.weeklyQuotaRemaining == null
-            ? null
-            : Math.min((account.weeklyQuotaRemaining / account.weeklyQuotaTotal) * 100, 100);
-          const fiveHourExceeded = fiveHourPercentage === 0;
-          const weeklyExceeded = weeklyPercentage === 0;
-          const tokenRefreshUnavailable = account.status === 'SUSPENDED' || account.tokenRefreshAvailable === false;
-          const accountRequiresReauthorization = account.status === 'SUSPENDED';
+          const fiveHourSummary = quotaWindowSummary('fiveHour', account);
+          const weeklySummary = quotaWindowSummary('weekly', account);
+          const fiveHourPercentage = quotaSummaryPercent(fiveHourSummary.text);
+          const weeklyPercentage = quotaSummaryPercent(weeklySummary.text);
+          const fiveHourBar = fiveHourSummary.text === '已用尽' ? 0 : fiveHourPercentage;
+          const weeklyBar = weeklySummary.text === '已用尽' ? 0 : weeklyPercentage;
+          const tokenRefreshUnavailable = account.status === 'SUSPENDED' || account.status === 'BANNED' || account.tokenRefreshAvailable === false;
+          const accountBanned = account.status === 'BANNED';
+          const refreshBlocked = !canRefreshQuota(account);
 
-          const barColor5h = quotaBarColor(fiveHourPercentage);
-          const barColorWeekly = quotaBarColor(weeklyPercentage);
+          const barColor5h = quotaBarColor(fiveHourBar);
+          const barColorWeekly = quotaBarColor(weeklyBar);
 
           return (
             <motion.div
@@ -243,11 +243,11 @@ export default function QuotasView({
                 {getStatusBadge(account.status)}
               </div>
 
-              {account.warning && account.status !== 'SUSPENDED' && (
-                <p className="mb-4 text-[12px] leading-5 text-warn" id={`quota-card-notice-${account.id}`}>
+              {account.warning ? (
+                <p className={`mb-4 text-[12px] leading-5 ${account.status === 'BANNED' ? 'text-danger' : 'text-warn'}`} id={`quota-card-notice-${account.id}`}>
                   {account.warning}
                 </p>
-              )}
+              ) : null}
 
               {/* Quotas Progress Info */}
               <div className="space-y-4 flex-1 select-none" id={`quota-progress-container-${account.id}`}>
@@ -256,13 +256,13 @@ export default function QuotasView({
                   <div className="flex items-center justify-between text-xs font-semibold" id={`quota-5h-labels-${account.id}`}>
                     <span className="text-label-2">5 小时额度</span>
                     <span className={`tabular-nums ${fiveHourPercentage === null ? 'text-label-3' : 'text-label-2'}`}>
-                      {fiveHourPercentage === null ? '上游暂未提供' : fiveHourExceeded ? '已用尽' : `剩余 ${Math.round(fiveHourPercentage)}%`}
+                      {fiveHourSummary.text === '已用尽' ? '已用尽' : fiveHourPercentage === null ? fiveHourSummary.text : `剩余 ${fiveHourPercentage}%`}
                     </span>
                   </div>
                   <div className="h-1 bg-fill rounded-full overflow-hidden relative" id={`quota-5h-bar-bg-${account.id}`}>
                     <motion.div 
                       initial={{ width: 0 }}
-                      animate={{ width: `${fiveHourPercentage ?? 0}%` }}
+                      animate={{ width: `${fiveHourBar ?? 0}%` }}
                       transition={{ duration: 0.8, ease: 'easeOut' }}
                       className={`h-full rounded-full ${barColor5h}`} 
                     />
@@ -274,13 +274,13 @@ export default function QuotasView({
                   <div className="flex items-center justify-between text-xs font-semibold" id={`quota-weekly-labels-${account.id}`}>
                     <span className="text-label-2">周额度</span>
                     <span className={`tabular-nums ${weeklyPercentage === null ? 'text-label-3' : 'text-label-2'}`}>
-                      {weeklyPercentage === null ? '上游暂未提供' : weeklyExceeded ? '已用尽' : `剩余 ${Math.round(weeklyPercentage)}%`}
+                      {weeklySummary.text === '已用尽' ? '已用尽' : weeklyPercentage === null ? weeklySummary.text : `剩余 ${weeklyPercentage}%`}
                     </span>
                   </div>
                   <div className="h-1 bg-fill rounded-full overflow-hidden relative" id={`quota-weekly-bar-bg-${account.id}`}>
                     <motion.div 
                       initial={{ width: 0 }}
-                      animate={{ width: `${weeklyPercentage ?? 0}%` }}
+                      animate={{ width: `${weeklyBar ?? 0}%` }}
                       transition={{ duration: 0.8, ease: 'easeOut' }}
                       className={`h-full rounded-full ${barColorWeekly}`} 
                     />
@@ -292,16 +292,18 @@ export default function QuotasView({
               <div className="flex items-center gap-3 mt-6 pt-4 border-t border-sep" id={`quota-actions-row-${account.id}`}>
                 <motion.button
                   onClick={() => handleCardRefresh(account.id)}
-                  disabled={isCardRefreshing || accountRequiresReauthorization}
-                  title={accountRequiresReauthorization ? '该账号需要重新授权后才能刷新额度' : '刷新额度'}
+                  disabled={isCardRefreshing || refreshBlocked}
+                  title={refreshBlocked
+                    ? (accountBanned ? '账号已封号，无法刷新额度' : '该账号需要重新授权后才能刷新额度')
+                    : '刷新额度'}
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.96 }}
                   transition={{ type: 'spring', stiffness: 400, damping: 20 }}
-                  className="flex-1 py-3 bg-accent/12 hover:bg-accent/20 border border-accent/20 disabled:bg-fill disabled:border-sep disabled:text-label-3 disabled:cursor-not-allowed text-accent hover:text-accent-hi text-xs font-bold rounded-xl flex items-center justify-center gap-2 cursor-pointer transition-all"
+                  className="flex-1 py-3 bg-accent/12 hover:bg-accent/20 border border-accent/20 disabled:bg-fill disabled:border-sep disabled:text-label-3 disabled:cursor-not-allowed disabled:opacity-40 text-accent hover:text-accent-hi text-xs font-bold rounded-xl flex items-center justify-center gap-2 cursor-pointer transition-all"
                   id={`quota-btn-refresh-${account.id}`}
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${isCardRefreshing ? 'animate-spin' : ''}`} />
-                  {isCardRefreshing ? '刷新中...' : accountRequiresReauthorization ? '重新授权后刷新' : '快速刷新'}
+                  {isCardRefreshing ? '刷新中...' : '快速刷新'}
                 </motion.button>
 
                 {/* More Action Popover Toggle */}
@@ -339,11 +341,11 @@ export default function QuotasView({
                             disabled={!onRefreshToken || refreshingTokenId !== null || tokenRefreshUnavailable}
                             aria-busy={refreshingTokenId === account.id}
                             id={`quota-menu-refresh-token-${account.id}`}
-                            title={tokenRefreshUnavailable ? '该账号需要重新授权后才能刷新 Token' : '刷新 Token'}
+                            title={accountBanned ? '账号已封号，不再刷新令牌' : (tokenRefreshUnavailable ? '该账号需要重新授权后才能刷新 Token' : '刷新 Token')}
                             className="w-full px-3 py-2 hover:bg-fill rounded-xl text-left text-xs text-danger hover:text-danger flex items-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           >
                             <Activity className={`w-3.5 h-3.5 ${refreshingTokenId === account.id ? 'animate-spin' : ''}`} />
-                            {refreshingTokenId === account.id ? '刷新中...' : tokenRefreshUnavailable ? '需要重新授权' : '刷新 Token'}
+                            {refreshingTokenId === account.id ? '刷新中...' : '刷新 Token'}
                           </button>
                         </motion.div>
                       </>

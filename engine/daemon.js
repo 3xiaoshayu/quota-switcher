@@ -1,6 +1,6 @@
 const { REFRESH_MINUTES } = require("./config");
 const { needsRefresh, refreshOneTok } = require("./token-refresh");
-const { refreshQuota } = require("./quota");
+const { refreshQuota, probeUsageOnly, needsBanProbe } = require("./quota");
 const { loadAutoSwitchCfg, normalizeSyncIntervalMinutes } = require("./config-manager");
 const { autoSwitchTick } = require("./auto-switch");
 const { loadIdx, listAccts, loadAcct } = require("./storage");
@@ -66,7 +66,7 @@ async function runDaemonWorker(options = {}) {
       await withAccountLock(listed.id, async () => {
         if (isCancelled()) return;
         const account = loadAcct(listed.id);
-        if (!account || !needsRefresh(account)) return;
+        if (!account || account.banned || !needsRefresh(account)) return;
         if (isCancelled()) return;
         const result = await refreshOneTok(account);
         if (isCancelled()) return;
@@ -79,10 +79,42 @@ async function runDaemonWorker(options = {}) {
           error: result.error || null,
         });
         if (result.ok) accountsUpdated++;
+        else if (result.reauthRequired) return;
         else failures.push(failure("token_refresh", account, new Error(result.error || "Token refresh failed")));
       });
     } catch (error) {
       failures.push(failure("token_refresh", listed, error));
+    }
+    if (isCancelled()) return stopped();
+  }
+
+  for (const listed of accounts) {
+    if (isCancelled()) return stopped();
+    try {
+      await withAccountLock(listed.id, async () => {
+        if (isCancelled()) return;
+        const account = loadAcct(listed.id);
+        if (!account || !needsBanProbe(account)) return;
+        try {
+          await probeUsageOnly(account, { force: false });
+          accountsUpdated++;
+        } catch (error) {
+          if (error?.code === "quota_retry_pending") return;
+          const latest = loadAcct(account.id);
+          const probeStatus = error?.probe?.status || latest?.probe?.status;
+          if (
+            error?.code === "usage_limited"
+            || error?.code === "reauthorization_required"
+            || error?.code === "account_banned"
+            || probeStatus === "usage_limited"
+            || probeStatus === "banned"
+            || latest?.banned
+          ) return;
+          failures.push(failure("ban_probe", account, error));
+        }
+      });
+    } catch (error) {
+      failures.push(failure("ban_probe", listed, error));
     }
     if (isCancelled()) return stopped();
   }
@@ -99,7 +131,7 @@ async function runDaemonWorker(options = {}) {
       }
       // Reauthorization is an explicit user action: refreshing quotas here
       // would only fail and overwrite the reauth marker's quota_error code.
-      if (current.requires_reauth) return;
+      if (current.requires_reauth || current.banned) return;
 
       try {
         if (isCancelled()) return;

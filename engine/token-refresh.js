@@ -175,6 +175,10 @@ async function refreshAll(force) {
     await withAccountLock(listed.id, async () => {
       const a = loadAcct(listed.id);
       if (!a) return;
+      if (a.banned) {
+        results.push({ email: a.email, ok: false, skipped: true, banned: true });
+        return;
+      }
       if (!force && !needsRefresh(a) && !hasTokenRepairSignal(a)) {
         okN++;
         results.push({ email: a.email, ok: true, skipped: true });

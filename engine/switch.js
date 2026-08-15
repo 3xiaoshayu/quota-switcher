@@ -265,6 +265,9 @@ function restoreFile(filePath, content) {
 
 async function doSwitch(account, options = {}) {
   if (!account?.id || !account.tokens?.access_token) throw new Error("The target account is incomplete");
+  if (account.banned) {
+    throw new Error("The target account is banned and cannot be switched to");
+  }
   if (account.requires_reauth) {
     throw new Error("The target account requires reauthorization before it can be switched to");
   }

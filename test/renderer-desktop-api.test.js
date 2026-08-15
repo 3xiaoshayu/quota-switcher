@@ -183,7 +183,7 @@ test("dashboard state replaces internal reauthorization details with actionable 
   assert.equal(snapshot.accounts[0].status, "SUSPENDED");
   assert.equal(
     snapshot.accounts[0].warning,
-    "该账号需要重新授权后才能刷新 Token。",
+    "该账号需要重新授权后才能使用。",
   );
 });
 
@@ -217,6 +217,247 @@ test("quota network failures become sync-failed with short Chinese copy", async 
     "额度暂时没刷到，登录还在。请检查代理后再刷新，或稍后再试。",
   );
   assert.doesNotMatch(snapshot.accounts[0].quotaError || "", /ERR_CONNECTION/);
+});
+
+test("banned accounts beat reauthorization and keep the deactivation code", async () => {
+  const { needsHandling, needsQuotaAutoSync } = loadDesktopExports(bridge());
+  const desktopApi = loadDesktopApiWithBridge(bridge({
+    listAccounts: () => ok([{
+      id: "dead",
+      email: "dead@example.com",
+      plan_type: "plus",
+      banned: true,
+      requires_reauth: true,
+      reauth_reason: "refresh_token needs re-authorization",
+      probe: {
+        status: "banned",
+        error_code: "account_deactivated",
+        http_status: 401,
+        checked_at: 1,
+      },
+      quota_error: {
+        code: "account_deactivated",
+        message: "HTTP 401 account_deactivated",
+      },
+      token_status: {
+        accessAvailable: true,
+        refreshAvailable: true,
+        expired: false,
+        timeLeft: 3600,
+      },
+    }]),
+  }));
+
+  const snapshot = await desktopApi.loadDashboardState();
+  assert.equal(snapshot.accounts[0].status, "BANNED");
+  assert.equal(
+    snapshot.accounts[0].warning,
+    "账号已封号，无法继续使用。",
+  );
+  assert.equal(needsHandling(snapshot.accounts[0]), true);
+  assert.equal(snapshot.accounts[0].leftoverAccessUsable, true);
+  assert.equal(needsQuotaAutoSync(snapshot.accounts[0]), true);
+});
+
+test("reauth accounts with a live leftover token can be ban-checked", async () => {
+  const { needsQuotaAutoSync } = loadDesktopExports(bridge());
+  const desktopApi = loadDesktopApiWithBridge(bridge({
+    listAccounts: () => ok([{
+      id: "leftover",
+      email: "leftover@example.com",
+      requires_reauth: true,
+      reauth_reason: "refresh_token needs re-authorization",
+      quota_error: { code: "refresh_token_invalidated", message: "refresh_token_invalidated" },
+      token_status: {
+        accessAvailable: true,
+        refreshAvailable: true,
+        expired: false,
+        timeLeft: 3600,
+      },
+    }]),
+  }));
+  const snapshot = await desktopApi.loadDashboardState();
+  assert.equal(snapshot.accounts[0].status, "SUSPENDED");
+  assert.equal(snapshot.accounts[0].leftoverAccessUsable, true);
+  assert.equal(needsQuotaAutoSync(snapshot.accounts[0]), true);
+
+  const expiredApi = loadDesktopApiWithBridge(bridge({
+    listAccounts: () => ok([{
+      id: "expired",
+      email: "expired@example.com",
+      requires_reauth: true,
+      token_status: {
+        accessAvailable: true,
+        refreshAvailable: true,
+        expired: true,
+        timeLeft: -10,
+      },
+    }]),
+  }));
+  const expired = await expiredApi.loadDashboardState();
+  assert.equal(expired.accounts[0].leftoverAccessUsable, false);
+  assert.equal(needsQuotaAutoSync(expired.accounts[0]), false);
+});
+
+test("unusable tokens without a reauth flag still warn as reauthorization", async () => {
+  const desktopApi = loadDesktopApiWithBridge(bridge({
+    listAccounts: () => ok([{
+      id: "dead-tokens",
+      email: "dead-tokens@example.com",
+      quota_error: { code: "http_500", message: "HTTP 500" },
+      token_status: {
+        accessAvailable: false,
+        refreshAvailable: false,
+        expired: true,
+        timeLeft: -10,
+      },
+    }]),
+  }));
+  const snapshot = await desktopApi.loadDashboardState();
+  assert.equal(snapshot.accounts[0].status, "SUSPENDED");
+  assert.equal(snapshot.accounts[0].warning, "该账号需要重新授权后才能使用。");
+});
+
+test("rejected leftover access tokens cannot refresh quotas or join auto-switch", async () => {
+  const { canJoinAutoSwitch, canRefreshQuota, needsQuotaAutoSync, pruneAutoSwitchAccountIds } = loadDesktopExports(bridge());
+  const desktopApi = loadDesktopApiWithBridge(bridge({
+    listAccounts: () => ok([{
+      id: "spent",
+      email: "spent@example.com",
+      requires_reauth: true,
+      probe: { status: "probe_failed", error_code: "token_invalidated", http_status: 401, checked_at: 1 },
+      quota_error: { code: "refresh_token_invalidated", message: "refresh_token_invalidated" },
+      token_status: {
+        accessAvailable: true,
+        refreshAvailable: true,
+        expired: false,
+        timeLeft: 3600,
+      },
+    }, {
+      id: "ready",
+      email: "ready@example.com",
+      token_status: {
+        accessAvailable: true,
+        refreshAvailable: true,
+        expired: false,
+        timeLeft: 3600,
+      },
+    }]),
+  }));
+  const snapshot = await desktopApi.loadDashboardState();
+  assert.equal(snapshot.accounts[0].leftoverAccessUsable, false);
+  assert.equal(snapshot.accounts[0].tokenValidity, "已失效");
+  assert.equal(snapshot.accounts[0].tokenValidityPct, 0);
+  assert.equal(canRefreshQuota(snapshot.accounts[0]), false);
+  assert.equal(needsQuotaAutoSync(snapshot.accounts[0]), false);
+  assert.equal(canJoinAutoSwitch(snapshot.accounts[0]), false);
+  assert.equal(canJoinAutoSwitch(snapshot.accounts[1]), true);
+  assert.deepEqual(
+    pruneAutoSwitchAccountIds([snapshot.accounts[0].id, snapshot.accounts[1].id], snapshot.accounts),
+    [snapshot.accounts[1].id],
+  );
+});
+
+test("banned leftover-rejected tokens hide stale quota", async () => {
+  const { hideStaleQuota, leftoverAccessRejected, quotaWindowSummary } = loadDesktopExports(bridge());
+  const desktopApi = loadDesktopApiWithBridge(bridge({
+    listAccounts: () => ok([{
+      id: "banned-spent",
+      email: "banned-spent@example.com",
+      banned: true,
+      probe: { status: "probe_failed", error_code: "token_invalidated", http_status: 401, checked_at: 1 },
+      quota: {
+        hourly_remaining_percentage: 88,
+        weekly_remaining_percentage: 22,
+        hourly_window_present: true,
+        weekly_window_present: true,
+      },
+      token_status: {
+        accessAvailable: true,
+        refreshAvailable: true,
+        expired: false,
+        timeLeft: 3600,
+      },
+    }]),
+  }));
+  const snapshot = await desktopApi.loadDashboardState();
+  assert.equal(snapshot.accounts[0].status, "BANNED");
+  assert.equal(leftoverAccessRejected({
+    probe: { status: "probe_failed", error_code: "token_invalidated", http_status: 401 },
+  }), true);
+  assert.equal(snapshot.accounts[0].leftoverAccessUsable, false);
+  assert.equal(hideStaleQuota(snapshot.accounts[0]), true);
+  assert.equal(quotaWindowSummary("fiveHour", snapshot.accounts[0]).text, "已封号");
+  assert.equal(quotaWindowSummary("weekly", snapshot.accounts[0]).text, "已封号");
+});
+
+test("leftover access rejected codes stay aligned with the engine", () => {
+  const engineProbe = require("../engine/account-probe");
+  const { ACCESS_REJECTED_CODES, leftoverAccessRejected, summarizeRefreshAllResults, summarizeTokenCheckResults } = loadDesktopExports(bridge());
+  assert.deepEqual([...ACCESS_REJECTED_CODES].sort(), [...engineProbe.ACCESS_REJECTED_CODES].sort());
+  for (const code of ACCESS_REJECTED_CODES) {
+    const probe = { status: "probe_failed", error_code: code, http_status: 401 };
+    assert.equal(engineProbe.isLeftoverAccessRejected(probe), true);
+    assert.equal(leftoverAccessRejected({ probe }), true);
+  }
+  assert.equal(leftoverAccessRejected({
+    probe: { status: "banned", error_code: "account_deactivated", http_status: 401 },
+  }), false);
+  const summary = summarizeRefreshAllResults([
+    { quota: { hourly_remaining_percentage: 40 } },
+    { skipped: true, reason: "reauthorization_required" },
+    { skipped: true, reason: "account_banned", banned: true },
+    { error: "timeout" },
+    { error: "HTTP 401", banned: true },
+    { error: "Account requires reauthorization before quotas can be refreshed.", reason: "reauthorization_required" },
+    { error: "The target account is banned and cannot refresh quotas", reason: "account_banned" },
+  ]);
+  assert.equal(summary.refreshed, 1);
+  assert.equal(summary.reauthSkipped, 2);
+  assert.equal(summary.bannedSkipped, 3);
+  assert.equal(summary.failed, 1);
+  const tokenSummary = summarizeTokenCheckResults([
+    { ok: true, skipped: true },
+    { ok: false, skipped: true, reauthRequired: true },
+    { ok: false, skipped: true, banned: true },
+    { ok: false, error: "timeout" },
+  ]);
+  assert.equal(tokenSummary.passed, 1);
+  assert.equal(tokenSummary.reauthSkipped, 1);
+  assert.equal(tokenSummary.bannedSkipped, 1);
+  assert.equal(tokenSummary.failed, 1);
+});
+
+test("usage limited and probe-failed stay out of the banned bucket", async () => {
+  const { needsHandling, STATUS_TEXT } = loadDesktopExports(bridge());
+  const desktopApi = loadDesktopApiWithBridge(bridge({
+    listAccounts: () => ok([
+      {
+        id: "limited",
+        email: "limited@example.com",
+        probe: { status: "usage_limited", error_code: "usage_limit_reached", http_status: 429, checked_at: 1 },
+        quota_error: { code: "usage_limit_reached", message: "HTTP 429 usage_limit_reached" },
+        token_status: { accessAvailable: true, refreshAvailable: true, expired: false, timeLeft: 3600 },
+      },
+      {
+        id: "unclear",
+        email: "unclear@example.com",
+        probe: { status: "probe_failed", error_code: null, http_status: 401, checked_at: 1 },
+        quota_error: { code: null, message: "HTTP 401" },
+        token_status: { accessAvailable: true, refreshAvailable: true, expired: false, timeLeft: 3600 },
+      },
+    ]),
+  }));
+
+  const snapshot = await desktopApi.loadDashboardState();
+  assert.equal(snapshot.accounts[0].status, "LIMITED");
+  assert.equal(STATUS_TEXT.LIMITED, "额度限流");
+  assert.equal(snapshot.accounts[0].warning, "额度已达上限或触发限流。");
+  assert.equal(needsHandling(snapshot.accounts[0]), true);
+  assert.equal(snapshot.accounts[1].status, "SYNC_FAILED");
+  assert.equal(STATUS_TEXT.SYNC_FAILED, "同步失败");
+  assert.equal(snapshot.accounts[1].warning, "额度同步失败，请稍后重试。");
+  assert.equal(needsHandling(snapshot.accounts[1]), true);
 });
 
 test("dashboard maps OpenAI plan types to official names", async () => {
@@ -313,6 +554,8 @@ test("auto-switch banner uses quota thresholds and daemon state, not ACTIVE stat
   assert.equal(isCurrentQuotaSufficient(low, 20, 30), false);
   assert.equal(isCurrentQuotaSufficient(okQuota, 20, 30), true);
   assert.equal(isCurrentQuotaSufficient(null, 20, 30), false);
+  assert.equal(isCurrentQuotaSufficient({ ...okQuota, status: "BANNED" }, 20, 30), false);
+  assert.equal(isCurrentQuotaSufficient({ ...okQuota, status: "LIMITED" }, 20, 30), false);
 
   const switchOff = autoSwitchStatusBanner({
     hasCurrentAccount: true,
@@ -364,6 +607,50 @@ test("auto-switch banner uses quota thresholds and daemon state, not ACTIVE stat
   assert.equal(quotaLow.title, "当前额度偏低");
   assert.equal(quotaLow.detail, "自动切号已启用，将在下次检查时尝试切换账号。");
   assert.equal(quotaLow.tone, "warn");
+
+  const bannedCurrent = autoSwitchStatusBanner({
+    hasCurrentAccount: true,
+    quotaSufficient: false,
+    globalSwitch: true,
+    daemonRunning: true,
+    currentStatus: "BANNED",
+  });
+  assert.equal(bannedCurrent.title, "当前账号已封号");
+  assert.match(bannedCurrent.detail, /已封号/);
+  assert.equal(bannedCurrent.tone, "warn");
+
+  const reauthCurrent = autoSwitchStatusBanner({
+    hasCurrentAccount: true,
+    quotaSufficient: false,
+    globalSwitch: true,
+    daemonRunning: true,
+    currentStatus: "SUSPENDED",
+  });
+  assert.equal(reauthCurrent.title, "当前账号需要重新授权");
+  assert.match(reauthCurrent.detail, /无法继续使用/);
+  assert.equal(reauthCurrent.tone, "warn");
+
+  const limitedCurrent = autoSwitchStatusBanner({
+    hasCurrentAccount: true,
+    quotaSufficient: false,
+    globalSwitch: true,
+    daemonRunning: true,
+    currentStatus: "LIMITED",
+  });
+  assert.equal(limitedCurrent.title, "当前账号额度限流");
+  assert.match(limitedCurrent.detail, /将切换到其他可用账号/);
+  assert.equal(limitedCurrent.tone, "warn");
+
+  const syncFailedCurrent = autoSwitchStatusBanner({
+    hasCurrentAccount: true,
+    quotaSufficient: false,
+    globalSwitch: true,
+    daemonRunning: true,
+    currentStatus: "SYNC_FAILED",
+  });
+  assert.equal(syncFailedCurrent.title, "当前账号同步失败");
+  assert.match(syncFailedCurrent.detail, /查清后再判断是否切号/);
+  assert.equal(syncFailedCurrent.tone, "warn");
 });
 
 test("quota bar color turns green at 55 and red below 25", () => {
@@ -394,6 +681,16 @@ test("quota hero uses the tighter remaining window", () => {
     weeklyQuotaPresent: true,
     weeklyQuotaRemaining: 41,
   }).key, "weekly");
+  const staleHero = quotaHero({
+    status: "BANNED",
+    leftoverAccessUsable: false,
+    fiveHourQuotaRemaining: 94,
+    fiveHourQuotaPresent: true,
+    weeklyQuotaRemaining: 88,
+    weeklyQuotaPresent: true,
+  });
+  assert.equal(staleHero.percent, null);
+  assert.equal(staleHero.label, "已封号");
 });
 
 test("last check caption avoids repeating 检查 when no run has happened", () => {
@@ -416,6 +713,37 @@ test("scope quota lines explain missing windows instead of showing dashes", () =
   assert.equal(quotaWindowSummary("weekly", reauthAccount).text, "需重新授权后刷新");
   assert.equal(quotaScopeCaption(reauthAccount).shared, "需重新授权后刷新");
   assert.equal(quotaScopeCaption(reauthAccount).rows.length, 0);
+
+  const bannedAccount = { ...reauthAccount, status: "BANNED" };
+  assert.equal(quotaWindowSummary("fiveHour", bannedAccount).text, "已封号");
+  assert.equal(quotaScopeCaption(bannedAccount).shared, "已封号");
+
+  const leftoverLive = {
+    status: "BANNED",
+    leftoverAccessUsable: true,
+    fiveHourQuotaRemaining: 88,
+    fiveHourQuotaTotal: 100,
+    fiveHourQuotaPresent: true,
+    weeklyQuotaRemaining: 22,
+    weeklyQuotaTotal: 100,
+    weeklyQuotaPresent: true,
+  };
+  assert.equal(quotaWindowSummary("fiveHour", leftoverLive).text, "88%");
+  assert.equal(quotaWindowSummary("weekly", leftoverLive).text, "22%");
+
+  assert.equal(quotaWindowSummary("fiveHour", {
+    status: "SYNC_FAILED",
+    leftoverAccessUsable: true,
+    quotaError: "timeout",
+    fiveHourQuotaRemaining: null,
+    fiveHourQuotaTotal: 100,
+    weeklyQuotaRemaining: null,
+    weeklyQuotaTotal: 100,
+  }).text, "同步失败");
+
+  const limitedAccount = { ...reauthAccount, status: "LIMITED" };
+  assert.equal(quotaWindowSummary("weekly", limitedAccount).text, "额度限流");
+  assert.equal(quotaScopeCaption(limitedAccount).shared, "额度限流");
 
   assert.equal(quotaWindowSummary("fiveHour", {
     status: "EXPIRED",
@@ -477,7 +805,7 @@ test("user-facing messages stay in Chinese", () => {
 
   assert.equal(
     toUserMessage("The target account requires reauthorization before it can be switched to"),
-    "该账号需要重新授权后才能写入官方 Codex",
+    "该账号需要重新授权后才能切换",
   );
   assert.equal(toUserMessage("Official Codex authentication is missing."), "官方 Codex 当前没有登录");
   assert.equal(
@@ -487,6 +815,22 @@ test("user-facing messages stay in Chinese", () => {
   assert.equal(toUserMessage("OAuth authorization timed out"), "授权超时，请重新点一次");
   assert.equal(toUserMessage("Waiting for browser authorization."), "请在浏览器完成授权");
   assert.equal(toUserMessage("OAuth authorization was cancelled"), "授权已取消");
+  assert.equal(toUserMessage("The target account is banned and cannot be switched to"), "账号已封号，无法切换");
+  assert.equal(toUserMessage("The target account is banned and cannot refresh quotas"), "账号已封号，无法刷新额度");
+  assert.equal(toUserMessage("The target account is banned and token refresh is skipped"), "账号已封号，不再刷新令牌");
+  assert.equal(toUserMessage("HTTP 401 account_deactivated"), "账号已封号，无法继续使用。");
+  assert.equal(toUserMessage("HTTP 401 account_disabled"), "账号已封号，无法继续使用。");
+  assert.equal(toUserMessage("HTTP 403 account_disabled"), "账号已封号，无法继续使用。");
+  assert.equal(toUserMessage("HTTP 400 account_disabled"), "刷新令牌已失效，请重新授权");
+  assert.equal(toUserMessage("account_disabled"), "刷新令牌已失效，请重新授权");
+  assert.equal(
+    toUserMessage("Token refresh failed: HTTP 400 account_disabled"),
+    "刷新令牌已失效，请重新授权",
+  );
+  assert.equal(
+    toUserMessage("Token refresh failed: HTTP 401 account_disabled"),
+    "刷新令牌已失效，请重新授权",
+  );
   assert.equal(toUserMessage("disabled"), "全局开关已关闭，不会切号");
   assert.equal(toUserMessage("已从管理器中删除账号 a@b.com。"), "已从管理器中删除账号 a@b.com。");
   assert.equal(toUserMessage("SomeUnknownEnglishFailureXYZ"), "操作失败，请稍后重试");
@@ -516,6 +860,8 @@ test("duration and handling helpers stay in Chinese", () => {
   assert.equal(needsHandling({ status: "SUSPENDED" }), true);
   assert.equal(needsHandling({ status: "EXPIRED" }), true);
   assert.equal(needsHandling({ status: "SYNC_FAILED" }), true);
+  assert.equal(needsHandling({ status: "BANNED" }), true);
+  assert.equal(needsHandling({ status: "LIMITED" }), true);
   assert.equal(needsHandling({ status: "WARNING" }), false);
   assert.equal(needsHandling({ status: "LOW_QUOTA" }), false);
   assert.equal(needsHandling({ status: "ACTIVE" }), false);

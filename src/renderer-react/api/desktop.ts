@@ -41,6 +41,13 @@ interface DesktopAccount {
   usage_updated_at?: string | number | null;
   requires_reauth?: boolean;
   reauth_reason?: string | null;
+  banned?: boolean;
+  probe?: {
+    status?: string | null;
+    error_code?: string | null;
+    http_status?: number | null;
+    checked_at?: string | number | null;
+  } | null;
   quota?: DesktopQuota | null;
   quota_error?: { code?: string | null; message?: string | null; timestamp?: string | number | null } | null;
   quota_next_retry_at?: string | number | null;
@@ -86,10 +93,21 @@ type DesktopTokenRefreshAllResult = {
     ok: boolean;
     skipped?: boolean;
     reauthRequired?: boolean;
+    banned?: boolean;
     gen?: number;
     error?: string;
   }>;
 };
+
+type DesktopFloatInspect = {
+  exists: boolean;
+  visible: boolean;
+  alwaysOnTop: boolean;
+  bounds?: { x: number; y: number; width: number; height: number };
+  url?: string;
+};
+
+
 
 interface DesktopBridge {
   getAppInfo: () => Promise<ApiResponse<DesktopAppInfo>>;
@@ -104,7 +122,7 @@ interface DesktopBridge {
   toggleMaximizeWindow: () => Promise<ApiResponse<boolean>>;
   closeWindow: () => Promise<ApiResponse<boolean>>;
   showMainWindow: () => Promise<ApiResponse<boolean>>;
-  showFloatWindow: () => Promise<ApiResponse<boolean>>;
+  showFloatWindow: () => Promise<ApiResponse<DesktopFloatInspect>>;
   hideFloatWindow: () => Promise<ApiResponse<boolean>>;
   setFloatAlwaysOnTop: (value: boolean) => Promise<ApiResponse<boolean>>;
   getFloatState: () => Promise<ApiResponse<{ visible: boolean; alwaysOnTop: boolean }>>;
@@ -128,6 +146,7 @@ interface DesktopBridge {
     quota?: DesktopQuota;
     error?: string;
     skipped?: boolean;
+    banned?: boolean;
     reason?: 'reauthorization_required' | string;
   }>>>;
   refreshToken: (id: string) => Promise<ApiResponse<DesktopTokenRefreshResult>>;
@@ -387,6 +406,13 @@ export function quotaHero(account: AccountQuota | null | undefined): {
   label: string;
 } {
   if (!account) return { percent: null, key: 'none', label: '额度' };
+  if (hideStaleQuota(account)) {
+    return {
+      percent: null,
+      key: 'none',
+      label: account.status === 'BANNED' ? '已封号' : '需重新授权后刷新',
+    };
+  }
   if (account.weeklyBlocksFiveHour && (account.weeklyQuotaRemaining === 0 || account.weeklyQuotaRemaining == null)) {
     return { percent: 0, key: 'weekly', label: '周额度' };
   }
@@ -475,8 +501,10 @@ export const STATUS_DOT: Record<string, string> = {
   WARNING: 'bg-warn',
   LOW_QUOTA: 'bg-warn',
   SYNC_FAILED: 'bg-warn',
+  LIMITED: 'bg-warn',
   EXPIRED: 'bg-danger',
   SUSPENDED: 'bg-danger',
+  BANNED: 'bg-danger',
 };
 
 export const STATUS_TEXT: Record<string, string> = {
@@ -485,14 +513,18 @@ export const STATUS_TEXT: Record<string, string> = {
   WARNING: '注意',
   LOW_QUOTA: '额度偏低',
   SYNC_FAILED: '同步失败',
+  LIMITED: '额度限流',
   EXPIRED: '已耗尽',
   SUSPENDED: '需重新授权',
+  BANNED: '已封号',
 };
 
 export function needsHandling(account: Pick<AccountQuota, 'status'>): boolean {
   return account.status === 'SUSPENDED'
     || account.status === 'EXPIRED'
-    || account.status === 'SYNC_FAILED';
+    || account.status === 'SYNC_FAILED'
+    || account.status === 'BANNED'
+    || account.status === 'LIMITED';
 }
 
 export function avatarGradient(id: string): string {
@@ -527,10 +559,22 @@ function statusForUi(
   account: DesktopAccount,
   config: DesktopAutoSwitchConfig,
 ): AccountQuota['status'] {
+  if (account.banned || account.probe?.status === 'banned') return 'BANNED';
   if (account.requires_reauth) return 'SUSPENDED';
   const tokenUnusable = (account.token_status?.expired || account.token_status?.accessAvailable === false)
     && account.token_status?.refreshAvailable === false;
   if (tokenUnusable) return 'SUSPENDED';
+  const probeStatus = String(account.probe?.status || '');
+  const errorCode = String(account.quota_error?.code || account.probe?.error_code || '').toLowerCase();
+  if (
+    probeStatus === 'usage_limited'
+    || errorCode === 'usage_limit_reached'
+    || errorCode === 'rate_limit'
+    || errorCode === 'rate_limit_exceeded'
+    || errorCode === 'http_429'
+  ) {
+    return 'LIMITED';
+  }
   if (account.quota_error) return 'SYNC_FAILED';
   const hasPresence = account.quota?.hourly_window_present !== undefined || account.quota?.weekly_window_present !== undefined;
   const hourlyPresent = !hasPresence || account.quota?.hourly_window_present === true;
@@ -546,6 +590,132 @@ function statusForUi(
   if (weekly !== null && weekly <= Number(config.secondary_threshold ?? 30)) return 'WARNING';
   if (!account.quota) return 'READY';
   return 'ACTIVE';
+}
+
+export const ACCESS_REJECTED_CODES = new Set([
+  'invalid_token',
+  'token_invalidated',
+  'token_revoked',
+  'invalid_grant',
+]);
+
+export function leftoverAccessRejected(account: {
+  probe?: { status?: string | null; error_code?: string | null; http_status?: number | null } | null;
+}): boolean {
+  const probe = account.probe;
+  if (!probe || probe.status === 'banned') return false;
+  const httpStatus = Number(probe.http_status || 0);
+  if (httpStatus !== 401 && httpStatus !== 403) return false;
+  return ACCESS_REJECTED_CODES.has(String(probe.error_code || '').toLowerCase());
+}
+
+function leftoverAccessUsableFor(account: DesktopAccount, tokenStatus: DesktopAccount['token_status']): boolean {
+  return !!tokenStatus?.accessAvailable
+    && !tokenStatus?.expired
+    && !leftoverAccessRejected(account);
+}
+
+export function canRefreshQuota(account: Pick<AccountQuota, 'status' | 'leftoverAccessUsable' | 'tokenExpired' | 'tokenAccessAvailable' | 'tokenRefreshAvailable'>): boolean {
+  if (account.status === 'BANNED' || account.status === 'SUSPENDED') return !!account.leftoverAccessUsable;
+  if ((account.tokenExpired || account.tokenAccessAvailable === false) && account.tokenRefreshAvailable === false) return false;
+  return true;
+}
+
+export function canJoinAutoSwitch(account: Pick<AccountQuota, 'status'>): boolean {
+  return account.status !== 'BANNED' && account.status !== 'SUSPENDED';
+}
+
+export function canSwitchAccount(account: Pick<AccountQuota, 'status'>): boolean {
+  return canJoinAutoSwitch(account);
+}
+
+export function pruneAutoSwitchAccountIds(ids: string[], accounts: AccountQuota[]): string[] {
+  const allowed = new Set(accounts.filter(canJoinAutoSwitch).map((account) => account.id));
+  return ids.filter((id) => allowed.has(id));
+}
+
+export function selectedAccountIdsEqual(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((id, index) => id === right[index]);
+}
+
+export function summarizeRefreshAllResults(results: Array<{
+  skipped?: boolean;
+  banned?: boolean;
+  error?: string;
+  reason?: string;
+}> = []): {
+  refreshed: number;
+  reauthSkipped: number;
+  bannedSkipped: number;
+  failed: number;
+} {
+  let refreshed = 0;
+  let reauthSkipped = 0;
+  let bannedSkipped = 0;
+  let failed = 0;
+  for (const item of results) {
+    if (item.reason === 'account_banned' || (item.skipped && item.banned) || (item.error && item.banned)) {
+      bannedSkipped += 1;
+      continue;
+    }
+    if (item.reason === 'reauthorization_required' || item.skipped) {
+      reauthSkipped += 1;
+      continue;
+    }
+    if (item.error) {
+      failed += 1;
+      continue;
+    }
+    refreshed += 1;
+  }
+  return { refreshed, reauthSkipped, bannedSkipped, failed };
+}
+
+export function summarizeTokenCheckResults(results: Array<{
+  ok?: boolean;
+  skipped?: boolean;
+  banned?: boolean;
+  reauthRequired?: boolean;
+  error?: string;
+}> = []): {
+  passed: number;
+  reauthSkipped: number;
+  bannedSkipped: number;
+  failed: number;
+} {
+  let passed = 0;
+  let reauthSkipped = 0;
+  let bannedSkipped = 0;
+  let failed = 0;
+  for (const item of results) {
+    if (item.banned) {
+      bannedSkipped += 1;
+      continue;
+    }
+    if (item.reauthRequired || (!item.ok && item.skipped)) {
+      reauthSkipped += 1;
+      continue;
+    }
+    if (!item.ok) {
+      failed += 1;
+      continue;
+    }
+    passed += 1;
+  }
+  return { passed, reauthSkipped, bannedSkipped, failed };
+}
+
+function warningForUi(account: DesktopAccount, status: AccountQuota['status'], quotaError: string | null): string | null {
+  if (status === 'BANNED') return '账号已封号，无法继续使用。';
+  if (status === 'LIMITED') return '额度已达上限或触发限流。';
+  if (status === 'SYNC_FAILED') {
+    if (quotaError && quotaError.includes('额度暂时没刷到')) return quotaError;
+    return '额度同步失败，请稍后重试。';
+  }
+  if (status === 'SUSPENDED') return '该账号需要重新授权后才能使用。';
+  if (account.reauth_reason) return toUserMessage(account.reauth_reason);
+  return quotaError;
 }
 
 function displayName(email: string): string {
@@ -565,11 +735,17 @@ export function mapAccountForUi(
   const quotaError = account.quota_error?.message || account.quota_error?.code
     ? toUserMessage(account.quota_error?.message || account.quota_error?.code)
     : null;
+  const status = statusForUi(account, config);
   const tokenStatus = account.token_status || {};
+  const leftoverUsable = leftoverAccessUsableFor(account, tokenStatus);
+  const leftoverRejected = !leftoverUsable
+    && !!tokenStatus.accessAvailable
+    && !tokenStatus.expired
+    && (!!account.requires_reauth || !!account.banned || status === 'SUSPENDED' || status === 'BANNED');
   const expirySeconds = typeof tokenStatus.expiryDate === 'number' ? tokenStatus.expiryDate : null;
   const issuedSeconds = typeof tokenStatus.issuedAt === 'number' ? tokenStatus.issuedAt : null;
   let tokenValidityPct: number | null = null;
-  if (tokenStatus.expired) {
+  if (tokenStatus.expired || leftoverRejected) {
     tokenValidityPct = 0;
   } else if (
     typeof tokenStatus.timeLeft === 'number'
@@ -584,7 +760,7 @@ export function mapAccountForUi(
     id: account.id,
     name: displayName(account.email),
     email: account.email,
-    status: statusForUi(account, config),
+    status,
     fiveHourQuotaRemaining: hourlyPresent ? hourlyRemaining : null,
     fiveHourQuotaTotal: 100,
     weeklyQuotaRemaining: weeklyPresent ? weeklyRemaining : null,
@@ -594,15 +770,13 @@ export function mapAccountForUi(
     weeklyBlocksFiveHour: !!account.quota?.weekly_blocks_hourly,
     priority: priorityForUi(account),
     plan: planForUi(account.plan_type || account.quota?.plan_type),
-    tokenValidity: tokenStatus.expired ? '已过期' : `剩余 ${formatDuration(tokenStatus.timeLeft)}`,
+    tokenValidity: tokenStatus.expired ? '已过期' : leftoverRejected ? '已失效' : `剩余 ${formatDuration(tokenStatus.timeLeft)}`,
     tokenValidityPct,
     resetInFiveHour: formatReset(account.quota?.hourly_reset_time),
     resetInWeekly: formatReset(account.quota?.weekly_reset_time),
     fiveHourResetAt: account.quota?.hourly_reset_time ?? null,
     weeklyResetAt: account.quota?.weekly_reset_time ?? null,
-    warning: account.requires_reauth
-      ? '该账号需要重新授权后才能刷新 Token。'
-      : (account.reauth_reason ? toUserMessage(account.reauth_reason) : quotaError),
+    warning: warningForUi(account, status, quotaError),
     isCurrent: !!currentAccount && currentAccount.id === account.id,
     quotaUpdatedAt: account.usage_updated_at,
     quotaNextRetryAt: account.quota_next_retry_at,
@@ -610,6 +784,7 @@ export function mapAccountForUi(
     tokenExpired: !!tokenStatus.expired,
     tokenAccessAvailable: !!tokenStatus.accessAvailable,
     tokenRefreshAvailable: !!tokenStatus.refreshAvailable,
+    leftoverAccessUsable: leftoverUsable,
   };
 }
 
@@ -619,6 +794,9 @@ export function isCurrentQuotaSufficient(
   weeklyThreshold: number,
 ): boolean {
   if (!account) return false;
+  if (account.status === 'BANNED' || account.status === 'SUSPENDED' || account.status === 'SYNC_FAILED' || account.status === 'LIMITED') {
+    return false;
+  }
   const hourlyPresent = account.fiveHourQuotaPresent !== false;
   const weeklyPresent = account.weeklyQuotaPresent !== false;
   const hourly = hourlyPresent && account.fiveHourQuotaRemaining != null
@@ -639,6 +817,7 @@ export function autoSwitchStatusBanner(options: {
   globalSwitch: boolean;
   daemonRunning: boolean;
   pausedReason?: string | null;
+  currentStatus?: AccountQuota['status'] | null;
 }): { title: string; detail: string; tone: 'ok' | 'warn' | 'neutral' } {
   if (!options.hasCurrentAccount) {
     return {
@@ -669,6 +848,34 @@ export function autoSwitchStatusBanner(options: {
       tone: 'warn',
     };
   }
+  if (options.currentStatus === 'BANNED') {
+    return {
+      title: '当前账号已封号',
+      detail: '账号已封号，无法继续使用，将切换到其他可用账号。',
+      tone: 'warn',
+    };
+  }
+  if (options.currentStatus === 'SUSPENDED') {
+    return {
+      title: '当前账号需要重新授权',
+      detail: '当前账号无法继续使用，将切换到其他可用账号。',
+      tone: 'warn',
+    };
+  }
+  if (options.currentStatus === 'LIMITED') {
+    return {
+      title: '当前账号额度限流',
+      detail: '额度已达上限或触发限流，将切换到其他可用账号。',
+      tone: 'warn',
+    };
+  }
+  if (options.currentStatus === 'SYNC_FAILED') {
+    return {
+      title: '当前账号同步失败',
+      detail: '额度同步失败，查清后再判断是否切号。',
+      tone: 'warn',
+    };
+  }
   if (options.quotaSufficient) {
     return {
       title: '额度充足，暂不切换',
@@ -683,13 +890,32 @@ export function autoSwitchStatusBanner(options: {
   };
 }
 
+export function hideStaleQuota(account: Pick<AccountQuota, 'status' | 'leftoverAccessUsable'> | null | undefined): boolean {
+  if (!account) return false;
+  if (account.status !== 'SUSPENDED' && account.status !== 'BANNED') return false;
+  return account.leftoverAccessUsable !== true;
+}
+
+export function quotaSummaryPercent(text: string): number | null {
+  const match = /^(\d+)%$/.exec(String(text || '').trim());
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) ? value : null;
+}
+
 export function quotaWindowSummary(
   window: 'fiveHour' | 'weekly',
   account: AccountQuota,
 ): { label: string; text: string } {
   const label = window === 'fiveHour' ? '5 小时' : '周额度';
-  if (account.status === 'SUSPENDED') {
-    return { label, text: '需重新授权后刷新' };
+  if (hideStaleQuota(account)) {
+    return {
+      label,
+      text: account.status === 'BANNED' ? '已封号' : '需重新授权后刷新',
+    };
+  }
+  if (account.status === 'LIMITED') {
+    return { label, text: '额度限流' };
   }
   if (window === 'fiveHour' && account.weeklyBlocksFiveHour) {
     return { label, text: '周额度已用尽' };
@@ -698,7 +924,7 @@ export function quotaWindowSummary(
   const remaining = window === 'fiveHour' ? account.fiveHourQuotaRemaining : account.weeklyQuotaRemaining;
   const total = window === 'fiveHour' ? account.fiveHourQuotaTotal : account.weeklyQuotaTotal;
   if (account.quotaError && remaining == null) {
-    return { label, text: '额度刷新失败' };
+    return { label, text: '同步失败' };
   }
   if (!present || remaining == null) {
     return { label, text: '上游暂未提供' };
@@ -723,13 +949,13 @@ export function quotaScopeCaption(account: AccountQuota): {
 }
 
 export function needsQuotaAutoSync(account: AccountQuota, staleMs = QUOTA_AUTO_SYNC_STALE_MS): boolean {
-  // An expired access token with a usable refresh token is repaired inside
-  // quota:refresh, so only exclude accounts with no path back to a token.
-  if ((account.tokenExpired || account.tokenAccessAvailable === false) && account.tokenRefreshAvailable === false) return false;
-  if (account.status === 'SUSPENDED') return false;
+  if (!canRefreshQuota(account)) return false;
   const retryAt = toDate(account.quotaNextRetryAt);
   if (retryAt && retryAt.getTime() > Date.now()) return false;
-  if (!account.quotaUpdatedAt || account.quotaError) return true;
+  const leftoverKnown = !!account.leftoverAccessUsable
+    && (account.status === 'SUSPENDED' || account.status === 'BANNED')
+    && !!account.quotaUpdatedAt;
+  if (!account.quotaUpdatedAt || (account.quotaError && !leftoverKnown)) return true;
   const date = toDate(account.quotaUpdatedAt);
   if (!date) return true;
   return Date.now() - date.getTime() > staleMs;

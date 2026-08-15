@@ -1,7 +1,10 @@
 const FALLBACK = '操作失败，请稍后重试'
 
 const RULES: Array<{ test: RegExp; to: string }> = [
-  { test: /requires reauthorization before it can be switched/i, to: '该账号需要重新授权后才能写入官方 Codex' },
+  { test: /is banned and cannot refresh quotas/i, to: '账号已封号，无法刷新额度' },
+  { test: /is banned and cannot be switched/i, to: '账号已封号，无法切换' },
+  { test: /is banned and token refresh is skipped/i, to: '账号已封号，不再刷新令牌' },
+  { test: /requires reauthorization before it can be switched/i, to: '该账号需要重新授权后才能切换' },
   { test: /requires reauthorization before tokens can be refreshed/i, to: '该账号需要重新授权后才能刷新 Token' },
   { test: /requires reauthorization before quotas can be refreshed/i, to: '该账号需要重新授权后才能刷新额度' },
   { test: /requires reauthorization before/i, to: '该账号需要重新授权后才能继续操作' },
@@ -43,9 +46,13 @@ const RULES: Array<{ test: RegExp; to: string }> = [
   { test: /No OAuth authorization is pending/i, to: '当前没有等待完成的授权' },
   { test: /Enter the complete OAuth callback URL/i, to: '请输入完整的授权回调地址' },
   { test: /missing code or has an invalid state/i, to: '回调地址缺少授权码或状态不正确' },
+  { test: /(token refresh failed|quota authorization could not be repaired).{0,160}account_disabled/i, to: '刷新令牌已失效，请重新授权' },
+  { test: /HTTP 40[13]\b.*\baccount_disabled\b|\baccount_disabled\b.*HTTP 40[13]\b/i, to: '账号已封号，无法继续使用。' },
+  { test: /\baccount_disabled\b/i, to: '刷新令牌已失效，请重新授权' },
   { test: /Token refresh failed/i, to: 'Token 刷新失败' },
   { test: /Authentication state is busy|Read authentication state timed out/i, to: '正在确认官方登录，稍后会自动刷新' },
   { test: /quota refresh is waiting for retry|quota_retry_pending/i, to: '额度刷新稍后会自动重试' },
+  { test: /account_deactivated|account_deleted|workspace_deactivated|deactivated_workspace|deactivated_user/i, to: '账号已封号，无法继续使用。' },
   { test: /^HTTP \d+/i, to: '上游暂时不可用，请稍后刷新额度' },
   { test: /^auth_conflict$/i, to: '官方登录不一致' },
   { test: /^stopped$/i, to: '已停止' },

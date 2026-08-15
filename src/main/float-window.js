@@ -5,6 +5,7 @@ const FLOAT_WIDTH = 288;
 const FLOAT_HEIGHT = 512;
 const FLOAT_MARGIN = 20;
 const FLOAT_HASH = "float";
+const FLOAT_ON_TOP_LEVEL = "screen-saver";
 
 function clampFloatBounds(bounds, workArea) {
     const width = Number(bounds.width);
@@ -129,13 +130,10 @@ function createFloatWindowController(options) {
         return { ...position, width: FLOAT_WIDTH, height };
     };
 
-    const windowIsReady = (win) => {
-        const url = win.webContents?.getURL?.() || "";
-        if (!url) return false;
-        if (typeof win.webContents.isLoadingMainFrame === "function") {
-            return !win.webContents.isLoadingMainFrame();
-        }
-        return true;
+    const applyOnTop = (win, enabled) => {
+        if (!win || typeof win.setAlwaysOnTop !== "function") return;
+        if (enabled) win.setAlwaysOnTop(true, FLOAT_ON_TOP_LEVEL);
+        else win.setAlwaysOnTop(false);
     };
 
     const presentWindow = (win) => {
@@ -143,7 +141,8 @@ function createFloatWindowController(options) {
         const saved = loadFloatState(app.getPath("userData"));
         win.setBounds(resolveBounds(saved));
         alwaysOnTop = true;
-        if (typeof win.setAlwaysOnTop === "function") win.setAlwaysOnTop(true, "floating");
+        if (typeof win.setSkipTaskbar === "function") win.setSkipTaskbar(false);
+        applyOnTop(win, true);
         if (typeof win.isMinimized === "function" && win.isMinimized()) win.restore();
         win.show();
         if (typeof win.moveTop === "function") win.moveTop();
@@ -212,9 +211,7 @@ function createFloatWindowController(options) {
         win.setMenuBarVisibility(false);
         win.setBackgroundColor("#00000000");
         if (typeof win.setHasShadow === "function") win.setHasShadow(false);
-        if (alwaysOnTop && typeof win.setAlwaysOnTop === "function") {
-            win.setAlwaysOnTop(true, "floating");
-        }
+        if (alwaysOnTop) applyOnTop(win, true);
 
         trustWebContents(win.webContents);
         attachGuards(win);
@@ -225,6 +222,7 @@ function createFloatWindowController(options) {
             if (!isQuitting()) {
                 event.preventDefault();
                 showRequested = false;
+                if (typeof win.setSkipTaskbar === "function") win.setSkipTaskbar(true);
                 win.hide();
             }
         });
@@ -246,14 +244,14 @@ function createFloatWindowController(options) {
     return {
         show() {
             showRequested = true;
-            const win = ensureWindow();
-            if (windowIsReady(win) || (typeof win.isVisible === "function" && win.isVisible())) {
-                presentWindow(win);
-            }
+            presentWindow(ensureWindow());
         },
         hide() {
             showRequested = false;
-            if (floatWindow && !floatWindow.isDestroyed()) floatWindow.hide();
+            if (floatWindow && !floatWindow.isDestroyed()) {
+                if (typeof floatWindow.setSkipTaskbar === "function") floatWindow.setSkipTaskbar(true);
+                floatWindow.hide();
+            }
         },
         destroy() {
             showRequested = false;
@@ -272,9 +270,7 @@ function createFloatWindowController(options) {
         },
         setAlwaysOnTop(nextValue) {
             alwaysOnTop = !!nextValue;
-            if (floatWindow && !floatWindow.isDestroyed()) {
-                floatWindow.setAlwaysOnTop(alwaysOnTop, "floating");
-            }
+            if (floatWindow && !floatWindow.isDestroyed()) applyOnTop(floatWindow, alwaysOnTop);
             persistNow({ alwaysOnTop });
         },
         getState() {
