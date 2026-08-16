@@ -7,6 +7,7 @@ const { createAppTray } = require("./tray");
 const { resolveAppIcon } = require("./app-icon");
 const { createFloatWindowController } = require("./float-window");
 const { writeJsonAtomic } = require(path.resolve(__dirname, "..", "..", "engine", "atomic-file"));
+const { applyAppProxy } = require(path.resolve(__dirname, "..", "..", "engine", "proxy-resolve"));
 
 let mainWindow = null;
 let appTray = null;
@@ -106,8 +107,18 @@ function startApplication() {
         decrypt: (encoded) => safeStorage.decryptString(Buffer.from(encoded, "base64")),
     });
     eng.setOpenUrlHandler((url) => shell.openExternal(url));
+    if (typeof eng.setCursorOpenUrlHandler === "function") {
+      eng.setCursorOpenUrlHandler((url) => shell.openExternal(url));
+    }
     eng.initLogger();
-    eng.restorePendingOAuth();
+    const restoredCodexOAuth = eng.restorePendingOAuth();
+    if (restoredCodexOAuth) {
+      if (typeof eng.discardPendingCursorOAuth === "function") {
+        eng.discardPendingCursorOAuth("authorization is already in progress");
+      }
+    } else if (typeof eng.restorePendingCursorOAuth === "function") {
+      eng.restorePendingCursorOAuth();
+    }
 
     const updateService = createUpdateService({ app, BrowserWindow });
     const savedWindowState = loadWindowState();
@@ -227,6 +238,8 @@ function reportStartupFailure(error) {
 if (!hasSingleInstanceLock) {
     app.quit();
 } else {
+    app.commandLine.appendSwitch("disable-quic");
+    app.commandLine.appendSwitch("disable-http3");
     app.on("second-instance", focusMainWindow);
     app.on("before-quit", () => {
         isQuitting = true;
@@ -236,8 +249,9 @@ if (!hasSingleInstanceLock) {
         }
         destroyAppTray();
     });
-    app.whenReady().then(() => {
+    app.whenReady().then(async () => {
         try {
+            await applyAppProxy();
             startApplication();
         } catch (error) {
             reportStartupFailure(error);

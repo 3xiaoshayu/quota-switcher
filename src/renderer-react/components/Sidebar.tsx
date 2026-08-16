@@ -1,13 +1,15 @@
 import { AtSign, Gauge, Shuffle, Settings, RefreshCw, HelpCircle } from 'lucide-react';
 import { motion } from 'motion/react';
-import { DaemonState } from '../types';
+import { DaemonState, ProductKind } from '../types';
+import { PRODUCTS, productById } from '../data/products';
 import appIcon from '../assets/app-icon.png';
 
 interface SidebarProps {
   activeTab: 'accounts' | 'quotas' | 'autoswitch' | 'settings';
   setActiveTab: (tab: 'accounts' | 'quotas' | 'autoswitch' | 'settings') => void;
+  product: ProductKind;
+  onProductChange: (product: ProductKind) => void;
   daemonState: DaemonState;
-  handlingCount?: number;
   onShowSupport: () => void;
   onShowUpdates: () => void;
 }
@@ -15,15 +17,16 @@ interface SidebarProps {
 export default function Sidebar({
   activeTab,
   setActiveTab,
+  product,
+  onProductChange,
   daemonState,
-  handlingCount = 0,
   onShowSupport,
   onShowUpdates,
 }: SidebarProps) {
   const menuItems = [
     { id: 'accounts', label: '账号管理', icon: AtSign },
     { id: 'quotas', label: '配额总览', icon: Gauge },
-    { id: 'autoswitch', label: '自动切号', icon: Shuffle },
+    ...(productById(product).features.autoSwitch ? [{ id: 'autoswitch' as const, label: '自动切号', icon: Shuffle }] : []),
     { id: 'settings', label: '系统设置', icon: Settings },
   ] as const;
 
@@ -42,7 +45,7 @@ export default function Sidebar({
             id="sidebar-avatar-wrapper"
           />
           <div className="flex flex-col select-none" id="sidebar-profile-text">
-            <span className="font-semibold text-label text-[13px]">Codex Manager</span>
+            <span className="font-semibold text-label text-[13px]">Account Manager</span>
             <span className="flex items-center gap-1.5 text-[11px] text-label-3 mt-0.5">
               <span className={`w-1.5 h-1.5 rounded-full ${
                 daemonState.status === 'Running'
@@ -54,6 +57,24 @@ export default function Sidebar({
                 : 'Daemon 已停止'}
             </span>
           </div>
+        </div>
+      </div>
+
+      <div className="px-3 pb-2" id="sidebar-product-switch">
+        <div className="flex bg-fill p-1 rounded-xl border border-sep text-[12px] font-semibold">
+          {PRODUCTS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onProductChange(item.id)}
+              className={`flex-1 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                product === item.id ? 'bg-fill-2 text-label' : 'text-label-2 hover:text-label'
+              }`}
+              id={`sidebar-product-${item.id}`}
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -79,11 +100,6 @@ export default function Sidebar({
               <span className="text-[13px] font-medium">
                 {item.label}
               </span>
-              {item.id === 'accounts' && handlingCount > 0 ? (
-                <span className="ml-auto px-1.5 py-0.5 bg-danger text-white rounded-full text-[9px] font-bold min-w-4 text-center">
-                  {handlingCount}
-                </span>
-              ) : null}
             </motion.button>
           );
         })}
@@ -106,7 +122,7 @@ export default function Sidebar({
           id="sidebar-footer-btn-support"
         >
           <HelpCircle className="w-3.5 h-3.5 text-label-3" />
-          <span className="font-medium">客户服务</span>
+          <span className="font-medium">帮助</span>
         </button>
       </div>
     </aside>

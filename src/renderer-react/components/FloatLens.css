@@ -55,7 +55,8 @@ body.float-lens-root,
 .float-lens-footer,
 .float-lens-icon,
 .float-lens-nav,
-.float-lens-switch {
+.float-lens-switch,
+.float-lens-confirm {
   -webkit-app-region: no-drag;
 }
 
@@ -72,6 +73,10 @@ body.float-lens-root,
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.34em;
+}
+
+.float-lens-mark.is-long {
+  letter-spacing: 0.2em;
 }
 
 .float-lens-tools {
@@ -120,10 +125,48 @@ body.float-lens-root,
   height: 188px;
 }
 
+.float-lens-pair {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
 .float-lens-dial svg {
   display: block;
   width: 188px;
   height: 188px;
+}
+
+.float-lens-dial.is-pair,
+.float-lens-dial.is-pair svg {
+  width: 112px;
+  height: 112px;
+}
+
+.float-lens-dial.is-pair .float-lens-readout-value {
+  font-size: 22px;
+}
+
+.float-lens-dial.is-pair .float-lens-readout-value.is-rest {
+  color: var(--color-label-3);
+}
+
+.float-lens-dial.is-pair .float-lens-readout-value.is-empty-text {
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.float-lens-dial.is-pair .float-lens-readout-label {
+  margin-top: 2px;
+  color: var(--dial-tone, var(--color-label-2));
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+
+.float-lens-dial.is-pair .float-lens-sweep {
+  inset: 14px;
 }
 
 .float-lens-dial-arc {
@@ -148,12 +191,36 @@ body.float-lens-root,
   font-variant-numeric: tabular-nums;
 }
 
+.float-lens-readout-value.is-empty-text {
+  font-size: 22px;
+  letter-spacing: 0;
+}
+
+.float-lens-readout-unit {
+  margin-left: 1px;
+  color: rgba(235, 235, 245, 0.62);
+  font-size: 0.42em;
+}
+
+.float-lens-readout-icon {
+  margin-bottom: 8px;
+  color: var(--color-label-3);
+}
+
 .float-lens-readout-label {
   margin-top: 4px;
   color: var(--color-label-2);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.08em;
+}
+
+.float-lens-readout-label.is-empty {
+  max-width: 96px;
+  margin-top: 0;
+  text-align: center;
+  line-height: 1.35;
+  letter-spacing: 0.02em;
 }
 
 .float-lens-sweep {
@@ -181,12 +248,8 @@ body.float-lens-root,
   width: 100%;
   flex-direction: column;
   align-items: center;
-  margin-top: 6px;
+  margin-top: 8px;
   min-width: 0;
-}
-
-.float-lens-complications.is-single {
-  grid-template-columns: 1fr;
 }
 
 .float-lens-name {
@@ -202,15 +265,26 @@ body.float-lens-root,
   -webkit-user-select: text;
 }
 
-.float-lens-plan {
+.float-lens-pills {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
   margin-top: 8px;
+}
+
+.float-lens-plan {
   padding: 3px 8px;
   border-radius: 999px;
   background: var(--color-fill);
   color: var(--color-label-2);
   font-size: 10px;
   font-weight: 650;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.02em;
+}
+
+.float-lens-plan.is-status {
+  color: var(--color-warn);
 }
 
 .float-lens-reset {
@@ -218,55 +292,6 @@ body.float-lens-root,
   color: var(--color-label-3);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
-}
-
-.float-lens-complications {
-  display: grid;
-  width: 100%;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-top: 16px;
-}
-
-.float-lens-cell {
-  min-width: 0;
-  padding: 8px 10px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.035);
-}
-
-.float-lens-cell-kicker {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--color-label-3);
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.06em;
-}
-
-.float-lens-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: currentColor;
-}
-
-.float-lens-cell-value {
-  margin-top: 4px;
-  font-size: 16px;
-  font-weight: 650;
-  letter-spacing: -0.03em;
-  font-variant-numeric: tabular-nums;
-}
-
-.float-lens-cell-reset {
-  margin-top: 2px;
-  overflow: hidden;
-  color: var(--color-label-3);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .float-lens-pager {
@@ -316,9 +341,61 @@ body.float-lens-root,
 .float-lens-action {
   display: flex;
   width: 100%;
-  height: 40px;
+  min-height: 40px;
   align-items: center;
   margin-top: 10px;
+}
+
+.float-lens-confirm {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.float-lens-confirm p {
+  margin: 0;
+  color: var(--color-label-2);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.float-lens-confirm-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.float-lens-confirm-cancel,
+.float-lens-confirm-accept {
+  height: 36px;
+  border: 0;
+  border-radius: 11px;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.float-lens-confirm-cancel {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-label-2);
+}
+
+.float-lens-confirm-accept {
+  background: rgba(10, 132, 255, 0.16);
+  color: var(--color-accent-hi);
+}
+
+.float-lens-confirm-cancel:hover:not(:disabled),
+.float-lens-confirm-accept:hover:not(:disabled) {
+  filter: brightness(1.12);
+}
+
+.float-lens-confirm-cancel:disabled,
+.float-lens-confirm-accept:disabled {
+  cursor: default;
+  opacity: 0.4;
 }
 
 .float-lens-switch {
@@ -359,8 +436,11 @@ body.float-lens-root,
   overflow: hidden;
   color: var(--color-danger);
   font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.35;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .float-lens-empty {

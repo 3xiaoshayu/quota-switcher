@@ -21,7 +21,7 @@ export default function Login({ onLogin, userEmail, appVersion = '0.1.0', showDe
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!email) {
-      setError('请输入电子邮箱');
+      setError('请输入邮箱');
       return;
     }
     setError('');
@@ -81,17 +81,17 @@ export default function Login({ onLogin, userEmail, appVersion = '0.1.0', showDe
             id="login-icon-box"
           />
           <h1 className="text-[26px] font-semibold tracking-tight text-label" id="login-title">
-            Codex 账号
+            账号管理器
           </h1>
           <p className="text-[13px] text-label-2 mt-2" id="login-subtitle">
-            多账号额度监控与安全切换
+            多账号额度监控与切换
           </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4" id="login-form">
           <div className="space-y-2" id="email-field-group">
             <label className="text-[13px] font-medium text-label-2 block ml-1">
-              电子邮箱 / 账户名
+              邮箱或账户名
             </label>
             <div className="relative">
               <span className="absolute inset-y-0 left-0 flex items-center pl-4 text-label-3">
@@ -101,7 +101,7 @@ export default function Login({ onLogin, userEmail, appVersion = '0.1.0', showDe
                 type="text"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="请输入邮箱地址"
+                placeholder="请输入邮箱"
                 className="w-full pl-11 pr-4 py-3 bg-fill rounded-[10px] text-label placeholder-label-3 focus:outline-none focus:ring-2 focus:ring-accent/60 transition-all font-sans text-sm"
                 id="login-email-input"
               />
@@ -111,7 +111,7 @@ export default function Login({ onLogin, userEmail, appVersion = '0.1.0', showDe
           <div className="flex items-start gap-3 rounded-[10px] bg-fill px-4 py-3" id="login-dpapi-note">
             <ShieldCheck className="w-4 h-4 text-ok shrink-0 mt-0.5" />
             <span className="text-xs text-label-2 leading-relaxed">
-              本地凭证由 Windows DPAPI 加密保护，仅当前 Windows 用户可访问。
+              本地凭证由 Windows 加密保护，仅当前 Windows 用户可访问。
             </span>
           </div>
 
@@ -139,7 +139,7 @@ export default function Login({ onLogin, userEmail, appVersion = '0.1.0', showDe
               </span>
             ) : (
               <span className="flex items-center gap-2">
-                进入控制中心
+                进入
                 <ArrowRight className="w-4 h-4" />
               </span>
             )}

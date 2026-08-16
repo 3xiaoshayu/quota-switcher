@@ -1,8 +1,8 @@
 const http = require("node:http");
 const https = require("node:https");
 const { ProxyAgent } = require("proxy-agent");
-const { getProxyForUrl: getEnvProxyForUrl } = require("proxy-from-env");
 const { REFRESH_TIMEOUT } = require("./config");
+const { resolveLiveProxy, invalidateLiveProxy, hostLooksPoisoned, applySignatureToRuntime } = require("./proxy-resolve");
 
 let sharedProxyAgent = null;
 
@@ -59,10 +59,7 @@ function buildNetworkFailure(url, attempts) {
   const details = attempts
     .map((attempt) => `${attempt.label}: ${errorMessage(attempt.error)}`)
     .join(" | ");
-  return new Error(
-    `网络请求失败 (${host})。已尝试可用网络栈。` +
-    `如果正在使用代理/TUN，请确认它允许 Codex Account Manager 访问 OpenAI。详情：${details}`,
-  );
+  return new Error(`网络请求失败 (${host})。详情：${details}`);
 }
 
 function toHeaderObject(headers) {
@@ -74,47 +71,9 @@ function toHeaderObject(headers) {
   return out;
 }
 
-function normalizeProxyRule(rule) {
-  if (!rule) return "";
-  const first = String(rule)
-    .split(";")
-    .map((item) => item.trim())
-    .find((item) => item && !/^direct$/i.test(item));
-  if (!first) return "";
-
-  if (/^(https?|socks4a?|socks5h?|socks5?|pac\+)/i.test(first)) {
-    return first;
-  }
-
-  const match = first.match(/^([a-z]+)\s+(.+)$/i);
-  if (!match) return `http://${first}`;
-
-  const type = match[1].toUpperCase();
-  const target = match[2].trim();
-  if (!target) return "";
-
-  if (type === "PROXY" || type === "HTTP") return `http://${target}`;
-  if (type === "HTTPS") return `https://${target}`;
-  if (type === "SOCKS" || type === "SOCKS5") return `socks5://${target}`;
-  if (type === "SOCKS4") return `socks4://${target}`;
-  return "";
-}
-
-async function getElectronProxyForUrl(url) {
-  try {
-    const electron = require("electron");
-    const defaultSession = electron?.session?.defaultSession;
-    if (!defaultSession?.resolveProxy) return "";
-    return normalizeProxyRule(await defaultSession.resolveProxy(url));
-  } catch {
-    return "";
-  }
-}
-
 async function resolveProxyForUrl(url) {
-  const envProxy = getEnvProxyForUrl(url);
-  if (envProxy) return envProxy;
-  return getElectronProxyForUrl(url);
+  const signature = await resolveLiveProxy(url);
+  return signature.proxyUrl || "";
 }
 
 function getProxyAgent() {
@@ -183,20 +142,21 @@ async function httpJson(url, opts = {}) {
     opts.headers || {}
   );
   const timeout = opts.timeout || REFRESH_TIMEOUT;
-  // Non-idempotent requests (OAuth token refresh, code exchange) must never
-  // be replayed: after a timeout the server may already have processed them,
-  // and replaying a rotated refresh token or consumed code kills the account.
   const idempotent = opts.idempotent !== false;
+  const host = (() => { try { return new URL(url).host; } catch { return "unknown"; } })();
+  const signature = await resolveLiveProxy(url);
+  await applySignatureToRuntime(signature);
+  if (!signature.proxyUrl && await hostLooksPoisoned(host)) {
+    throw new Error(`网络请求失败 (${host})。本机 DNS 异常且没有可用的本地代理。`);
+  }
 
   const attempts = [];
   try {
     const runElectron = () => electronHttpJson(url, opts, headers, timeout);
-    const electronResult = idempotent
+    const electronResult = (idempotent && !signature.proxyUrl)
       ? await withOneRetry("Electron network", runElectron)
       : await runElectron();
     if (electronResult) return electronResult;
-    // A null result means the Electron stack is unavailable and nothing was
-    // sent yet, so the Node attempt below is a first attempt, not a replay.
   } catch (error) {
     attempts.push({ label: "Electron", error });
     if (!idempotent) throw buildNetworkFailure(url, attempts);
@@ -209,14 +169,22 @@ async function httpJson(url, opts = {}) {
       : await runNode();
   } catch (error) {
     attempts.push({ label: "Node", error });
+    invalidateLiveProxy();
+    const retrySignature = await resolveLiveProxy(url);
+    if (idempotent && retrySignature.proxyUrl && retrySignature.proxyUrl !== signature.proxyUrl) {
+      await applySignatureToRuntime(retrySignature);
+      try {
+        return await withOneRetry("Node network", () => nodeHttpJson(url, opts, headers, timeout));
+      } catch (retryError) {
+        attempts.push({ label: "Node-retry", error: retryError });
+      }
+    }
     throw buildNetworkFailure(url, attempts);
   }
 }
 
 function buildCodexHeaders(acct) {
   const { extractChatgptAccountId } = require("./crypto-utils");
-  // The chatgpt.com backend only needs the bearer token plus the account id;
-  // browser-imitation headers are no longer required by the upstream API.
   const headers = {
     "Authorization": "Bearer " + acct.tokens.access_token,
     "Accept": "application/json",

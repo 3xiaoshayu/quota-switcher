@@ -5,12 +5,14 @@ import {
   DesktopAutoSwitchConfig,
   DesktopAuthState,
   DesktopCodexStatus,
+  DesktopCursorStatus,
   DesktopOAuthStatus,
   DesktopUpdateStatus,
+  ProductKind,
   LogEntry,
   StorageDiagnostic,
 } from '../types';
-import { toUserMessage } from './user-messages';
+import { toCursorUserMessage, toUserMessage } from './user-messages';
 
 type ApiResponse<T> = { success: true; data: T } | { success: false; error?: string };
 
@@ -27,10 +29,15 @@ interface DesktopQuota {
   weekly_window_present?: boolean;
   weekly_blocks_hourly?: boolean;
   plan_type?: string | null;
+  plan_remaining_percentage?: number | null;
+  auto_remaining_percentage?: number | null;
+  api_remaining_percentage?: number | null;
+  membership_type?: string | null;
 }
 
 interface DesktopAccount {
   id: string;
+  platform?: ProductKind;
   email: string;
   plan_type?: string | null;
   subscription_active_until?: string | number | null;
@@ -80,6 +87,7 @@ type DesktopTokenRefreshResult = {
   ok: boolean;
   skipped?: boolean;
   revoked?: boolean;
+  reauthRequired?: boolean;
   gen?: number;
   error?: string;
 };
@@ -103,8 +111,15 @@ type DesktopFloatInspect = {
   exists: boolean;
   visible: boolean;
   alwaysOnTop: boolean;
+  product?: ProductKind;
   bounds?: { x: number; y: number; width: number; height: number };
   url?: string;
+};
+
+type DesktopFloatState = {
+  visible: boolean;
+  alwaysOnTop: boolean;
+  product?: ProductKind;
 };
 
 
@@ -112,6 +127,26 @@ type DesktopFloatInspect = {
 interface DesktopBridge {
   getAppInfo: () => Promise<ApiResponse<DesktopAppInfo>>;
   getCodexStatus: () => Promise<ApiResponse<DesktopCodexStatus>>;
+  getCursorStatus: () => Promise<ApiResponse<DesktopCursorStatus>>;
+  listCursorAccounts: () => Promise<ApiResponse<DesktopAccount[]>>;
+  getCurrentCursorAccount: () => Promise<ApiResponse<DesktopAccount | null>>;
+  importLocalCursorAccount: () => Promise<ApiResponse<{ found: boolean; account: DesktopAccount | null; stalePossible?: boolean }>>;
+  addCursorAccount: () => Promise<ApiResponse<DesktopOAuthResult>>;
+  reauthorizeCursorAccount: (id: string) => Promise<ApiResponse<DesktopOAuthResult>>;
+  getCursorOAuthStatus: () => Promise<ApiResponse<DesktopOAuthStatus>>;
+  cancelCursorOAuth: () => Promise<ApiResponse<boolean>>;
+  deleteCursorAccount: (id: string) => Promise<ApiResponse<boolean>>;
+  switchCursorAccount: (id: string) => Promise<ApiResponse<unknown>>;
+  refreshCursorQuota: (id: string, force?: boolean) => Promise<ApiResponse<DesktopQuota>>;
+  refreshAllCursorQuotas: () => Promise<ApiResponse<Array<{
+    id: string;
+    email: string;
+    quota?: DesktopQuota;
+    error?: string;
+    reason?: string;
+  }>>>;
+  refreshCursorToken: (id: string) => Promise<ApiResponse<DesktopTokenRefreshResult>>;
+  refreshAllCursorTokens: (force?: boolean) => Promise<ApiResponse<DesktopTokenRefreshAllResult>>;
   getUpdateStatus: () => Promise<ApiResponse<DesktopUpdateStatus>>;
   checkForUpdates: () => Promise<ApiResponse<unknown>>;
   installUpdate: () => Promise<ApiResponse<unknown>>;
@@ -122,11 +157,13 @@ interface DesktopBridge {
   toggleMaximizeWindow: () => Promise<ApiResponse<boolean>>;
   closeWindow: () => Promise<ApiResponse<boolean>>;
   showMainWindow: () => Promise<ApiResponse<boolean>>;
-  showFloatWindow: () => Promise<ApiResponse<DesktopFloatInspect>>;
+  showFloatWindow: (product?: ProductKind) => Promise<ApiResponse<DesktopFloatInspect>>;
   hideFloatWindow: () => Promise<ApiResponse<boolean>>;
+  setFloatProduct: (product: ProductKind) => Promise<ApiResponse<DesktopFloatState>>;
   setFloatAlwaysOnTop: (value: boolean) => Promise<ApiResponse<boolean>>;
-  getFloatState: () => Promise<ApiResponse<{ visible: boolean; alwaysOnTop: boolean }>>;
+  getFloatState: () => Promise<ApiResponse<DesktopFloatState>>;
   setFloatHeight: (height: number) => Promise<ApiResponse<boolean>>;
+  onFloatProduct?: (cb: (product: ProductKind) => void) => () => void;
   listAccounts: () => Promise<ApiResponse<DesktopAccount[]>>;
   getCurrentAccount: () => Promise<ApiResponse<DesktopAccount | null>>;
   addAccount: () => Promise<ApiResponse<DesktopOAuthResult>>;
@@ -355,7 +392,7 @@ function clampPercent(value: unknown): number | null {
   if (value == null || value === '') return null;
   const number = Number(value);
   if (!Number.isFinite(number)) return null;
-  return Math.max(0, Math.min(100, number));
+  return Math.max(0, Math.min(100, Math.round(number)));
 }
 
 function toDate(value: string | number | null | undefined): Date | null {
@@ -366,16 +403,57 @@ function toDate(value: string | number | null | undefined): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+function toUnixSeconds(value: string | number | null | undefined): number | null {
+  if (value == null || value === '') return null;
+  const numeric = typeof value === 'number' ? value : Number(value);
+  if (Number.isFinite(numeric) && (typeof value === 'number' || /^-?\d+(\.\d+)?$/.test(String(value).trim()))) {
+    return Math.floor(numeric < 1e12 ? numeric : numeric / 1000);
+  }
+  const parsed = new Date(String(value));
+  return Number.isNaN(parsed.getTime()) ? null : Math.floor(parsed.getTime() / 1000);
+}
+
+function tokenValidityPctForUi(
+  account: Pick<DesktopAccount, 'token_updated_at' | 'created_at'>,
+  tokenStatus: DesktopAccount['token_status'],
+  leftoverRejected: boolean,
+): number | null {
+  if (tokenStatus?.expired || leftoverRejected) return 0;
+  const timeLeft = tokenStatus?.timeLeft;
+  const expirySeconds = toUnixSeconds(tokenStatus?.expiryDate ?? null);
+  const issuedSeconds = toUnixSeconds(tokenStatus?.issuedAt ?? null)
+    ?? toUnixSeconds(account.token_updated_at)
+    ?? toUnixSeconds(account.created_at);
+  if (
+    typeof timeLeft !== 'number'
+    || !Number.isFinite(timeLeft)
+    || expirySeconds === null
+    || issuedSeconds === null
+    || expirySeconds <= issuedSeconds
+  ) {
+    return null;
+  }
+  return Math.max(0, Math.min(100, (timeLeft / (expirySeconds - issuedSeconds)) * 100));
+}
+
+function formatClock(date: Date, withSeconds = false): string {
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  const hour = String(date.getHours()).padStart(2, '0');
+  const minute = String(date.getMinutes()).padStart(2, '0');
+  if (!withSeconds) return `${month}月${day}日 ${hour}:${minute}`;
+  const second = String(date.getSeconds()).padStart(2, '0');
+  return `${month}月${day}日 ${hour}:${minute}:${second}`;
+}
+
 export function formatDateTime(value: string | number | null | undefined): string {
   const date = toDate(value);
   if (!date) return '未知';
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(date);
+  return formatClock(date);
+}
+
+export function formatLogTime(value: Date = new Date()): string {
+  return formatClock(value, true);
 }
 
 export function quotaBarColor(remainingPercent: number | null | undefined): string {
@@ -402,7 +480,7 @@ export function quotaStroke(remainingPercent: number | null | undefined): string
 
 export function quotaHero(account: AccountQuota | null | undefined): {
   percent: number | null;
-  key: 'weekly' | 'fiveHour' | 'none';
+  key: 'weekly' | 'fiveHour' | 'auto' | 'api' | 'none';
   label: string;
 } {
   if (!account) return { percent: null, key: 'none', label: '额度' };
@@ -410,8 +488,25 @@ export function quotaHero(account: AccountQuota | null | undefined): {
     return {
       percent: null,
       key: 'none',
-      label: account.status === 'BANNED' ? '已封号' : '需重新授权后刷新',
+      label: account.status === 'BANNED' && !isCursorAccount(account) ? '已封号' : '需重新授权',
     };
+  }
+  if (account.status === 'SYNC_FAILED') {
+    return {
+      percent: null,
+      key: 'none',
+      label: isCursorAccount(account) ? '这次没查清' : '同步失败',
+    };
+  }
+  if (isCursorAccount(account)) {
+    const candidates: Array<{ percent: number; key: 'auto' | 'api'; label: string }> = [];
+    const auto = account.cursorAutoRemaining ?? null;
+    const api = account.cursorApiRemaining ?? null;
+    if (auto != null && Number.isFinite(auto)) candidates.push({ percent: auto, key: 'auto', label: 'Auto' });
+    if (api != null && Number.isFinite(api)) candidates.push({ percent: api, key: 'api', label: 'API' });
+    if (candidates.length === 0) return { percent: null, key: 'none', label: '额度' };
+    candidates.sort((left, right) => left.percent - right.percent);
+    return candidates[0];
   }
   if (account.weeklyBlocksFiveHour && (account.weeklyQuotaRemaining === 0 || account.weeklyQuotaRemaining == null)) {
     return { percent: 0, key: 'weekly', label: '周额度' };
@@ -440,10 +535,10 @@ export function formatResetLine(value: string | number | null | undefined): stri
   const remain = formatReset(value);
   if (!value) return '';
   if (remain === '等待中' || remain === '未知') return remain;
-  if (remain === '已过期') return '已重置';
+  if (remain === '已过期') return '额度已重置';
   const clock = formatDateTime(value);
-  if (clock && clock !== '未知') return `${remain}  ·  ${clock}`;
-  return remain;
+  if (clock && clock !== '未知') return `重置 ${remain} · ${clock}`;
+  return `重置 ${remain}`;
 }
 
 export function lastCheckCaption(lastChecked: string | null | undefined): string {
@@ -471,6 +566,14 @@ export function formatDuration(seconds: unknown): string {
   const hours = Math.floor((value % 86400) / 3600);
   if (hours <= 0) return `${days} 天`;
   return `${days} 天 ${hours} 小时`;
+}
+
+export function tokenRemainLabel(timeLeft: unknown): string {
+  if (typeof timeLeft !== 'number' || !Number.isFinite(timeLeft)) return '有效期未知';
+  const remain = formatDuration(timeLeft);
+  if (remain === '已过期') return '已过期';
+  if (remain === '未知') return '有效期未知';
+  return `剩余 ${remain}`;
 }
 
 function formatReset(value: string | number | null | undefined): string {
@@ -508,23 +611,37 @@ export const STATUS_DOT: Record<string, string> = {
 };
 
 export const STATUS_TEXT: Record<string, string> = {
-  ACTIVE: '活跃',
+  ACTIVE: '正常',
   READY: '就绪',
-  WARNING: '注意',
+  WARNING: '额度偏低',
   LOW_QUOTA: '额度偏低',
   SYNC_FAILED: '同步失败',
   LIMITED: '额度限流',
-  EXPIRED: '已耗尽',
+  EXPIRED: '已用尽',
   SUSPENDED: '需重新授权',
   BANNED: '已封号',
 };
 
+export function statusTextForAccount(account: Pick<AccountQuota, 'status' | 'quotaKind' | 'id'>): string {
+  if (isCursorAccount(account)) {
+    if (account.status === 'SUSPENDED') return '需重新授权';
+    if (account.status === 'EXPIRED' || account.status === 'LIMITED') return '已用尽';
+    if (account.status === 'WARNING' || account.status === 'LOW_QUOTA' || account.status === 'ACTIVE') return '正常';
+    if (account.status === 'READY') return '就绪';
+    return '这次没查清';
+  }
+  return STATUS_TEXT[account.status] || account.status;
+}
+
+export function statusDotForAccount(account: Pick<AccountQuota, 'status' | 'quotaKind' | 'id'>): string {
+  if (isCursorAccount(account) && (account.status === 'WARNING' || account.status === 'LOW_QUOTA')) {
+    return STATUS_DOT.ACTIVE;
+  }
+  return STATUS_DOT[account.status] || 'bg-fill-3';
+}
+
 export function needsHandling(account: Pick<AccountQuota, 'status'>): boolean {
-  return account.status === 'SUSPENDED'
-    || account.status === 'EXPIRED'
-    || account.status === 'SYNC_FAILED'
-    || account.status === 'BANNED'
-    || account.status === 'LIMITED';
+  return account.status === 'SUSPENDED' || account.status === 'SYNC_FAILED';
 }
 
 export function avatarGradient(id: string): string {
@@ -535,23 +652,39 @@ export function avatarGradient(id: string): string {
 
 function planForUi(planType: string | null | undefined): AccountQuota['plan'] {
   const value = String(planType || '').toLowerCase().trim();
-  if (value.includes('enterprise') || value.includes('team') || value.includes('business')) return 'Enterprise';
+  if (value.includes('enterprise')) return 'Enterprise';
+  if (value.includes('team') || value.includes('business')) return 'Team';
   if (value.includes('plus')) return 'Plus';
   if (value.includes('pro')) return 'Pro';
   if (value === 'go') return 'Go';
   return 'Standard';
 }
 
+function cursorPlanForUi(planType: string | null | undefined): AccountQuota['plan'] {
+  const value = String(planType || '').toLowerCase().trim();
+  if (value.includes('pro')) return 'Pro';
+  if (value.includes('plus')) return 'Plus';
+  if (value.includes('team') || value.includes('business') || value.includes('enterprise')) return 'Team';
+  if (value === 'go') return 'Go';
+  return 'Standard';
+}
+
 export function planLabel(plan: AccountQuota['plan'] | string | null | undefined): string {
-  const name = String(plan || '').trim();
-  if (!name) return 'Plan';
-  return name.endsWith(' Plan') ? name : `${name} Plan`;
+  const name = String(plan || '').trim().replace(/\s+(Plan|套餐)$/i, '');
+  if (!name) return '套餐';
+  return `${name} 套餐`;
 }
 
 function priorityForUi(account: DesktopAccount): AccountQuota['priority'] {
   const plan = String(account.plan_type || '').toLowerCase();
-  if (plan.includes('enterprise') || plan.includes('team')) return 'Ultra';
-  if (plan.includes('plus') || plan.includes('pro')) return 'High';
+  if (plan.includes('enterprise')) return 'Ultra';
+  if (plan.includes('plus') || plan.includes('pro') || plan.includes('team')) return 'High';
+  return 'Normal';
+}
+
+function cursorPriorityForUi(account: DesktopAccount): AccountQuota['priority'] {
+  const plan = cursorPlanForUi(account.plan_type || account.quota?.membership_type || account.quota?.plan_type);
+  if (plan === 'Team' || plan === 'Pro' || plan === 'Plus') return 'High';
   return 'Normal';
 }
 
@@ -672,6 +805,23 @@ export function summarizeRefreshAllResults(results: Array<{
   return { refreshed, reauthSkipped, bannedSkipped, failed };
 }
 
+export function tokenNeedsAttention(account: Pick<AccountQuota, 'status' | 'tokenExpired' | 'tokenValidity'>): boolean {
+  if (account.status === 'BANNED' || account.status === 'SUSPENDED') return true;
+  if (account.tokenExpired) return true;
+  return account.tokenValidity === '已过期' || account.tokenValidity === '已失效';
+}
+
+export function tokenStatusChip(
+  label: string,
+  accounts: Array<Pick<AccountQuota, 'status' | 'tokenExpired' | 'tokenValidity'>> = [],
+): { ok: boolean; text: string } {
+  const total = accounts.length;
+  if (total === 0) return { ok: true, text: `${label} 0 个账号` };
+  const bad = accounts.filter(tokenNeedsAttention).length;
+  if (bad > 0) return { ok: false, text: `${label} ${bad} 个需授权` };
+  return { ok: true, text: `${label} ${total} 个正常` };
+}
+
 export function summarizeTokenCheckResults(results: Array<{
   ok?: boolean;
   skipped?: boolean;
@@ -706,12 +856,34 @@ export function summarizeTokenCheckResults(results: Array<{
   return { passed, reauthSkipped, bannedSkipped, failed };
 }
 
+export function formatTokenCheckMessage(results: Array<{
+  ok?: boolean;
+  skipped?: boolean;
+  banned?: boolean;
+  reauthRequired?: boolean;
+  error?: string;
+}> = [], options: { product?: 'codex' | 'cursor' } = {}): { message: string; tone: 'success' | 'warning' | 'info' } {
+  const total = results.length;
+  const { passed, reauthSkipped, bannedSkipped, failed } = summarizeTokenCheckResults(results);
+  if (total === 0) return { message: '没有可检查的账号', tone: 'info' };
+  if (failed || bannedSkipped || reauthSkipped) {
+    const parts = [`${passed}/${total} 通过`];
+    if (reauthSkipped) parts.push(`${reauthSkipped} 个需重新授权`);
+    if (bannedSkipped) parts.push(`${bannedSkipped} 个无法继续`);
+    if (failed) parts.push(`${failed} 个失败`);
+    return { message: `令牌检查完成：${parts.join('，')}。`, tone: 'warning' };
+  }
+  return { message: `已检查 ${total} 个账号的令牌`, tone: 'success' };
+}
+
 function warningForUi(account: DesktopAccount, status: AccountQuota['status'], quotaError: string | null): string | null {
-  if (status === 'BANNED') return '账号已封号，无法继续使用。';
+  if (status === 'BANNED') {
+    return isCursorAccount(account) ? 'Cursor 登录已失效，请重新授权' : '账号已封号，无法继续使用。';
+  }
   if (status === 'LIMITED') return '额度已达上限或触发限流。';
   if (status === 'SYNC_FAILED') {
     if (quotaError && quotaError.includes('额度暂时没刷到')) return quotaError;
-    return '额度同步失败，请稍后重试。';
+    return isCursorAccount(account) ? '这次没查清额度，请稍后重试。' : '额度同步失败，请稍后重试。';
   }
   if (status === 'SUSPENDED') return '该账号需要重新授权后才能使用。';
   if (account.reauth_reason) return toUserMessage(account.reauth_reason);
@@ -742,19 +914,7 @@ export function mapAccountForUi(
     && !!tokenStatus.accessAvailable
     && !tokenStatus.expired
     && (!!account.requires_reauth || !!account.banned || status === 'SUSPENDED' || status === 'BANNED');
-  const expirySeconds = typeof tokenStatus.expiryDate === 'number' ? tokenStatus.expiryDate : null;
-  const issuedSeconds = typeof tokenStatus.issuedAt === 'number' ? tokenStatus.issuedAt : null;
-  let tokenValidityPct: number | null = null;
-  if (tokenStatus.expired || leftoverRejected) {
-    tokenValidityPct = 0;
-  } else if (
-    typeof tokenStatus.timeLeft === 'number'
-    && expirySeconds !== null
-    && issuedSeconds !== null
-    && expirySeconds > issuedSeconds
-  ) {
-    tokenValidityPct = Math.max(0, Math.min(100, (tokenStatus.timeLeft / (expirySeconds - issuedSeconds)) * 100));
-  }
+  const tokenValidityPct = tokenValidityPctForUi(account, tokenStatus, leftoverRejected);
 
   return {
     id: account.id,
@@ -770,7 +930,7 @@ export function mapAccountForUi(
     weeklyBlocksFiveHour: !!account.quota?.weekly_blocks_hourly,
     priority: priorityForUi(account),
     plan: planForUi(account.plan_type || account.quota?.plan_type),
-    tokenValidity: tokenStatus.expired ? '已过期' : leftoverRejected ? '已失效' : `剩余 ${formatDuration(tokenStatus.timeLeft)}`,
+    tokenValidity: tokenStatus.expired ? '已过期' : leftoverRejected ? '已失效' : tokenRemainLabel(tokenStatus.timeLeft),
     tokenValidityPct,
     resetInFiveHour: formatReset(account.quota?.hourly_reset_time),
     resetInWeekly: formatReset(account.quota?.weekly_reset_time),
@@ -785,7 +945,174 @@ export function mapAccountForUi(
     tokenAccessAvailable: !!tokenStatus.accessAvailable,
     tokenRefreshAvailable: !!tokenStatus.refreshAvailable,
     leftoverAccessUsable: leftoverUsable,
+    quotaKind: 'codex',
   };
+}
+
+function cursorStatusForUi(account: DesktopAccount): AccountQuota['status'] {
+  if (account.requires_reauth || account.probe?.status === 'token_invalid' || account.probe?.status === 'banned') {
+    return 'SUSPENDED';
+  }
+  const tokenUnusable = (account.token_status?.expired || account.token_status?.accessAvailable === false)
+    && account.token_status?.refreshAvailable === false;
+  if (tokenUnusable) return 'SUSPENDED';
+  if (account.quota_error) return 'SYNC_FAILED';
+  const plan = clampPercent(account.quota?.plan_remaining_percentage);
+  const auto = clampPercent(account.quota?.auto_remaining_percentage);
+  const api = clampPercent(account.quota?.api_remaining_percentage);
+  if (account.probe?.status === 'usage_limited' || plan === 0) return 'EXPIRED';
+  if (plan !== null && plan <= 20) return 'LOW_QUOTA';
+  if (auto === 0 || api === 0 || (auto !== null && auto <= 20) || (api !== null && api <= 20)) return 'WARNING';
+  if (!account.quota) return 'READY';
+  return 'ACTIVE';
+}
+
+function cursorWarningForUi(account: DesktopAccount, status: AccountQuota['status'], quotaError: string | null): string | null {
+  if (status === 'LIMITED' || status === 'EXPIRED') return '额度已用尽。';
+  if (status === 'SYNC_FAILED') {
+    if (quotaError && quotaError.includes('额度暂时没刷到')) return quotaError;
+    return '这次没查清额度，请稍后重试。';
+  }
+  if (status === 'SUSPENDED') return '该账号需要重新授权后才能使用。';
+  return quotaError ? toCursorUserMessage(quotaError) : null;
+}
+
+export function mapCursorAccountForUi(
+  account: DesktopAccount,
+  currentAccount: DesktopAccount | null,
+): AccountQuota {
+  const quotaError = account.quota_error?.message || account.quota_error?.code
+    ? toCursorUserMessage(account.quota_error?.message || account.quota_error?.code)
+    : null;
+  const status = cursorStatusForUi(account);
+  const tokenStatus = account.token_status || {};
+  const leftoverUsable = leftoverAccessUsableFor(account, tokenStatus);
+  const leftoverRejected = !leftoverUsable
+    && !!tokenStatus.accessAvailable
+    && !tokenStatus.expired
+    && !!account.requires_reauth;
+  const tokenValidityPct = tokenValidityPctForUi(account, tokenStatus, leftoverRejected);
+  const planRemaining = clampPercent(account.quota?.plan_remaining_percentage);
+  const autoRemaining = clampPercent(account.quota?.auto_remaining_percentage);
+  const apiRemaining = clampPercent(account.quota?.api_remaining_percentage);
+
+  return {
+    id: account.id,
+    name: displayName(account.email),
+    email: account.email,
+    status,
+    quotaKind: 'cursor',
+    fiveHourQuotaRemaining: planRemaining,
+    fiveHourQuotaTotal: 100,
+    weeklyQuotaRemaining: autoRemaining,
+    weeklyQuotaTotal: 100,
+    fiveHourQuotaPresent: planRemaining != null,
+    weeklyQuotaPresent: autoRemaining != null,
+    cursorPlanRemaining: planRemaining,
+    cursorAutoRemaining: autoRemaining,
+    cursorApiRemaining: apiRemaining,
+    priority: cursorPriorityForUi(account),
+    plan: cursorPlanForUi(account.plan_type || account.quota?.membership_type || account.quota?.plan_type),
+    tokenValidity: tokenStatus.expired ? '已过期' : leftoverRejected ? '已失效' : tokenRemainLabel(tokenStatus.timeLeft),
+    tokenValidityPct,
+    resetInFiveHour: '',
+    resetInWeekly: '',
+    warning: cursorWarningForUi(account, status, quotaError),
+    isCurrent: !!currentAccount && currentAccount.id === account.id,
+    quotaUpdatedAt: account.usage_updated_at,
+    quotaError,
+    tokenExpired: !!tokenStatus.expired,
+    tokenAccessAvailable: !!tokenStatus.accessAvailable,
+    tokenRefreshAvailable: !!tokenStatus.refreshAvailable,
+    leftoverAccessUsable: leftoverUsable,
+  };
+}
+
+export function isCursorAccount(account: { id?: string; quotaKind?: string | null }): boolean {
+  return account.quotaKind === 'cursor' || String(account.id || '').startsWith('cursor_');
+}
+
+export function pickStartupFloatProduct(
+  preferred: ProductKind,
+  codexAccounts: Array<Pick<AccountQuota, 'isCurrent'>> = [],
+  cursorAccounts: Array<Pick<AccountQuota, 'isCurrent'>> = [],
+): ProductKind | null {
+  const hasCurrent = (list: Array<Pick<AccountQuota, 'isCurrent'>>) => list.some((account) => !!account.isCurrent);
+  if (preferred === 'cursor' ? hasCurrent(cursorAccounts) : hasCurrent(codexAccounts)) return preferred;
+  const other: ProductKind = preferred === 'cursor' ? 'codex' : 'cursor';
+  return (other === 'cursor' ? hasCurrent(cursorAccounts) : hasCurrent(codexAccounts)) ? other : null;
+}
+
+export function lensQuotaWindows(account: AccountQuota | null | undefined): {
+  outer: number | null;
+  inner: number | null;
+  outerLabel: string;
+  innerLabel: string;
+  outerReset: string | number | null;
+  innerReset: string | number | null;
+} {
+  const cursor = !!account && isCursorAccount(account);
+  if (!account || hideStaleQuota(account) || account.status === 'SYNC_FAILED') {
+    return {
+      outer: null,
+      inner: null,
+      outerLabel: cursor ? 'Auto' : '周额度',
+      innerLabel: cursor ? 'API' : '5 小时',
+      outerReset: null,
+      innerReset: null,
+    };
+  }
+  if (cursor) {
+    const auto = account.cursorAutoRemaining ?? null;
+    const api = account.cursorApiRemaining ?? null;
+    return {
+      outer: auto ?? null,
+      inner: api ?? null,
+      outerLabel: 'Auto',
+      innerLabel: 'API',
+      outerReset: null,
+      innerReset: null,
+    };
+  }
+  return {
+    outer: account.weeklyQuotaPresent !== false ? account.weeklyQuotaRemaining : null,
+    inner: account.fiveHourQuotaPresent !== false ? account.fiveHourQuotaRemaining : null,
+    outerLabel: '周额度',
+    innerLabel: '5 小时',
+    outerReset: account.weeklyResetAt ?? null,
+    innerReset: account.fiveHourResetAt ?? null,
+  };
+}
+
+export function isBannedStatus(account: Pick<AccountQuota, 'status' | 'quotaKind' | 'id'>): boolean {
+  return account.status === 'BANNED' && !isCursorAccount(account);
+}
+
+export function quotaBarsForAccount(account: AccountQuota): Array<{ key: string; label: string; remaining: number | null }> {
+  if (account.status === 'SYNC_FAILED' || hideStaleQuota(account)) {
+    if (isCursorAccount(account)) {
+      return [
+        { key: 'plan', label: '套餐用量', remaining: null },
+        { key: 'auto', label: 'Auto', remaining: null },
+        { key: 'api', label: 'API', remaining: null },
+      ];
+    }
+    return [
+      { key: 'fiveHour', label: '5 小时额度', remaining: null },
+      { key: 'weekly', label: '周额度', remaining: null },
+    ];
+  }
+  if (isCursorAccount(account)) {
+    return [
+      { key: 'plan', label: '套餐用量', remaining: account.cursorPlanRemaining ?? null },
+      { key: 'auto', label: 'Auto', remaining: account.cursorAutoRemaining ?? null },
+      { key: 'api', label: 'API', remaining: account.cursorApiRemaining ?? null },
+    ];
+  }
+  return [
+    { key: 'fiveHour', label: '5 小时额度', remaining: account.fiveHourQuotaPresent === false ? null : account.fiveHourQuotaRemaining },
+    { key: 'weekly', label: '周额度', remaining: account.weeklyQuotaPresent === false ? null : account.weeklyQuotaRemaining },
+  ];
 }
 
 export function isCurrentQuotaSufficient(
@@ -896,6 +1223,52 @@ export function hideStaleQuota(account: Pick<AccountQuota, 'status' | 'leftoverA
   return account.leftoverAccessUsable !== true;
 }
 
+export function isRedundantQuotaNotice(text: string | null | undefined): boolean {
+  const value = String(text || '').trim();
+  return /^额度已用尽。?$/.test(value)
+    || /^该账号需要重新授权后才能使用。?$/.test(value)
+    || /^这次没查清额度，请稍后重试。?$/.test(value)
+    || /^额度同步失败，请稍后重试。?$/.test(value);
+}
+
+export function averageRemainingCaption(
+  accounts: AccountQuota[],
+  product: ProductKind = 'codex',
+): string {
+  const percentages: number[] = [];
+  let sawZero = false;
+  for (const account of accounts) {
+    if (hideStaleQuota(account) || account.status === 'SYNC_FAILED' || account.status === 'EXPIRED' || account.status === 'LIMITED') {
+      continue;
+    }
+    const values: number[] = [];
+    if (isCursorAccount(account) || product === 'cursor') {
+      for (const bar of quotaBarsForAccount(account)) {
+        if (bar.remaining != null) values.push(bar.remaining);
+      }
+    } else {
+      if (account.fiveHourQuotaRemaining != null) {
+        values.push((account.fiveHourQuotaRemaining / account.fiveHourQuotaTotal) * 100);
+      }
+      if (account.weeklyQuotaRemaining != null) {
+        values.push((account.weeklyQuotaRemaining / account.weeklyQuotaTotal) * 100);
+      }
+    }
+    for (const value of values) {
+      if (!Number.isFinite(value)) continue;
+      if (value <= 0) {
+        sawZero = true;
+        continue;
+      }
+      percentages.push(value);
+    }
+  }
+  if (percentages.length) {
+    return `${Math.round(percentages.reduce((sum, value) => sum + value, 0) / percentages.length)}%`;
+  }
+  return sawZero ? '已用尽' : '--';
+}
+
 export function quotaSummaryPercent(text: string): number | null {
   const match = /^(\d+)%$/.exec(String(text || '').trim());
   if (!match) return null;
@@ -911,11 +1284,14 @@ export function quotaWindowSummary(
   if (hideStaleQuota(account)) {
     return {
       label,
-      text: account.status === 'BANNED' ? '已封号' : '需重新授权后刷新',
+      text: isBannedStatus(account) ? '已封号' : '需重新授权后刷新',
     };
   }
   if (account.status === 'LIMITED') {
     return { label, text: '额度限流' };
+  }
+  if (account.status === 'SYNC_FAILED') {
+    return { label, text: isCursorAccount(account) ? '这次没查清' : '同步失败' };
   }
   if (window === 'fiveHour' && account.weeklyBlocksFiveHour) {
     return { label, text: '周额度已用尽' };
@@ -924,15 +1300,23 @@ export function quotaWindowSummary(
   const remaining = window === 'fiveHour' ? account.fiveHourQuotaRemaining : account.weeklyQuotaRemaining;
   const total = window === 'fiveHour' ? account.fiveHourQuotaTotal : account.weeklyQuotaTotal;
   if (account.quotaError && remaining == null) {
-    return { label, text: '同步失败' };
+    return { label, text: isCursorAccount(account) ? '这次没查清' : '同步失败' };
   }
   if (!present || remaining == null) {
-    return { label, text: '上游暂未提供' };
+    return { label, text: '暂无此项' };
   }
   const pct = total > 0 ? Math.round((Number(remaining) / total) * 100) : Math.round(Number(remaining));
   if (!Number.isFinite(pct)) return { label, text: '暂无数据' };
   if (pct <= 0) return { label, text: '已用尽' };
   return { label, text: `${pct}%` };
+}
+
+export function cursorEmptyQuotaText(account: Pick<AccountQuota, 'status' | 'warning'>): string {
+  if (account.status === 'SUSPENDED') return '需重新授权';
+  if (account.status === 'SYNC_FAILED') return '这次没查清';
+  if (account.status === 'LIMITED') return '额度限流';
+  if (account.status === 'EXPIRED') return '已用尽';
+  return '暂无此项';
 }
 
 export function quotaScopeCaption(account: AccountQuota): {
@@ -1026,7 +1410,38 @@ export const desktopApi = {
     };
   },
 
-  async loadFloatAccounts() {
+  async loadCursorState() {
+    const api = bridge();
+    const [
+      accountsResponse,
+      currentResponse,
+      oauthStatusResponse,
+      statusResponse,
+    ] = await Promise.all([
+      captureResponse(() => api.listCursorAccounts(), 'Read Cursor accounts'),
+      captureResponse(() => api.getCurrentCursorAccount(), 'Read current Cursor account'),
+      captureResponse(() => api.getCursorOAuthStatus(), 'Read Cursor OAuth status'),
+      timedCapture(() => api.getCursorStatus(), 'Read Cursor status'),
+    ]);
+    const rawAccounts = expectData(accountsResponse, 'Read Cursor accounts') || [];
+    const currentAccount = optionalData(currentResponse, null);
+    return {
+      accounts: rawAccounts.map((account) => mapCursorAccountForUi(account, currentAccount)),
+      rawAccounts,
+      currentAccount,
+      oauthStatus: optionalData(oauthStatusResponse, defaultOAuthStatus()) || defaultOAuthStatus(),
+      cursorStatus: optionalData(statusResponse, null),
+    };
+  },
+
+  async loadFloatAccounts(product: ProductKind = 'codex') {
+    if (product === 'cursor') {
+      const snapshot = await desktopApi.loadCursorState();
+      return {
+        accounts: snapshot.accounts,
+        currentAccount: snapshot.currentAccount,
+      };
+    }
     const api = bridge();
     const [accountsResponse, currentResponse, configResponse] = await Promise.all([
       captureResponse(() => api.listAccounts(), 'Read accounts'),
@@ -1052,7 +1467,7 @@ export const desktopApi = {
 
   async refreshToken(id: string) {
     const result = expectData(await bridge().refreshToken(id), 'Refresh token');
-    if (result && result.ok === false) throw new Error(result.error || 'Token refresh failed');
+    if (result && result.ok === false && !result.reauthRequired) throw new Error(result.error || 'Token refresh failed');
     return result;
   },
 
@@ -1116,6 +1531,56 @@ export const desktopApi = {
     return expectData(await bridge().getCodexStatus(), 'Read Codex status');
   },
 
+  async getCursorStatus() {
+    return expectData(await bridge().getCursorStatus(), 'Read Cursor status');
+  },
+
+  async importLocalCursorAccount() {
+    return expectData(await bridge().importLocalCursorAccount(), 'Import local Cursor account');
+  },
+
+  async addCursorAccount() {
+    return expectData(await bridge().addCursorAccount(), 'Add Cursor account');
+  },
+
+  async reauthorizeCursorAccount(id: string) {
+    return expectData(await bridge().reauthorizeCursorAccount(id), 'Reauthorize Cursor account');
+  },
+
+  async getCursorOAuthStatus() {
+    return expectData(await bridge().getCursorOAuthStatus(), 'Read Cursor OAuth status');
+  },
+
+  async cancelCursorOAuth() {
+    return expectData(await bridge().cancelCursorOAuth(), 'Cancel Cursor OAuth');
+  },
+
+  async deleteCursorAccount(id: string) {
+    return expectData(await bridge().deleteCursorAccount(id), 'Delete Cursor account');
+  },
+
+  async switchCursorAccount(id: string) {
+    return expectData(await bridge().switchCursorAccount(id), 'Switch Cursor account');
+  },
+
+  async refreshCursorQuota(id: string, force = true) {
+    return expectData(await bridge().refreshCursorQuota(id, force), 'Refresh Cursor quota');
+  },
+
+  async refreshAllCursorQuotas() {
+    return expectData(await bridge().refreshAllCursorQuotas(), 'Refresh all Cursor quotas') || [];
+  },
+
+  async refreshCursorToken(id: string) {
+    const result = expectData(await bridge().refreshCursorToken(id), 'Refresh Cursor token');
+    if (result && result.ok === false && !result.reauthRequired) throw new Error(result.error || 'Token refresh failed');
+    return result;
+  },
+
+  async refreshAllCursorTokens(force = false) {
+    return expectData(await bridge().refreshAllCursorTokens(force), 'Refresh all Cursor tokens');
+  },
+
   async checkForUpdates() {
     return expectData(await bridge().checkForUpdates(), 'Check for updates');
   },
@@ -1148,12 +1613,16 @@ export const desktopApi = {
     return expectData(await bridge().showMainWindow(), 'Show main window');
   },
 
-  async showFloatWindow() {
-    return expectData(await bridge().showFloatWindow(), 'Show float window');
+  async showFloatWindow(product?: ProductKind) {
+    return expectData(await bridge().showFloatWindow(product), 'Show float window');
   },
 
   async hideFloatWindow() {
     return expectData(await bridge().hideFloatWindow(), 'Hide float window');
+  },
+
+  async setFloatProduct(product: ProductKind) {
+    return expectData(await bridge().setFloatProduct(product), 'Set float product');
   },
 
   async setFloatAlwaysOnTop(value: boolean) {
@@ -1174,6 +1643,7 @@ export const desktopApi = {
     onAutoSwitch?: (result: AutoSwitchRunResult) => void;
     onUpdateStatus?: (status: DesktopUpdateStatus) => void;
     onAuthConflict?: (state: DesktopAuthState) => void;
+    onFloatProduct?: (product: ProductKind) => void;
   }) {
     const api = getBridge();
     if (!api) return () => {};
@@ -1183,6 +1653,7 @@ export const desktopApi = {
       api.onAutoSwitch?.((payload) => events.onAutoSwitch?.(payload)),
       api.onUpdateStatus?.((payload) => events.onUpdateStatus?.(payload)),
       api.onAuthConflict?.((payload) => events.onAuthConflict?.(payload)),
+      api.onFloatProduct?.((product) => events.onFloatProduct?.(product)),
     ].filter(Boolean) as Array<() => void>;
     return () => cleanups.forEach((cleanup) => cleanup());
   },

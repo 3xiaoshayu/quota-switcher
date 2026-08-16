@@ -214,7 +214,7 @@ test("quota network failures become sync-failed with short Chinese copy", async 
   assert.equal(snapshot.accounts[0].status, "SYNC_FAILED");
   assert.equal(
     snapshot.accounts[0].warning,
-    "额度暂时没刷到，登录还在。请检查代理后再刷新，或稍后再试。",
+    "额度暂时没刷到，登录还在。请稍后再试。",
   );
   assert.doesNotMatch(snapshot.accounts[0].quotaError || "", /ERR_CONNECTION/);
 });
@@ -254,7 +254,7 @@ test("banned accounts beat reauthorization and keep the deactivation code", asyn
     snapshot.accounts[0].warning,
     "账号已封号，无法继续使用。",
   );
-  assert.equal(needsHandling(snapshot.accounts[0]), true);
+  assert.equal(needsHandling(snapshot.accounts[0]), false);
   assert.equal(snapshot.accounts[0].leftoverAccessUsable, true);
   assert.equal(needsQuotaAutoSync(snapshot.accounts[0]), true);
 });
@@ -408,6 +408,7 @@ test("leftover access rejected codes stay aligned with the engine", () => {
     { skipped: true, reason: "reauthorization_required" },
     { skipped: true, reason: "account_banned", banned: true },
     { error: "timeout" },
+    { error: "这次没查清额度，请稍后重试。", reason: "cursor_session_missing" },
     { error: "HTTP 401", banned: true },
     { error: "Account requires reauthorization before quotas can be refreshed.", reason: "reauthorization_required" },
     { error: "The target account is banned and cannot refresh quotas", reason: "account_banned" },
@@ -415,7 +416,7 @@ test("leftover access rejected codes stay aligned with the engine", () => {
   assert.equal(summary.refreshed, 1);
   assert.equal(summary.reauthSkipped, 2);
   assert.equal(summary.bannedSkipped, 3);
-  assert.equal(summary.failed, 1);
+  assert.equal(summary.failed, 2);
   const tokenSummary = summarizeTokenCheckResults([
     { ok: true, skipped: true },
     { ok: false, skipped: true, reauthRequired: true },
@@ -426,6 +427,64 @@ test("leftover access rejected codes stay aligned with the engine", () => {
   assert.equal(tokenSummary.reauthSkipped, 1);
   assert.equal(tokenSummary.bannedSkipped, 1);
   assert.equal(tokenSummary.failed, 1);
+});
+
+test("token status chips stay product-agnostic and summarize batch checks", () => {
+  const { tokenStatusChip, formatTokenCheckMessage } = loadDesktopExports(bridge());
+  const empty = tokenStatusChip("Codex", []);
+  assert.equal(empty.ok, true);
+  assert.equal(empty.text, "Codex 0 个账号");
+  const healthy = tokenStatusChip("Cursor", [
+    { status: "ACTIVE", tokenExpired: false, tokenValidity: "剩余 12 天" },
+    { status: "READY", tokenExpired: false, tokenValidity: "剩余 3 天" },
+  ]);
+  assert.equal(healthy.ok, true);
+  assert.equal(healthy.text, "Cursor 2 个正常");
+  const attention = tokenStatusChip("Codex", [
+    { status: "ACTIVE", tokenExpired: false, tokenValidity: "剩余 12 天" },
+    { status: "SUSPENDED", tokenExpired: false, tokenValidity: "已失效" },
+    { status: "ACTIVE", tokenExpired: true, tokenValidity: "已过期" },
+  ]);
+  assert.equal(attention.ok, false);
+  assert.equal(attention.text, "Codex 2 个需授权");
+  assert.equal(formatTokenCheckMessage([]).tone, "info");
+  assert.match(formatTokenCheckMessage([{ ok: true }, { ok: false, skipped: true }]).message, /需重新授权/);
+  assert.equal(formatTokenCheckMessage([{ ok: true }, { ok: true, skipped: true }]).tone, "success");
+  assert.match(formatTokenCheckMessage([{ ok: false }], { product: "cursor" }).message, /失败/);
+  assert.doesNotMatch(formatTokenCheckMessage([{ ok: false }], { product: "cursor" }).message, /这次没查清/);
+  assert.match(formatTokenCheckMessage([{ ok: false }], { product: "codex" }).message, /失败/);
+});
+
+test("settings token card lists every tokenBatch product", () => {
+  const settings = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "components", "SettingsView.tsx"), "utf8");
+  const products = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "data", "products.ts"), "utf8");
+  const app = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "App.tsx"), "utf8");
+  assert.match(settings, /tokenStatusChip/);
+  assert.match(settings, /检查各产品账号登录是否仍可用/);
+  assert.doesNotMatch(settings, /只检查 Codex|只针对 Codex|已管理账号/);
+  assert.match(settings, /token-status-chips/);
+  assert.match(settings, /updates-status-chips/);
+  assert.match(products, /id: 'cursor'[\s\S]*tokenBatch: true/);
+  assert.match(app, /refreshAllCursorTokens/);
+  assert.match(app, /tokenAccountsByProduct/);
+});
+
+test("settings daemon card lists product jobs without following the sidebar", () => {
+  const settings = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "components", "SettingsView.tsx"), "utf8");
+  const sidebar = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "components", "Sidebar.tsx"), "utf8");
+  assert.match(settings, /只做 Codex 续登录和自动切号/);
+  assert.match(settings, /daemon-product-chips/);
+  assert.match(settings, /续登录 · 切号/);
+  assert.match(settings, /暂不参与/);
+  assert.doesNotMatch(settings, /只管 Codex/);
+  assert.match(settings, /daemonState\.status !== 'Running' && settings\.globalSwitch/);
+  assert.doesNotMatch(settings, /settings\.globalSwitch && productById\(product\)\.features\.autoSwitch/);
+  assert.doesNotMatch(sidebar, /Codex Daemon/);
+  assert.match(sidebar, /Daemon 运行中/);
+  assert.match(settings, /跟随 \{productById\(product\)\.label\}/);
+  assert.match(settings, /line-clamp-2/);
+  assert.doesNotMatch(settings, /max-w-xs truncate/);
+  assert.match(settings, /!\/稍后会自动重试\|稍后会自动刷新\|正在确认官方登录\//);
 });
 
 test("usage limited and probe-failed stay out of the banned bucket", async () => {
@@ -453,7 +512,7 @@ test("usage limited and probe-failed stay out of the banned bucket", async () =>
   assert.equal(snapshot.accounts[0].status, "LIMITED");
   assert.equal(STATUS_TEXT.LIMITED, "额度限流");
   assert.equal(snapshot.accounts[0].warning, "额度已达上限或触发限流。");
-  assert.equal(needsHandling(snapshot.accounts[0]), true);
+  assert.equal(needsHandling(snapshot.accounts[0]), false);
   assert.equal(snapshot.accounts[1].status, "SYNC_FAILED");
   assert.equal(STATUS_TEXT.SYNC_FAILED, "同步失败");
   assert.equal(snapshot.accounts[1].warning, "额度同步失败，请稍后重试。");
@@ -483,8 +542,10 @@ test("dashboard maps OpenAI plan types to official names", async () => {
     ["Plus", "Pro", "Go", "Enterprise", "Standard"],
   );
   const { planLabel } = loadDesktopExports(bridge());
-  assert.equal(planLabel("Plus"), "Plus Plan");
-  assert.equal(planLabel("Pro"), "Pro Plan");
+  assert.equal(planLabel("Plus"), "Plus 套餐");
+  assert.equal(planLabel("Pro"), "Pro 套餐");
+  assert.equal(planLabel("Team Plan"), "Team 套餐");
+  assert.equal(planLabel(""), "套餐");
 });
 
 test("quota auto-sync uses one minute for the current account and ten for others", () => {
@@ -693,11 +754,77 @@ test("quota hero uses the tighter remaining window", () => {
   assert.equal(staleHero.label, "已封号");
 });
 
+test("quota hero uses Cursor Auto and API labels", () => {
+  const { quotaHero, lensQuotaWindows } = loadDesktopExports(bridge());
+  const hero = quotaHero({
+    id: "cursor_1",
+    quotaKind: "cursor",
+    cursorPlanRemaining: 12,
+    cursorAutoRemaining: 90,
+    cursorApiRemaining: 40,
+  });
+  assert.equal(hero.key, "api");
+  assert.equal(hero.percent, 40);
+  assert.equal(hero.label, "API");
+  const windows = lensQuotaWindows({
+    id: "cursor_1",
+    quotaKind: "cursor",
+    cursorPlanRemaining: 12,
+    cursorAutoRemaining: 90,
+    cursorApiRemaining: 40,
+  });
+  assert.equal(windows.innerLabel, "API");
+  assert.equal(windows.outerLabel, "Auto");
+  assert.equal(windows.inner, 40);
+  assert.equal(windows.outer, 90);
+  assert.equal(windows.innerReset, null);
+  const failedWindows = lensQuotaWindows({
+    id: "cursor_1",
+    quotaKind: "cursor",
+    status: "SYNC_FAILED",
+    leftoverAccessUsable: true,
+    cursorPlanRemaining: 59,
+    cursorAutoRemaining: 81,
+    cursorApiRemaining: 0,
+  });
+  assert.equal(failedWindows.inner, null);
+  assert.equal(failedWindows.outer, null);
+  assert.equal(quotaHero({
+    id: "cursor_2",
+    quotaKind: "cursor",
+    status: "SUSPENDED",
+    leftoverAccessUsable: false,
+    cursorAutoRemaining: 70,
+    cursorApiRemaining: 80,
+  }).label, "需重新授权");
+  assert.equal(quotaHero({
+    id: "cursor_3",
+    quotaKind: "cursor",
+    status: "SYNC_FAILED",
+  }).label, "这次没查清");
+  assert.equal(quotaHero({
+    status: "SYNC_FAILED",
+  }).label, "同步失败");
+});
+
+test("startup float product prefers the sidebar product when it has a current account", () => {
+  const { pickStartupFloatProduct } = loadDesktopExports(bridge());
+  const current = { isCurrent: true };
+  const other = { isCurrent: false };
+  assert.equal(pickStartupFloatProduct("cursor", [current], [current]), "cursor");
+  assert.equal(pickStartupFloatProduct("codex", [current], [current]), "codex");
+  assert.equal(pickStartupFloatProduct("codex", [other], [current]), "cursor");
+  assert.equal(pickStartupFloatProduct("cursor", [current], [other]), "codex");
+  assert.equal(pickStartupFloatProduct("cursor", [other], [other]), null);
+  assert.equal(pickStartupFloatProduct("codex", [], []), null);
+});
+
 test("last check caption avoids repeating 检查 when no run has happened", () => {
-  const { lastCheckCaption } = loadDesktopExports(bridge());
+  const { lastCheckCaption, formatLogTime } = loadDesktopExports(bridge());
   assert.equal(lastCheckCaption(""), "暂无检查记录");
   assert.equal(lastCheckCaption("尚未检查"), "暂无检查记录");
   assert.equal(lastCheckCaption("08/14 22:15"), "最近检查：08/14 22:15");
+  assert.equal(formatLogTime(new Date(2026, 7, 16, 21, 53, 15)), "8月16日 21:53:15");
 });
 
 test("scope quota lines explain missing windows instead of showing dashes", () => {
@@ -717,6 +844,41 @@ test("scope quota lines explain missing windows instead of showing dashes", () =
   const bannedAccount = { ...reauthAccount, status: "BANNED" };
   assert.equal(quotaWindowSummary("fiveHour", bannedAccount).text, "已封号");
   assert.equal(quotaScopeCaption(bannedAccount).shared, "已封号");
+
+  const cursorBanned = { ...bannedAccount, quotaKind: "cursor", id: "cursor_one" };
+  assert.equal(quotaWindowSummary("fiveHour", cursorBanned).text, "需重新授权后刷新");
+  assert.equal(quotaScopeCaption(cursorBanned).shared, "需重新授权后刷新");
+
+  const cursorSyncFailed = {
+    status: "SYNC_FAILED",
+    quotaKind: "cursor",
+    id: "cursor_one",
+    leftoverAccessUsable: true,
+    quotaError: "timeout",
+    fiveHourQuotaRemaining: null,
+    fiveHourQuotaTotal: 100,
+    weeklyQuotaRemaining: null,
+    weeklyQuotaTotal: 100,
+  };
+  assert.equal(quotaWindowSummary("fiveHour", cursorSyncFailed).text, "这次没查清");
+
+  const leftoverSyncFailed = {
+    status: "SYNC_FAILED",
+    quotaKind: "cursor",
+    id: "cursor_one",
+    leftoverAccessUsable: true,
+    quotaError: "timeout",
+    fiveHourQuotaRemaining: 42,
+    fiveHourQuotaTotal: 100,
+    fiveHourQuotaPresent: true,
+    weeklyQuotaRemaining: 76,
+    weeklyQuotaTotal: 100,
+    weeklyQuotaPresent: true,
+    cursorAutoRemaining: 81,
+    cursorApiRemaining: 0,
+  };
+  assert.equal(quotaWindowSummary("fiveHour", leftoverSyncFailed).text, "这次没查清");
+  assert.equal(quotaWindowSummary("weekly", leftoverSyncFailed).text, "这次没查清");
 
   const leftoverLive = {
     status: "BANNED",
@@ -765,13 +927,26 @@ test("scope quota lines explain missing windows instead of showing dashes", () =
     weeklyQuotaTotal: 100,
     weeklyQuotaPresent: true,
   };
-  assert.equal(quotaWindowSummary("fiveHour", missingFiveHour).text, "上游暂未提供");
+  assert.equal(quotaWindowSummary("fiveHour", missingFiveHour).text, "暂无此项");
   assert.equal(quotaWindowSummary("weekly", missingFiveHour).text, "41%");
   assert.equal(quotaScopeCaption(missingFiveHour).shared, null);
   assert.equal(
     quotaScopeCaption(missingFiveHour).rows.map((row) => `${row.label}:${row.text}`).join("|"),
-    "5 小时:上游暂未提供|周额度:41%",
+    "5 小时:暂无此项|周额度:41%",
   );
+
+  const { averageRemainingCaption, isRedundantQuotaNotice } = loadDesktopExports(bridge());
+  assert.equal(isRedundantQuotaNotice("该账号需要重新授权后才能使用。"), true);
+  assert.equal(isRedundantQuotaNotice("额度已用尽。"), true);
+  assert.equal(isRedundantQuotaNotice("额度暂时没刷到，登录还在。请稍后再试。"), false);
+  assert.equal(averageRemainingCaption([
+    { status: "ACTIVE", quotaKind: "cursor", id: "cursor_live", cursorPlanRemaining: 55, cursorAutoRemaining: 71, cursorApiRemaining: 0 },
+    { status: "EXPIRED", quotaKind: "cursor", id: "cursor_dead", cursorPlanRemaining: 0, cursorAutoRemaining: 0, cursorApiRemaining: 0 },
+  ], "cursor"), "63%");
+  assert.equal(averageRemainingCaption([
+    { status: "ACTIVE", fiveHourQuotaRemaining: 93, fiveHourQuotaTotal: 100, weeklyQuotaRemaining: 93, weeklyQuotaTotal: 100 },
+    { status: "SUSPENDED", leftoverAccessUsable: false, fiveHourQuotaRemaining: 10, fiveHourQuotaTotal: 100, weeklyQuotaRemaining: 10, weeklyQuotaTotal: 100 },
+  ]), "93%");
 });
 
 test("notification badge counts unread warnings and errors until the feed is opened", () => {
@@ -807,7 +982,12 @@ test("user-facing messages stay in Chinese", () => {
     toUserMessage("The target account requires reauthorization before it can be switched to"),
     "该账号需要重新授权后才能切换",
   );
+  assert.equal(
+    toUserMessage("Account requires reauthorization before tokens can be refreshed."),
+    "该账号需要重新授权后才能刷新令牌",
+  );
   assert.equal(toUserMessage("Official Codex authentication is missing."), "官方 Codex 当前没有登录");
+  assert.equal(toUserMessage("No supported official Codex OAuth login was found"), "本机没有已登录的 Codex");
   assert.equal(
     toUserMessage("Quota authorization could not be repaired: HTTP 401 refresh_token_invalidated"),
     "额度授权无法修复，刷新令牌已失效，请重新授权",
@@ -831,12 +1011,28 @@ test("user-facing messages stay in Chinese", () => {
     toUserMessage("Token refresh failed: HTTP 401 account_disabled"),
     "刷新令牌已失效，请重新授权",
   );
+  assert.equal(toUserMessage("Token refresh failed: HTTP 500"), "令牌刷新失败");
+  assert.equal(toUserMessage("HTTP 500"), "服务暂时不可用，请稍后刷新额度");
   assert.equal(toUserMessage("disabled"), "全局开关已关闭，不会切号");
   assert.equal(toUserMessage("已从管理器中删除账号 a@b.com。"), "已从管理器中删除账号 a@b.com。");
   assert.equal(toUserMessage("SomeUnknownEnglishFailureXYZ"), "操作失败，请稍后重试");
+  assert.equal(toUserMessage("Token 已过期且刷新失败"), "令牌已过期且刷新失败，请重新授权");
+  assert.equal(toUserMessage("Cursor usage request failed: HTTP 500"), "这次没查清 Cursor 额度，请稍后重试");
+  assert.equal(toUserMessage("cursor_session_missing"), "这次没查清 Cursor 额度，请稍后重试");
+  assert.equal(toUserMessage("Cursor session cookie could not be built"), "这次没查清 Cursor 额度，请稍后重试");
+  assert.equal(toUserMessage("Cursor usage response was not JSON"), "这次没查清 Cursor 额度，请稍后重试");
+  assert.equal(toUserMessage("invalid_usage_json"), "这次没查清 Cursor 额度，请稍后重试");
+  assert.equal(toUserMessage("官方 Cursor 还没把登录库写完，请再试一次"), "官方 Cursor 还没把登录库写完，请再试一次");
+  const { toCursorUserMessage } = module.exports;
+  assert.equal(toCursorUserMessage("HTTP 401 account_disabled"), "Cursor 登录已失效，请重新授权");
+  assert.equal(toCursorUserMessage("HTTP 401 account_deactivated"), "Cursor 登录已失效，请重新授权");
   assert.equal(
-    toUserMessage("网络请求失败 (chatgpt.com)。已尝试可用网络栈。如果正在使用代理/TUN，请确认它允许 Codex Account Manager 访问 OpenAI。详情：Electron: Error: Electron network failed after retry: Error: net::ERR_CONNECTION_TIMED_OUT | Node: ETIMEDOUT"),
-    "额度暂时没刷到，登录还在。请检查代理后再刷新，或稍后再试。",
+    toUserMessage("网络请求失败 (chatgpt.com)。详情：Electron: Error: Electron network failed after retry: Error: net::ERR_CONNECTION_TIMED_OUT | Node: ETIMEDOUT"),
+    "额度暂时没刷到，登录还在。请稍后再试。",
+  );
+  assert.equal(
+    toUserMessage("网络请求失败 (chatgpt.com)。本机 DNS 异常且没有可用的本地代理。"),
+    "额度暂时没刷到，登录还在。请稍后再试。",
   );
   assert.equal(toUserMessage("Read authentication state timed out"), "正在确认官方登录，稍后会自动刷新");
   assert.equal(
@@ -851,18 +1047,259 @@ test("user-facing messages stay in Chinese", () => {
 });
 
 test("duration and handling helpers stay in Chinese", () => {
-  const { formatDuration, needsHandling } = loadDesktopExports(bridge());
+  const { formatDuration, formatResetLine, needsHandling, cursorEmptyQuotaText, tokenRemainLabel } = loadDesktopExports(bridge());
+  assert.equal(tokenRemainLabel(null), "有效期未知");
+  assert.equal(tokenRemainLabel(3600), "剩余 1 小时");
   assert.equal(formatDuration(45), "1 分钟");
   assert.equal(formatDuration(3600), "1 小时");
   assert.equal(formatDuration(3659), "1 小时 1 分钟");
   assert.equal(formatDuration(86400 * 8 + 3600 * 3), "8 天 3 小时");
   assert.equal(formatDuration(-1), "已过期");
+  const resetAt = Math.floor(Date.now() / 1000) + (4 * 86400) + (9 * 3600);
+  assert.match(formatResetLine(resetAt), /^重置 /);
+  assert.match(formatResetLine(resetAt), / · /);
+  assert.equal(formatResetLine(Math.floor(Date.now() / 1000) - 60), "额度已重置");
   assert.equal(needsHandling({ status: "SUSPENDED" }), true);
-  assert.equal(needsHandling({ status: "EXPIRED" }), true);
+  assert.equal(needsHandling({ status: "EXPIRED" }), false);
   assert.equal(needsHandling({ status: "SYNC_FAILED" }), true);
-  assert.equal(needsHandling({ status: "BANNED" }), true);
-  assert.equal(needsHandling({ status: "LIMITED" }), true);
+  assert.equal(needsHandling({ status: "BANNED" }), false);
+  assert.equal(needsHandling({ status: "LIMITED" }), false);
   assert.equal(needsHandling({ status: "WARNING" }), false);
   assert.equal(needsHandling({ status: "LOW_QUOTA" }), false);
   assert.equal(needsHandling({ status: "ACTIVE" }), false);
+  const { statusTextForAccount, statusDotForAccount, isBannedStatus, STATUS_DOT, STATUS_TEXT } = loadDesktopExports(bridge());
+  assert.equal(needsHandling({ status: "WARNING", quotaKind: "cursor", id: "cursor_one" }), false);
+  assert.equal(needsHandling({ status: "LOW_QUOTA", quotaKind: "cursor", id: "cursor_one" }), false);
+  assert.equal(needsHandling({ status: "EXPIRED", quotaKind: "cursor", id: "cursor_one" }), false);
+  assert.equal(needsHandling({ status: "BANNED", quotaKind: "cursor", id: "cursor_one" }), false);
+  assert.equal(statusTextForAccount({ status: "WARNING", quotaKind: "cursor", id: "cursor_one" }), "正常");
+  assert.equal(statusDotForAccount({ status: "WARNING", quotaKind: "cursor", id: "cursor_one" }), STATUS_DOT.ACTIVE);
+  assert.equal(statusTextForAccount({ status: "SUSPENDED", quotaKind: "cursor", id: "cursor_one" }), "需重新授权");
+  assert.equal(statusTextForAccount({ status: "READY", quotaKind: "cursor", id: "cursor_one" }), "就绪");
+  assert.equal(statusTextForAccount({ status: "SYNC_FAILED", quotaKind: "cursor", id: "cursor_one" }), "这次没查清");
+  assert.equal(statusTextForAccount({ status: "BANNED", quotaKind: "cursor", id: "cursor_one" }), "这次没查清");
+  assert.equal(STATUS_TEXT.EXPIRED, "已用尽");
+  assert.equal(statusTextForAccount({ status: "EXPIRED", quotaKind: "cursor", id: "cursor_one" }), "已用尽");
+  assert.equal(statusTextForAccount({ status: "EXPIRED" }), "已用尽");
+  assert.equal(isBannedStatus({ status: "BANNED", quotaKind: "cursor", id: "cursor_one" }), false);
+  assert.equal(isBannedStatus({ status: "BANNED", id: "codex_one" }), true);
+  assert.equal(cursorEmptyQuotaText({ status: "SUSPENDED" }), "需重新授权");
+  assert.equal(cursorEmptyQuotaText({ status: "SYNC_FAILED", warning: "这次没查清额度，请稍后重试。" }), "这次没查清");
+  assert.equal(cursorEmptyQuotaText({ status: "EXPIRED" }), "已用尽");
+  assert.equal(cursorEmptyQuotaText({ status: "LIMITED" }), "额度限流");
+  assert.equal(cursorEmptyQuotaText({ status: "ACTIVE" }), "暂无此项");
+});
+
+test("cursor account mapping never uses ban status and rounds leftover quota", () => {
+  const { mapCursorAccountForUi } = loadDesktopExports(bridge());
+  const depleted = mapCursorAccountForUi({
+    id: "cursor_depleted",
+    email: "depleted@example.com",
+    banned: true,
+    probe: { status: "usage_limited" },
+    quota: {
+      plan_remaining_percentage: 0.0633,
+      auto_remaining_percentage: 0.04,
+      api_remaining_percentage: 0,
+    },
+    token_status: { accessAvailable: true, refreshAvailable: true, expired: false, timeLeft: 3600 },
+  }, { id: "cursor_depleted" });
+  assert.equal(depleted.status, "EXPIRED");
+  assert.equal(depleted.quotaKind, "cursor");
+  const usageFailed = mapCursorAccountForUi({
+    id: "cursor_usage_failed",
+    email: "usage-failed@example.com",
+    quota_error: { code: "probe_failed", message: "Cursor usage request failed: HTTP 429" },
+    token_status: { accessAvailable: true, refreshAvailable: true, expired: false, timeLeft: 3600 },
+  }, null);
+  assert.equal(usageFailed.status, "SYNC_FAILED");
+  assert.doesNotMatch(String(usageFailed.warning || ""), /usage request failed|HTTP 429/i);
+  assert.match(String(usageFailed.warning || ""), /没查清/);
+  const probeBanned = mapCursorAccountForUi({
+    id: "cursor_probe_banned",
+    email: "probe-banned@example.com",
+    banned: false,
+    probe: { status: "banned" },
+    token_status: { accessAvailable: false, refreshAvailable: false, expired: true, timeLeft: 0 },
+  }, null);
+  assert.equal(probeBanned.status, "SUSPENDED");
+  assert.equal(probeBanned.warning, "该账号需要重新授权后才能使用。");
+  assert.doesNotMatch(String(probeBanned.warning || ""), /已封号/);
+  assert.equal(depleted.cursorPlanRemaining, 0);
+  assert.equal(depleted.cursorAutoRemaining, 0);
+  assert.equal(depleted.cursorApiRemaining, 0);
+  assert.equal(depleted.warning, "额度已用尽。");
+
+  const mixed = mapCursorAccountForUi({
+    id: "cursor_mixed",
+    email: "mixed@example.com",
+    quota: {
+      plan_remaining_percentage: 50.4,
+      auto_remaining_percentage: 0,
+      api_remaining_percentage: 12.2,
+    },
+    token_status: { accessAvailable: true, refreshAvailable: true, expired: false, timeLeft: 3600 },
+  }, null);
+  assert.equal(mixed.status, "WARNING");
+  assert.equal(mixed.cursorPlanRemaining, 50);
+  assert.equal(mixed.cursorApiRemaining, 12);
+
+  const team = mapCursorAccountForUi({
+    id: "cursor_team",
+    email: "team@example.com",
+    plan_type: "enterprise",
+    quota: { membership_type: "enterprise", plan_remaining_percentage: 75, auto_remaining_percentage: 97, api_remaining_percentage: 0 },
+    token_status: { accessAvailable: true, refreshAvailable: true, expired: false, timeLeft: 3600 },
+  }, null);
+  assert.equal(team.plan, "Team");
+  assert.equal(team.priority, "High");
+  const namedTeam = mapCursorAccountForUi({
+    id: "cursor_named_team",
+    email: "named-team@example.com",
+    plan_type: "team",
+    token_status: { accessAvailable: true, refreshAvailable: true, expired: false, timeLeft: 3600 },
+  }, null);
+  assert.equal(namedTeam.plan, "Team");
+  const bars = loadDesktopExports(bridge()).quotaBarsForAccount(team);
+  assert.equal(bars.length, 3);
+  assert.equal(bars[0].label, "套餐用量");
+  assert.equal(bars[1].label, "Auto");
+  assert.equal(bars[2].label, "API");
+  const failedBars = loadDesktopExports(bridge()).quotaBarsForAccount({
+    ...team,
+    status: "SYNC_FAILED",
+    leftoverAccessUsable: true,
+  });
+  assert.equal(failedBars[0].remaining, null);
+  assert.equal(failedBars[1].remaining, null);
+  assert.equal(failedBars[2].remaining, null);
+  const staleBars = loadDesktopExports(bridge()).quotaBarsForAccount({
+    ...team,
+    status: "SUSPENDED",
+    leftoverAccessUsable: false,
+    cursorPlanRemaining: 72,
+    cursorAutoRemaining: 81,
+    cursorApiRemaining: 40,
+  });
+  assert.equal(staleBars[0].remaining, null);
+  assert.equal(staleBars[1].remaining, null);
+  assert.equal(staleBars[2].remaining, null);
+});
+
+test("token validity bar uses update or create time when jwt iat is missing", () => {
+  const { mapCursorAccountForUi, mapAccountForUi } = loadDesktopExports(bridge());
+  const now = Math.floor(Date.now() / 1000);
+  const issued = now - (30 * 86400);
+  const expiry = now + (30 * 86400);
+  const timeLeft = 30 * 86400;
+  const config = {
+    enabled: false,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+    sync_interval_minutes: 10,
+  };
+
+  const cursor = mapCursorAccountForUi({
+    id: "cursor_token_bar",
+    email: "bar@example.com",
+    token_updated_at: issued,
+    token_status: {
+      accessAvailable: true,
+      refreshAvailable: true,
+      expired: false,
+      issuedAt: null,
+      expiryDate: expiry,
+      timeLeft,
+    },
+  }, null);
+  assert.match(cursor.tokenValidity, /^剩余 /);
+  assert.ok(cursor.tokenValidityPct > 45 && cursor.tokenValidityPct < 55);
+
+  const fromCreatedMs = mapCursorAccountForUi({
+    id: "cursor_token_created",
+    email: "created@example.com",
+    created_at: issued * 1000,
+    token_status: {
+      accessAvailable: true,
+      refreshAvailable: true,
+      expired: false,
+      issuedAt: null,
+      expiryDate: expiry,
+      timeLeft,
+    },
+  }, null);
+  assert.ok(fromCreatedMs.tokenValidityPct > 45 && fromCreatedMs.tokenValidityPct < 55);
+
+  const unknown = mapCursorAccountForUi({
+    id: "cursor_token_unknown",
+    email: "unknown@example.com",
+    token_status: {
+      accessAvailable: true,
+      refreshAvailable: true,
+      expired: false,
+      issuedAt: null,
+      expiryDate: expiry,
+      timeLeft,
+    },
+  }, null);
+  assert.equal(unknown.tokenValidityPct, null);
+
+  const noTime = mapCursorAccountForUi({
+    id: "cursor_token_notime",
+    email: "notime@example.com",
+    token_status: {
+      accessAvailable: true,
+      refreshAvailable: true,
+      expired: false,
+      timeLeft: null,
+    },
+  }, null);
+  assert.equal(noTime.tokenValidity, "有效期未知");
+  assert.equal(noTime.tokenValidityPct, null);
+
+  const prefersIat = mapCursorAccountForUi({
+    id: "cursor_token_iat",
+    email: "iat@example.com",
+    token_updated_at: now,
+    token_status: {
+      accessAvailable: true,
+      refreshAvailable: true,
+      expired: false,
+      issuedAt: issued,
+      expiryDate: expiry,
+      timeLeft,
+    },
+  }, null);
+  assert.ok(prefersIat.tokenValidityPct > 45 && prefersIat.tokenValidityPct < 55);
+
+  const expired = mapCursorAccountForUi({
+    id: "cursor_token_expired",
+    email: "expired@example.com",
+    token_updated_at: issued,
+    token_status: {
+      accessAvailable: false,
+      refreshAvailable: false,
+      expired: true,
+      expiryDate: issued + 100,
+      timeLeft: -10,
+    },
+  }, null);
+  assert.equal(expired.tokenValidityPct, 0);
+
+  const codex = mapAccountForUi({
+    id: "codex_token_bar",
+    email: "codex-bar@example.com",
+    created_at: issued,
+    token_status: {
+      accessAvailable: true,
+      refreshAvailable: true,
+      expired: false,
+      issuedAt: null,
+      expiryDate: expiry,
+      timeLeft,
+    },
+  }, null, config);
+  assert.ok(codex.tokenValidityPct > 45 && codex.tokenValidityPct < 55);
 });

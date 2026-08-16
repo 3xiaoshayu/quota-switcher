@@ -2,8 +2,8 @@
 
 # Codex Account Manager
 
-Keep several Codex accounts in one Windows window. Quotas, identity, and
-switching stay on your machine.
+Keep several Codex and Cursor accounts in one Windows window. Quotas,
+identity, and switching stay on your machine.
 
 [![Release](https://img.shields.io/github/v/release/3xiaoshayu/codex-account-manager?include_prereleases&sort=semver&label=release)](https://github.com/3xiaoshayu/codex-account-manager/releases)
 [![CI](https://github.com/3xiaoshayu/codex-account-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/3xiaoshayu/codex-account-manager/actions/workflows/ci.yml)
@@ -27,10 +27,11 @@ switching stay on your machine.
 
 ## What this is
 
-Once you have more than one Codex account, checking remaining quota and
-changing identity gets tedious. This app puts that in a single Windows window:
-one card per account, quotas you can read at a glance, and switching that
-updates the official client for you.
+Once you have more than one Codex or Cursor account, checking remaining quota
+and changing identity gets tedious. This app puts that in a single Windows
+window: one card per account, quotas you can read at a glance, and switching
+that updates the official client for you. The sidebar switches between the
+two products.
 
 It cannot raise anyone's limits. Automatic switching only chooses among the
 accounts you saved.
@@ -39,7 +40,7 @@ accounts you saved.
 
 - **Account cards** — 5-hour quota, weekly quota, reset times, and token lifetime on each card. Search, filter, add, refresh, switch, reauthorize, or delete. The header shows the current mailbox; click it to copy.
 - **Quota overview** — every account on one page. A failed read shows as unknown, never as zero.
-- **Automatic switching** — a local daemon moves to the next usable account at the threshold you set. Closing the main window does not stop it.
+- **Automatic switching** — a local daemon moves to the next usable Codex account at the threshold you set. Closing the main window does not stop it. Cursor stays out of auto-switch.
 - **Close to tray** — the close button hides the window. Click the tray icon to bring it back; choose **Exit** on the tray menu to quit.
 - **Desktop quota lens** — a small desktop ring for the tighter remaining window. Page through accounts, pin, refresh, or switch from there.
 - **Local only** — accounts and tokens stay on this PC, with tokens encrypted by Windows DPAPI. No telemetry and no cloud service of ours.

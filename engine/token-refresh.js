@@ -132,7 +132,15 @@ async function refreshOneTok(acct, options = {}) {
       const code = extractErrorCode(resp.body);
       const revoked = isReauthErrorCode(code) || isReauthErrorText(resp.body);
       if (revoked) markRequiresReauth(acct, code, resp.body.slice(0, 300));
-      return { ok: false, error: tokenRefreshError(resp.status, code), revoked, code, detail: resp.body.slice(0, 300) };
+      return {
+        ok: false,
+        skipped: revoked,
+        reauthRequired: revoked,
+        error: tokenRefreshError(resp.status, code),
+        revoked,
+        code,
+        detail: resp.body.slice(0, 300),
+      };
     }
     const data = JSON.parse(resp.body);
     const idTok = data.id_token || acct.tokens.id_token;

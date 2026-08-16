@@ -9,6 +9,7 @@ const preloadSource = read("src/preload/preload.js");
 const mainSource = [
   "src/main/ipc-handlers.js",
   "src/main/main.js",
+  "src/main/float-window.js",
   "src/main/updater.js",
 ]
   .filter((file) => fs.existsSync(path.join(root, file)))

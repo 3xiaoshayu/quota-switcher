@@ -16,6 +16,9 @@ extraResources:
   - from: resources/icon.ico
     to: icon.ico
 
+asarUnpack:
+  - node_modules/sql.js/**
+
 win:
   target:
     - target: nsis

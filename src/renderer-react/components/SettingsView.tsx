@@ -17,9 +17,25 @@ import {
   FolderOpen,
   Gauge
 } from 'lucide-react';
-import { SystemSettings, DaemonState } from '../types';
+import { AccountQuota, SystemSettings, DaemonState, ProductKind } from '../types';
+import { lastCheckCaption, tokenStatusChip } from '../api/desktop';
+import { PRODUCTS, productById, type ProductDefinition } from '../data/products';
+
+function clientDetectLine(product: ProductDefinition, settings: SystemSettings) {
+  if (product.id === 'cursor') {
+    return {
+      ok: !!(settings.cursorDetected || settings.cursorHasLocalLogin),
+      text: settings.cursorDetected ? '已安装' : settings.cursorHasLocalLogin ? '有本机登录' : '未安装',
+    };
+  }
+  return {
+    ok: !!settings.clientDetected,
+    text: settings.clientDetected ? '已安装' : '未安装',
+  };
+}
 
 interface SettingsProps {
+  product?: ProductKind;
   settings: SystemSettings;
   daemonState: DaemonState;
   onToggleDaemon: () => void | Promise<void>;
@@ -32,13 +48,14 @@ interface SettingsProps {
   onInstallUpdate?: () => Promise<void>;
   canInstallUpdate?: boolean;
   updateEnabled?: boolean;
-  accountCount?: number;
+  tokenAccountsByProduct?: Partial<Record<ProductKind, AccountQuota[]>>;
   repositoryUrl?: string;
   onOpenLogs?: () => Promise<void>;
   onShowFloatWindow?: () => Promise<void>;
 }
 
 export default function SettingsView({
+  product = 'codex',
   settings,
   daemonState,
   onToggleDaemon,
@@ -51,7 +68,7 @@ export default function SettingsView({
   onInstallUpdate,
   canInstallUpdate = false,
   updateEnabled = false,
-  accountCount = 128,
+  tokenAccountsByProduct = {},
   repositoryUrl = 'https://github.com',
   onOpenLogs,
   onShowFloatWindow,
@@ -83,7 +100,9 @@ export default function SettingsView({
         await onBatchVerifyTokens();
       } else {
         await new Promise((resolve) => setTimeout(resolve, 1500));
-        onAddLog(`令牌检查完成，共 ${accountCount} 个账号。`, 'success');
+        const total = PRODUCTS.filter((item) => item.features.tokenBatch)
+          .reduce((sum, item) => sum + (tokenAccountsByProduct[item.id]?.length || 0), 0);
+        onAddLog(total > 0 ? `令牌检查完成，共 ${total} 个账号。` : '没有可检查的账号', 'success');
       }
     } catch (error) {
       onAddLog(error instanceof Error ? error.message : String(error), 'error');
@@ -95,9 +114,9 @@ export default function SettingsView({
   const handleDetectClient = () => {
     if (onDetectClient) {
       setIsDetectingClient(true);
-      onAddLog('正在检测官方 Codex...', 'info');
+      onAddLog('正在检测官方 Codex 和 Cursor...', 'info');
       onDetectClient()
-        .then(() => onAddLog('官方 Codex 检测已更新。', 'success'))
+        .then(() => onAddLog('官方客户端检测已更新。', 'success'))
         .catch((error) => onAddLog(error instanceof Error ? error.message : String(error), 'error'))
         .finally(() => setIsDetectingClient(false));
       return;
@@ -138,7 +157,31 @@ export default function SettingsView({
       .finally(() => setIsInstallingUpdate(false));
   };
 
+  const tokenChips = PRODUCTS.filter((item) => item.features.tokenBatch).map((item) => ({
+    id: item.id,
+    ...tokenStatusChip(item.label, tokenAccountsByProduct[item.id] || []),
+  }));
+  const updateChannelText = settings.updateChannel
+    .replace('Beta Channel', 'Beta 通道')
+    .replace('Stable Channel', '稳定通道')
+    .replace('Developer Channel', '开发通道');
+
   const latestStatusText = settings.latestStatus || '未知';
+  const latestStatusChip = /失败|错误/.test(latestStatusText)
+    ? '检查失败'
+    : /检查中/.test(latestStatusText)
+      ? '检查中'
+      : /可安装/.test(latestStatusText)
+        ? '可安装'
+        : /手动/.test(latestStatusText)
+          ? '手动更新'
+          : /禁用/.test(latestStatusText)
+            ? '已禁用'
+            : /未知/.test(latestStatusText)
+              ? '未知'
+              : /最新/.test(latestStatusText)
+                ? '已是最新'
+                : (latestStatusText.length > 10 ? '已是最新' : latestStatusText);
   const latestStatusFailed = /失败|错误/.test(latestStatusText);
   const latestStatusBusy = /检查中/.test(latestStatusText);
   const latestStatusMuted = /未知|禁用|手动/.test(latestStatusText);
@@ -166,14 +209,27 @@ export default function SettingsView({
       <div className="flex flex-col gap-6" id="settings-cards-grid">
           <div className="glass-card rounded-2xl p-6 flex flex-col" id="card-daemon-settings">
             {/* Daemon Card Header */}
-            <div className="flex items-start justify-between pb-5 border-b border-sep" id="daemon-header">
-              <div className="flex items-center gap-3.5">
-                <div className="w-10 h-10 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent">
+            <div className="flex items-start justify-between gap-4 pb-5 border-b border-sep" id="daemon-header">
+              <div className="flex items-start gap-3.5 min-w-0">
+                <div className="w-10 h-10 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent shrink-0">
                   <Server className="w-4 h-4" />
                 </div>
-                <div className="flex flex-col text-left">
+                <div className="flex flex-col text-left min-w-0">
                   <h3 className="font-bold text-label text-sm tracking-wide font-sans">Daemon 服务</h3>
-                  <span className="text-[11px] text-label-2 mt-0.5">定期续登录，并检查是否切号</span>
+                  <span className="text-[11px] text-label-2 mt-0.5">只做 Codex 续登录和自动切号</span>
+                  <div className="mt-2.5 flex flex-wrap gap-1.5" id="daemon-product-chips">
+                    {PRODUCTS.map((item) => (
+                      <span
+                        className={`px-2 py-0.5 rounded-md text-[10px] font-semibold ${
+                          item.features.autoSwitch ? 'bg-fill-2 text-label-2' : 'bg-fill text-label-3'
+                        }`}
+                        id={`daemon-chip-${item.id}`}
+                        key={item.id}
+                      >
+                        {item.features.autoSwitch ? `${item.label} 续登录 · 切号` : `${item.label} 暂不参与`}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               </div>
 
@@ -223,9 +279,17 @@ export default function SettingsView({
                 {daemonState.status !== 'Running' && settings.globalSwitch && (
                   <span className="block text-[10px] text-warn">自动切号已启用，但 Daemon 已停止</span>
                 )}
-                {daemonState.lastError && (
-                  <span className="block max-w-xs truncate text-[10px] text-danger" title={daemonState.lastError}>
-                    最近检查：{daemonState.lastError}
+                {daemonState.lastChecked ? (
+                  <span className="block text-[10px] leading-4 text-label-3">
+                    {lastCheckCaption(daemonState.lastChecked)}
+                  </span>
+                ) : null}
+                {daemonState.lastError && !/稍后会自动重试|稍后会自动刷新|正在确认官方登录/.test(daemonState.lastError) && (
+                  <span
+                    className="block text-[10px] leading-4 whitespace-normal line-clamp-2 text-danger"
+                    title={daemonState.lastError}
+                  >
+                    {daemonState.lastError}
                   </span>
                 )}
               </div>
@@ -254,50 +318,64 @@ export default function SettingsView({
           </div>
 
         <div
-          className={`grid grid-cols-1 gap-6 ${onShowFloatWindow ? 'lg:grid-cols-2' : ''}`}
+          className={`grid grid-cols-1 gap-6 items-stretch ${onShowFloatWindow ? 'lg:grid-cols-2' : ''}`}
           id="settings-local-row"
         >
-          <div className="glass-card rounded-2xl p-6 flex items-center justify-between gap-4 h-full" id="card-client-detect">
-            <div className="flex items-center gap-3.5">
-              <div className="w-10 h-10 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent">
+          <div className="glass-card rounded-2xl p-6 flex items-start justify-between gap-4 h-full" id="card-client-detect">
+            <div className="flex items-start gap-3.5 min-w-0">
+              <div className="w-10 h-10 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent shrink-0">
                 <Monitor className="w-4 h-4" />
               </div>
-              <div className="flex flex-col text-left">
-                <h3 className="font-bold text-label text-sm tracking-wide font-sans">官方 Codex</h3>
-                <span className="text-[11px] text-label-2 mt-0.5">检测本机是否已安装微软商店版</span>
+              <div className="flex flex-col text-left min-w-0">
+                <h3 className="font-bold text-label text-sm tracking-wide font-sans">官方客户端</h3>
+                <span className="text-[11px] text-label-2 mt-0.5">检测本机 {PRODUCTS.map((item) => item.label).join(' 与 ')}</span>
+                <div className="mt-2.5 flex flex-wrap gap-1.5" id="client-detect-status">
+                  {PRODUCTS.map((item) => {
+                    const line = clientDetectLine(item, settings);
+                    return (
+                      <span
+                        className={`px-2 py-0.5 rounded-md text-[10px] font-semibold ${
+                          line.ok ? 'bg-fill-2 text-label-2' : 'bg-danger/15 text-danger'
+                        }`}
+                        id={`client-detect-${item.id}`}
+                        key={item.id}
+                      >
+                        {item.label} {line.text}
+                      </span>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-4" id="client-detect-actions">
-              <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-label-2">
-                <span className={`w-1.5 h-1.5 rounded-full ${settings.clientDetected ? 'bg-ok' : 'bg-danger'}`} />
-                {settings.clientDetected ? '已安装' : '未安装'}
-              </span>
-
-              <motion.button
-                onClick={handleDetectClient}
-                disabled={isDetectingClient}
-                whileHover={{ scale: 1.03 }}
-                whileTap={{ scale: 0.97 }}
-                transition={{ type: 'spring', stiffness: 450, damping: 20 }}
-                className="px-4 py-2 rounded-[10px] bg-fill hover:bg-fill-2 text-label text-[13px] font-medium cursor-pointer transition-colors flex items-center gap-1.5"
-                id="btn-re-detect-client"
-              >
-                <RotateCw className={`w-3 h-3 ${isDetectingClient ? 'animate-spin text-accent' : ''}`} />
-                重新检测
-              </motion.button>
-            </div>
+            <motion.button
+              onClick={handleDetectClient}
+              disabled={isDetectingClient}
+              whileHover={{ scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
+              transition={{ type: 'spring', stiffness: 450, damping: 20 }}
+              className="px-4 py-2 rounded-[10px] bg-fill hover:bg-fill-2 text-label text-[13px] font-medium cursor-pointer transition-colors flex items-center gap-1.5 shrink-0"
+              id="btn-re-detect-client"
+            >
+              <RotateCw className={`w-3 h-3 ${isDetectingClient ? 'animate-spin text-accent' : ''}`} />
+              重新检测
+            </motion.button>
           </div>
 
-          {onShowFloatWindow && (
-            <div className="glass-card rounded-2xl p-6 flex items-center justify-between gap-4 h-full" id="card-float-lens">
-              <div className="flex items-center gap-3.5">
-                <div className="w-10 h-10 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent">
+          {onShowFloatWindow && productById(product).features.floatLens && (
+            <div className="glass-card rounded-2xl p-6 flex items-start justify-between gap-4 h-full" id="card-float-lens">
+              <div className="flex items-start gap-3.5 min-w-0">
+                <div className="w-10 h-10 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent shrink-0">
                   <Gauge className="w-4 h-4" />
                 </div>
-                <div className="flex flex-col text-left">
+                <div className="flex flex-col text-left min-w-0">
                   <h3 className="font-bold text-label text-sm tracking-wide font-sans">桌面额度</h3>
-                  <span className="text-[11px] text-label-2 mt-0.5">在桌面上放一块小仪表，随时看还剩多少额度</span>
+                  <span className="text-[11px] text-label-2 mt-0.5">只看 {productById(product).label} 额度，在桌面上放一块小仪表</span>
+                  <div className="mt-2.5 flex flex-wrap gap-1.5" id="float-lens-chips">
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-fill-2 text-label-2" id="float-lens-follow-chip">
+                      跟随 {productById(product).label}
+                    </span>
+                  </div>
                 </div>
               </div>
               <motion.button
@@ -317,99 +395,89 @@ export default function SettingsView({
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch" id="settings-account-row">
-          <div className="glass-card rounded-2xl p-6 flex flex-col gap-6 h-full" id="card-tokens">
-            <div className="flex items-start justify-between" id="tokens-header">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent">
-                  <Key className="w-4 h-4" />
-                </div>
-                <div className="flex flex-col text-left">
-                  <h3 className="font-bold text-label text-sm tracking-wide font-sans">登录令牌</h3>
-                  <span className="text-[11px] text-label-2 mt-0.5">检查各账号令牌是否仍可使用</span>
+          <div className="glass-card rounded-2xl p-6 flex items-start justify-between gap-4 h-full" id="card-tokens">
+            <div className="flex items-start gap-3.5 min-w-0">
+              <div className="w-10 h-10 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent shrink-0">
+                <Key className="w-4 h-4" />
+              </div>
+              <div className="flex flex-col text-left min-w-0">
+                <h3 className="font-bold text-label text-sm tracking-wide font-sans">登录令牌</h3>
+                <span className="text-[11px] text-label-2 mt-0.5">检查各产品账号登录是否仍可用，不是刷新额度</span>
+                <div className="mt-2.5 flex flex-wrap gap-1.5" id="token-status-chips">
+                  {tokenChips.map((chip) => (
+                    <span
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-semibold ${
+                        chip.ok ? 'bg-fill-2 text-label-2' : 'bg-danger/15 text-danger'
+                      }`}
+                      id={`token-chip-${chip.id}`}
+                      key={chip.id}
+                    >
+                      {chip.text}
+                    </span>
+                  ))}
                 </div>
               </div>
             </div>
-
-            <div className="flex flex-col gap-6 mt-auto" id="tokens-body">
-              <div className="flex flex-col text-left" id="tokens-stat-box">
-                <span className="text-[28px] font-semibold text-label tracking-tight tabular-nums">{accountCount}</span>
-                <span className="text-[12px] text-label-3 font-medium mt-1">已管理账号</span>
-              </div>
-
-              <div className="flex flex-col gap-2">
-              <motion.button
-                onClick={handleBatchVerify}
-                disabled={isVerifyingTokens}
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                transition={{ type: 'spring', stiffness: 450, damping: 20 }}
-                className="w-full py-2.5 bg-accent/15 hover:bg-accent/25 disabled:opacity-50 text-accent rounded-[10px] text-[13px] font-medium flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
-                id="btn-batch-login-check"
-              >
-                <ShieldCheck className="w-3.5 h-3.5 text-accent" />
-                {isVerifyingTokens ? '检查中...' : '检查令牌'}
-              </motion.button>
-              <p className="text-[11px] text-label-3 leading-5">会实际刷新登录令牌，不是刷新额度。查额度请用账号卡上的「刷新」。</p>
-              </div>
-            </div>
+            <motion.button
+              onClick={handleBatchVerify}
+              disabled={isVerifyingTokens}
+              whileHover={{ scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
+              transition={{ type: 'spring', stiffness: 450, damping: 20 }}
+              className="px-4 py-2 rounded-[10px] bg-fill hover:bg-fill-2 disabled:opacity-50 text-label text-[13px] font-medium cursor-pointer transition-colors flex items-center gap-1.5 shrink-0"
+              id="btn-batch-login-check"
+            >
+              <ShieldCheck className={`w-3 h-3 ${isVerifyingTokens ? 'animate-pulse text-accent' : ''}`} />
+              {isVerifyingTokens ? '检查中...' : '检查令牌'}
+            </motion.button>
           </div>
 
-          {/* Card 4: Update Channels */}
-          <div className="glass-card rounded-2xl p-6 flex flex-col gap-5 h-full" id="card-software-update">
-            <div className="flex items-start justify-between" id="updates-header">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent">
-                  <Download className="w-4 h-4" />
-                </div>
-                <div className="flex flex-col text-left">
-                  <h3 className="font-bold text-label text-sm tracking-wide font-sans">软件更新</h3>
-                  <span className="text-[11px] text-label-2 mt-0.5">当前版本状态与更新通道</span>
-                </div>
+          <div className="glass-card rounded-2xl p-6 flex items-start justify-between gap-4 h-full" id="card-software-update">
+            <div className="flex items-start gap-3.5 min-w-0">
+              <div className="w-10 h-10 rounded-[10px] bg-accent/15 flex items-center justify-center text-accent shrink-0">
+                <Download className="w-4 h-4" />
               </div>
-            </div>
-
-            <div className="flex flex-col gap-3 mt-auto" id="updates-body">
-              <div className="flex items-center justify-between text-xs font-semibold px-1" id="updates-status-labels">
-                <span className="text-label-2">更新通道</span>
-                <span className="px-2 py-0.5 bg-accent/15 text-accent rounded-md font-medium text-[11px]">{settings.updateChannel.replace('Beta Channel', 'Beta 通道').replace('Stable Channel', '稳定通道').replace('Developer Channel', '开发通道')}</span>
-              </div>
-              <div className="flex items-center justify-between text-xs font-semibold px-1 pb-1" id="updates-version-labels">
-                <span className="text-label-2">最新状态</span>
-                <span className="text-label font-medium flex items-center gap-1.5">
-                  <LatestStatusIcon className={`w-3.5 h-3.5 ${latestStatusIconClass}`} />
-                  {latestStatusText}
-                </span>
-              </div>
-
-              <div className={`grid gap-2 ${canInstallUpdate ? 'grid-cols-2' : 'grid-cols-1'}`}>
-                <motion.button
-                  onClick={handleCheckUpdates}
-                  disabled={isCheckingUpdates}
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  transition={{ type: 'spring', stiffness: 450, damping: 20 }}
-                  className="w-full py-2.5 bg-accent/15 hover:bg-accent/25 text-accent text-[13px] font-medium rounded-[10px] cursor-pointer transition-colors flex items-center justify-center gap-1.5"
-                  id="btn-check-for-updates"
-                >
-                  <Activity className={`w-3.5 h-3.5 text-accent ${isCheckingUpdates ? 'animate-spin' : ''}`} />
-                  {isCheckingUpdates ? '检查中...' : (updateEnabled ? '检查更新' : '打开发布页')}
-                </motion.button>
-                {canInstallUpdate && (
-                  <motion.button
-                    onClick={handleInstallUpdate}
-                    disabled={isInstallingUpdate || !onInstallUpdate}
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    transition={{ type: 'spring', stiffness: 450, damping: 20 }}
-                    className="w-full py-2.5 bg-ok/15 hover:bg-ok/25 text-ok text-[13px] font-medium rounded-[10px] cursor-pointer transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
-                    id="btn-install-update"
+              <div className="flex flex-col text-left min-w-0">
+                <h3 className="font-bold text-label text-sm tracking-wide font-sans">软件更新</h3>
+                <span className="text-[11px] text-label-2 mt-0.5">当前版本状态与更新通道</span>
+                <div className="mt-2.5 flex flex-wrap gap-1.5" id="updates-status-chips">
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-fill-2 text-label-2" id="updates-channel-chip">
+                    {updateChannelText}
+                  </span>
+                  <span
+                    className={`px-2 py-0.5 rounded-md text-[10px] font-semibold inline-flex items-center gap-1 ${
+                      latestStatusFailed ? 'bg-danger/15 text-danger' : 'bg-fill-2 text-label-2'
+                    }`}
+                    id="updates-status-chip"
+                    title={latestStatusText}
                   >
-                    <Download className={`w-3.5 h-3.5 ${isInstallingUpdate ? 'animate-pulse' : ''}`} />
-                    {isInstallingUpdate ? '安装中...' : '安装并重启'}
-                  </motion.button>
-                )}
+                    <LatestStatusIcon className={`w-3 h-3 ${latestStatusIconClass}`} />
+                    {latestStatusChip}
+                  </span>
+                </div>
               </div>
             </div>
+            <motion.button
+              onClick={canInstallUpdate ? handleInstallUpdate : handleCheckUpdates}
+              disabled={canInstallUpdate ? isInstallingUpdate || !onInstallUpdate : isCheckingUpdates}
+              whileHover={{ scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
+              transition={{ type: 'spring', stiffness: 450, damping: 20 }}
+              className="px-4 py-2 rounded-[10px] bg-fill hover:bg-fill-2 disabled:opacity-50 text-label text-[13px] font-medium cursor-pointer transition-colors flex items-center gap-1.5 shrink-0"
+              id={canInstallUpdate ? 'btn-install-update' : 'btn-check-for-updates'}
+            >
+              {canInstallUpdate ? (
+                <>
+                  <Download className={`w-3 h-3 ${isInstallingUpdate ? 'animate-pulse' : ''}`} />
+                  {isInstallingUpdate ? '安装中...' : '安装并重启'}
+                </>
+              ) : (
+                <>
+                  <Activity className={`w-3 h-3 ${isCheckingUpdates ? 'animate-spin text-accent' : ''}`} />
+                  {isCheckingUpdates ? '检查中...' : (updateEnabled ? '检查更新' : '打开发布页')}
+                </>
+              )}
+            </motion.button>
           </div>
         </div>
 
@@ -426,7 +494,7 @@ export default function SettingsView({
               Codex Account Manager {settings.version.startsWith('v') ? settings.version : `v${settings.version}`}
             </span>
             <span className="text-xs text-label-2 mt-1">
-              本地优先的 Codex 多账号管理工具。
+              本地优先的 Codex / Cursor 账号管理工具。
             </span>
           </div>
         </div>

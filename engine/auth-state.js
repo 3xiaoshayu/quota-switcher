@@ -257,14 +257,17 @@ async function adoptOfficialAuth() {
   const official = readOfficialAuth();
   if (!official?.supported) throw new Error("No supported official Codex OAuth login was found");
   const { upsert } = require("./oauth");
-  const result = await upsert(official.tokens);
-  const account = result.account || result;
-  const index = loadIdx();
-  index.current_account_id = account.id;
-  saveIdx(index);
-  writeManagedProjection(account, official.value);
-  logInfo("Adopted the official Codex login as the managed current account");
-  return account;
+  const { withAccountLock } = require("./operation-locks");
+  return withAccountLock("__switch__", async () => {
+    const result = await upsert(official.tokens);
+    const account = result.account || result;
+    const index = loadIdx();
+    index.current_account_id = account.id;
+    saveIdx(index);
+    writeManagedProjection(account, official.value);
+    logInfo("Adopted the official Codex login as the managed current account");
+    return account;
+  });
 }
 
 async function reapplyManagedAuth(accountId = null) {

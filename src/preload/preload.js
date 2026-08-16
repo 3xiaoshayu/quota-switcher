@@ -4,6 +4,7 @@ const api = {
   // 应用与发布
   getAppInfo: () => ipcRenderer.invoke('app:info'),
   getCodexStatus: () => ipcRenderer.invoke('codex:status'),
+  getCursorStatus: () => ipcRenderer.invoke('cursor:status'),
   getUpdateStatus: () => ipcRenderer.invoke('update:status'),
   checkForUpdates: () => ipcRenderer.invoke('update:check'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
@@ -14,8 +15,9 @@ const api = {
   toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggleMaximize'),
   closeWindow: () => ipcRenderer.invoke('window:close'),
   showMainWindow: () => ipcRenderer.invoke('window:showMain'),
-  showFloatWindow: () => ipcRenderer.invoke('float:show'),
+  showFloatWindow: (product) => ipcRenderer.invoke('float:show', product),
   hideFloatWindow: () => ipcRenderer.invoke('float:hide'),
+  setFloatProduct: (product) => ipcRenderer.invoke('float:setProduct', product),
   setFloatAlwaysOnTop: (value) => ipcRenderer.invoke('float:setAlwaysOnTop', value),
   getFloatState: () => ipcRenderer.invoke('float:getState'),
   setFloatHeight: (height) => ipcRenderer.invoke('float:setHeight', height),
@@ -34,6 +36,19 @@ const api = {
   getOAuthStatus: () => ipcRenderer.invoke('oauth:status'),
   cancelOAuth: () => ipcRenderer.invoke('oauth:cancel'),
   completeOAuthManually: (callbackUrl) => ipcRenderer.invoke('oauth:completeManual', callbackUrl),
+  listCursorAccounts: () => ipcRenderer.invoke('cursor:list'),
+  getCurrentCursorAccount: () => ipcRenderer.invoke('cursor:current'),
+  importLocalCursorAccount: () => ipcRenderer.invoke('cursor:importLocal'),
+  addCursorAccount: () => ipcRenderer.invoke('cursor:add'),
+  reauthorizeCursorAccount: (id) => ipcRenderer.invoke('cursor:reauthorize', id),
+  getCursorOAuthStatus: () => ipcRenderer.invoke('cursor:oauthStatus'),
+  cancelCursorOAuth: () => ipcRenderer.invoke('cursor:oauthCancel'),
+  deleteCursorAccount: (id) => ipcRenderer.invoke('cursor:delete', id),
+  switchCursorAccount: (id) => ipcRenderer.invoke('cursor:switch', id),
+  refreshCursorQuota: (id, force = true) => ipcRenderer.invoke('cursor:refreshQuota', id, force),
+  refreshAllCursorQuotas: () => ipcRenderer.invoke('cursor:refreshAllQuotas'),
+  refreshCursorToken: (id) => ipcRenderer.invoke('cursor:refreshToken', id),
+  refreshAllCursorTokens: (force = false) => ipcRenderer.invoke('cursor:refreshAllTokens', force),
 
   // 配额
   refreshQuota: (id, force = true) => ipcRenderer.invoke('quota:refresh', id, force),
@@ -79,6 +94,11 @@ const api = {
     const handler = (_event, payload) => cb(payload);
     ipcRenderer.on('auth:conflict', handler);
     return () => ipcRenderer.removeListener('auth:conflict', handler);
+  },
+  onFloatProduct: (cb) => {
+    const handler = (_event, product) => cb(product);
+    ipcRenderer.on('float:product', handler);
+    return () => ipcRenderer.removeListener('float:product', handler);
   },
 };
 

@@ -10,7 +10,8 @@ function ok(data) { return { success: true, data }; }
 function fail(message) { return { success: false, error: String(message) }; }
 
 function tokenRefreshResponse(result) {
-    return result?.ok ? ok(result) : fail(result?.error || "Token refresh failed");
+    if (result?.ok || result?.reauthRequired) return ok(result);
+    return fail(result?.error || "Token refresh failed");
 }
 
 function reauthorizationRequiredMessage(operation) {
@@ -197,16 +198,23 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         if (typeof services.showMainWindow === "function") services.showMainWindow();
         return ok(true);
     });
-    handle("float:show", () => {
+    handle("float:show", (event, product) => {
         if (!services.floatWindow) {
-            return ok({ exists: false, visible: false, alwaysOnTop: false });
+            return ok({ exists: false, visible: false, alwaysOnTop: false, product: product === "cursor" ? "cursor" : "codex" });
         }
-        services.floatWindow.show();
+        services.floatWindow.show(product);
         return ok(services.floatWindow.inspect());
     });
     handle("float:hide", () => {
         services.floatWindow?.hide();
         return ok(true);
+    });
+    handle("float:setProduct", (event, product) => {
+        if (!services.floatWindow) {
+            return ok({ visible: false, alwaysOnTop: false, product: product === "cursor" ? "cursor" : "codex" });
+        }
+        services.floatWindow.setProduct(product);
+        return ok(services.floatWindow.getState());
     });
     handle("float:setAlwaysOnTop", (event, value) => {
         services.floatWindow?.setAlwaysOnTop(!!value);
@@ -215,12 +223,72 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     handle("float:getState", () => ok(services.floatWindow?.getState() || {
         visible: false,
         alwaysOnTop: false,
+        product: "codex",
     }));
     handle("float:setHeight", (event, height) => {
         services.floatWindow?.setHeight(height);
         return ok(true);
     });
     handle("storage:diagnostics", () => ok(eng.getStorageDiagnostics()));
+
+    function publicCursorQuota(quota) {
+        if (!quota) return null;
+        const { raw_data, ...safeQuota } = quota;
+        return safeQuota;
+    }
+
+    function publicCursorAccount(account) {
+        if (!account) return null;
+        const accessToken = account.tokens?.access_token || null;
+        const expiryDate = accessToken ? eng.jwtExp(accessToken) : null;
+        const issuedAt = accessToken ? (eng.jwtPayload(accessToken)?.iat ?? null) : null;
+        return {
+            id: account.id,
+            platform: "cursor",
+            email: account.email,
+            plan_type: account.plan_type,
+            auth_id: account.auth_id || null,
+            subscription_status: account.subscription_status || null,
+            auth_mode: account.auth_mode,
+            token_source_mode: account.token_source_mode,
+            token_generation: account.token_generation,
+            token_updated_at: account.token_updated_at,
+            created_at: account.created_at,
+            last_used: account.last_used,
+            usage_updated_at: account.usage_updated_at,
+            requires_reauth: !!account.requires_reauth,
+            reauth_reason: account.reauth_reason || null,
+            banned: false,
+            probe: account.probe ? {
+                status: account.probe.status || null,
+                error_code: account.probe.error_code || null,
+                http_status: account.probe.http_status || null,
+                checked_at: account.probe.checked_at || null,
+            } : null,
+            quota: publicCursorQuota(account.quota),
+            quota_error: account.quota_error ? {
+                code: account.quota_error.code || null,
+                message: account.quota_error.message || String(account.quota_error),
+                timestamp: account.quota_error.timestamp || null,
+            } : null,
+            token_status: {
+                accessAvailable: !!accessToken,
+                refreshAvailable: !!account.tokens?.refresh_token,
+                expired: accessToken ? eng.isTokenExpired(accessToken) : true,
+                expiryDate,
+                issuedAt: typeof issuedAt === "number" ? issuedAt : null,
+                timeLeft: expiryDate ? expiryDate - eng.ts() : null,
+            },
+        };
+    }
+
+    async function withFreshCursorAccount(id, task) {
+        return eng.withAccountLocks(["__cursor_switch__", id], async () => {
+            const account = eng.loadCursorAcct(id);
+            if (!account) return fail("Account does not exist");
+            return task(account);
+        });
+    }
 
     handle("codex:status", async () => {
         try {
@@ -229,6 +297,130 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                 : Promise.resolve(eng.getCodexInstallationStatus());
             return ok(await detect);
         }
+        catch (error) { return fail(error.message); }
+    });
+
+    handle("cursor:status", async () => {
+        try {
+            const detect = typeof eng.getCursorInstallationStatusAsync === "function"
+                ? eng.getCursorInstallationStatusAsync()
+                : Promise.resolve(eng.getCursorInstallationStatus());
+            return ok(await detect);
+        }
+        catch (error) { return fail(error.message); }
+    });
+    handle("cursor:list", async () => {
+        await eng.syncCurrentCursorFromOfficial();
+        return ok(eng.listCursorAccts().map((account) => publicCursorAccount(account)));
+    });
+    handle("cursor:current", async () => {
+        await eng.syncCurrentCursorFromOfficial();
+        return ok(publicCursorAccount(eng.currentCursorAcct()));
+    });
+    handle("cursor:importLocal", async () => {
+        return eng.withAccountLock("__cursor_switch__", async () => {
+            const result = await eng.importLocalCursorAccount();
+            return ok({
+                found: !!result.found,
+                account: publicCursorAccount(result.account),
+                mismatch: !!result.mismatch,
+                stalePossible: !!result.stalePossible,
+            });
+        });
+    });
+    handle("cursor:add", async () => {
+        const result = await eng.cursorLoginFlow();
+        return ok({
+            account: publicCursorAccount(result.account),
+            mismatch: !!result.mismatch,
+            targetAccountId: result.targetAccountId || null,
+        });
+    });
+    handle("cursor:reauthorize", async (event, id) => {
+        const target = eng.loadCursorAcct(id);
+        if (!target) return fail("Account does not exist");
+        const result = await eng.cursorLoginFlow({ targetAccountId: target.id });
+        return ok({
+            account: publicCursorAccount(result.account),
+            mismatch: !!result.mismatch,
+            targetAccountId: target.id,
+        });
+    });
+    handle("cursor:oauthStatus", () => ok(eng.getCursorOAuthStatus()));
+    handle("cursor:oauthCancel", () => ok(eng.cancelCursorOAuth()));
+    handle("cursor:delete", async (event, id) => {
+        return withFreshCursorAccount(id, async (account) => {
+            return ok(eng.deleteCursorAcct(account.id, { allowCurrent: false }));
+        });
+    });
+    handle("cursor:switch", async (event, id) => {
+        const target = eng.loadCursorAcct(id);
+        if (!target) return fail("Account does not exist");
+        const currentId = eng.currentCursorAcct()?.id;
+        const lockIds = ["__cursor_switch__", target.id];
+        if (currentId && currentId !== target.id) lockIds.push(currentId);
+        return eng.withAccountLocks(lockIds, async () => {
+            const account = eng.loadCursorAcct(target.id);
+            if (!account) return fail("Account does not exist");
+            const result = await eng.doCursorSwitch(account);
+            return ok({
+                ...result,
+                account: publicCursorAccount(result.account),
+            });
+        });
+    });
+    handle("cursor:refreshQuota", async (event, id, force = true) => {
+        return withFreshCursorAccount(id, async (account) => {
+            const quota = await eng.refreshCursorQuota(account, { force: force !== false });
+            return ok(publicCursorQuota(quota));
+        });
+    });
+    handle("cursor:refreshAllQuotas", async () => {
+        const results = [];
+        for (const listed of eng.listCursorAccts()) {
+            try {
+                await eng.withAccountLocks(["__cursor_switch__", listed.id], async () => {
+                    const account = eng.loadCursorAcct(listed.id);
+                    if (!account) return;
+                    const quota = await eng.refreshCursorQuota(account, { force: true });
+                    const fresh = eng.loadCursorAcct(account.id) || account;
+                    if (fresh.requires_reauth || fresh.quota_error?.code === "reauthorization_required") {
+                        results.push({
+                            id: account.id,
+                            email: account.email,
+                            skipped: true,
+                            reason: "reauthorization_required",
+                        });
+                    } else if (fresh.quota_error) {
+                        results.push({
+                            id: account.id,
+                            email: account.email,
+                            error: fresh.quota_error.message,
+                            reason: fresh.quota_error.code,
+                        });
+                    } else {
+                        results.push({ id: account.id, email: account.email, quota: publicCursorQuota(quota) });
+                    }
+                });
+            } catch (error) {
+                results.push({
+                    id: listed.id,
+                    email: listed.email,
+                    error: error.message,
+                    reason: error.code || undefined,
+                });
+            }
+        }
+        return ok(results);
+    });
+    handle("cursor:refreshToken", async (event, id) => {
+        return withFreshCursorAccount(id, async (account) => {
+            const result = await eng.refreshCursorToken(account, { force: true });
+            return tokenRefreshResponse(result);
+        });
+    });
+    handle("cursor:refreshAllTokens", async (event, force) => {
+        try { return ok(await eng.refreshAllCursorTokens(!!force)); }
         catch (error) { return fail(error.message); }
     });
 
@@ -247,8 +439,8 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             // do not keep the first dashboard paint waiting on chatgpt.com.
             const index = eng.loadIdx();
             const inspectPromise = index.current_account_id
-                ? eng.withAccountLock(index.current_account_id, async () => eng.inspectAuthState())
-                : Promise.resolve(eng.inspectAuthState());
+                ? eng.withAccountLock(index.current_account_id, async () => eng.inspectAuthState({ migrateProjection: false }))
+                : Promise.resolve(eng.inspectAuthState({ migrateProjection: false }));
             inspectPromise.catch(() => {});
             const state = await Promise.race([
                 inspectPromise,

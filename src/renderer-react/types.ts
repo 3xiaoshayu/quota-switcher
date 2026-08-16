@@ -1,8 +1,11 @@
+export type ProductKind = 'codex' | 'cursor';
+
 export interface AccountQuota {
   id: string;
   name: string;
   email: string;
   status: 'ACTIVE' | 'WARNING' | 'EXPIRED' | 'LOW_QUOTA' | 'READY' | 'SUSPENDED' | 'SYNC_FAILED' | 'BANNED' | 'LIMITED';
+  quotaKind?: ProductKind;
   fiveHourQuotaRemaining: number | null;
   fiveHourQuotaTotal: number;
   weeklyQuotaRemaining: number | null;
@@ -10,8 +13,11 @@ export interface AccountQuota {
   fiveHourQuotaPresent?: boolean;
   weeklyQuotaPresent?: boolean;
   weeklyBlocksFiveHour?: boolean;
+  cursorPlanRemaining?: number | null;
+  cursorAutoRemaining?: number | null;
+  cursorApiRemaining?: number | null;
   priority: 'High' | 'Normal' | 'Low' | 'Ultra';
-  plan: 'Plus' | 'Pro' | 'Go' | 'Standard' | 'Enterprise';
+  plan: 'Plus' | 'Pro' | 'Go' | 'Standard' | 'Enterprise' | 'Team';
   tokenValidity: string;
   tokenValidityPct?: number | null;
   resetInFiveHour: string;
@@ -75,6 +81,8 @@ export interface SystemSettings {
   fiveHourThreshold: number;
   weeklyThreshold: number;
   clientDetected: boolean;
+  cursorDetected?: boolean;
+  cursorHasLocalLogin?: boolean;
   updateChannel: 'Beta Channel' | 'Stable Channel' | 'Developer Channel';
   version: string;
   latestStatus: string;
@@ -115,6 +123,15 @@ export interface DesktopAppInfo {
 export interface DesktopCodexStatus {
   installed?: boolean;
   appId?: string;
+  source?: string;
+  message?: string;
+}
+
+export interface DesktopCursorStatus {
+  installed?: boolean;
+  exePath?: string | null;
+  vscdbPath?: string | null;
+  vscdbPresent?: boolean;
   source?: string;
   message?: string;
 }

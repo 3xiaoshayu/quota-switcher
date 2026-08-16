@@ -91,7 +91,7 @@ export default function Header({
               <button
                 onClick={() => void desktopApi.toggleMaximizeWindow()}
                 className="p-2 hover:bg-fill-2 rounded-lg text-label-2 hover:text-label transition-colors cursor-pointer"
-                title="最大化 / 还原"
+                title="最大化或还原"
                 id="window-btn-maximize"
               >
                 <Square className="w-3.5 h-3.5" />

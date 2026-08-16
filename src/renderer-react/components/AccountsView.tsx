@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  Award, 
   Plus, 
   Search, 
   User,
@@ -16,9 +15,13 @@ import {
   RefreshCw,
   MoreHorizontal
 } from 'lucide-react';
-import { AccountQuota, DesktopAuthState, DesktopOAuthStatus } from '../types';
-import { avatarGradient, needsHandling, planLabel, quotaBarColor, quotaSummaryPercent, quotaWindowSummary, STATUS_DOT, STATUS_TEXT, canRefreshQuota, canSwitchAccount } from '../api/desktop';
-import { toUserMessage } from '../api/user-messages';
+import { AccountQuota, DesktopAuthState, DesktopOAuthStatus, ProductKind } from '../types';
+import { avatarGradient, needsHandling, planLabel, quotaBarColor, quotaBarsForAccount, quotaSummaryPercent, quotaWindowSummary, canRefreshQuota, canSwitchAccount, cursorEmptyQuotaText, isBannedStatus, isCursorAccount, isRedundantQuotaNotice, statusDotForAccount, statusTextForAccount } from '../api/desktop';
+import { toCursorUserMessage, toUserMessage } from '../api/user-messages';
+
+function formMessage(kind: ProductKind | undefined, raw: unknown) {
+  return kind === 'cursor' ? toCursorUserMessage(raw) : toUserMessage(raw);
+}
 
 interface AccountsProps {
   accounts: AccountQuota[];
@@ -30,8 +33,11 @@ interface AccountsProps {
   onReauthorizeAccount?: (id: string) => void | Promise<void>;
   onCancelOAuth?: () => void | Promise<void>;
   onCompleteOAuthManually?: (callbackUrl: string) => void | Promise<void>;
+  onImportLocal?: () => void | Promise<void>;
+  product?: ProductKind;
   oauthMode?: boolean;
   oauthStatus?: DesktopOAuthStatus | null;
+  actionsLocked?: boolean;
   authState?: DesktopAuthState | null;
   onOpenModal?: () => void;
   filterTab?: 'all' | 'current' | 'warning';
@@ -48,8 +54,11 @@ export default function AccountsView({
   onReauthorizeAccount,
   onCancelOAuth,
   onCompleteOAuthManually,
+  onImportLocal,
+  product = 'codex',
   oauthMode = false,
   oauthStatus = null,
+  actionsLocked = false,
   authState = null,
   onOpenModal,
   filterTab: filterTabProp,
@@ -80,6 +89,14 @@ export default function AccountsView({
   const [newPlan, setNewPlan] = useState<AccountQuota['plan']>('Plus');
   const [newPriority, setNewPriority] = useState<AccountQuota['priority']>('Normal');
   const [formError, setFormError] = useState('');
+  const oauthBusy = !!oauthStatus?.pending || actionsLocked;
+
+  useEffect(() => {
+    setRefreshingIds(new Set());
+    setSwitchingId(null);
+    setDeletingId(null);
+    setMoreMenuId(null);
+  }, [product]);
 
   useEffect(() => {
     if (!oauthMode) return;
@@ -95,7 +112,7 @@ export default function AccountsView({
     setIsRecoveredOAuth(false);
     setIsAdding(false);
     if (oauthStatus?.status === 'error' || oauthStatus?.status === 'expired') {
-      setFormError(toUserMessage(oauthStatus.message || '授权未完成'));
+      setFormError(formMessage(product, oauthStatus.message || '授权未完成'));
       setShowAddModal(true);
       return;
     }
@@ -123,7 +140,7 @@ export default function AccountsView({
     try {
       await onCancelOAuth?.();
     } catch (error) {
-      setFormError(toUserMessage(error instanceof Error ? error.message : String(error)));
+      setFormError(formMessage(product, error instanceof Error ? error.message : String(error)));
     } finally {
       setIsCancellingOAuth(false);
     }
@@ -164,7 +181,7 @@ export default function AccountsView({
   };
 
   const handleSwitchAccount = async (id: string) => {
-    if (switchingId || oauthStatus?.pending) return;
+    if (switchingId || oauthBusy) return;
     setSwitchingId(id);
     try {
       await onSwitchCurrentAccount(id);
@@ -190,9 +207,13 @@ export default function AccountsView({
   // Filter accounts
   const filteredAccounts = accounts.filter(acc => {
     // Search filter
-    const matchesSearch = acc.email.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          acc.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          acc.plan.toLowerCase().includes(searchTerm.toLowerCase());
+    const query = searchTerm.toLowerCase().trim();
+    const planText = planLabel(acc.plan).toLowerCase();
+    const matchesSearch = !query
+      || acc.email.toLowerCase().includes(query)
+      || acc.name.toLowerCase().includes(query)
+      || acc.plan.toLowerCase().includes(query)
+      || planText.includes(query);
     
     if (!matchesSearch) return false;
 
@@ -204,11 +225,11 @@ export default function AccountsView({
   });
 
   const startReauthorize = (id: string) => {
-    if (!onReauthorizeAccount || oauthStatus?.pending) return;
+    if (!onReauthorizeAccount || oauthBusy) return;
     setFormError('');
     setReauthorizeId(id);
     void Promise.resolve(onReauthorizeAccount(id)).catch((error) => {
-      setFormError(toUserMessage(error instanceof Error ? error.message : String(error)));
+      setFormError(formMessage(product, error instanceof Error ? error.message : String(error)));
       setShowAddModal(true);
       setIsAdding(false);
     });
@@ -217,19 +238,23 @@ export default function AccountsView({
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!oauthMode && (!newEmail || !newName)) {
-      setFormError('请完整填写所有必填字段');
+      setFormError('请填写邮箱和名称');
       return;
     }
     if (!oauthMode && !newEmail.includes('@')) {
-      setFormError('请输入有效的电子邮件地址');
+      setFormError('请输入有效邮箱');
+      return;
+    }
+    if (oauthMode && actionsLocked && !oauthStatus?.pending) {
+      setFormError('已有授权正在进行，请先完成或取消');
       return;
     }
 
     setIsAdding(true);
     try {
       const formAccount: Omit<AccountQuota, 'id'> = {
-        name: newName || 'OAuth account',
-        email: newEmail || 'oauth@pending.local',
+        name: newName || '待授权账号',
+        email: newEmail || 'pending@local',
         status: 'ACTIVE',
         fiveHourQuotaRemaining: 100,
         fiveHourQuotaTotal: 100,
@@ -237,14 +262,14 @@ export default function AccountsView({
         weeklyQuotaTotal: 100,
         priority: newPriority,
         plan: newPlan,
-        tokenValidity: 'Pending OAuth',
-        resetInFiveHour: 'Waiting',
-        resetInWeekly: 'Waiting',
+        tokenValidity: '等待授权',
+        resetInFiveHour: '等待中',
+        resetInWeekly: '等待中',
       };
       if (reauthorizeId && onReauthorizeAccount) await onReauthorizeAccount(reauthorizeId);
       else await onAddAccount(formAccount);
 
-      if (!oauthMode) onAddLog(`已添加账号：${newEmail} (${newPlan})`, 'success');
+      if (!oauthMode) onAddLog(`已添加账号：${newEmail}（${planLabel(newPlan)}）`, 'success');
       setNewEmail('');
       setNewName('');
       setNewPlan('Plus');
@@ -254,14 +279,19 @@ export default function AccountsView({
       setManualCallbackUrl('');
       setShowAddModal(false);
     } catch (error) {
-      setFormError(toUserMessage(error instanceof Error ? error.message : String(error)));
+      setFormError(formMessage(product, error instanceof Error ? error.message : String(error)));
     } finally {
       setIsAdding(false);
     }
   };
 
   const currentAccount = accounts.find(account => account.isCurrent);
-  const currentPlanText = currentAccount ? planLabel(currentAccount.plan) : '暂无';
+  const productName = product === 'cursor' ? 'Cursor' : 'Codex';
+  const accountsMeta = accounts.length === 0
+    ? `还没有 ${productName} 账号`
+    : currentAccount
+      ? `${accounts.length} 个 ${productName} 账号 · 当前 ${planLabel(currentAccount.plan)}`
+      : `${accounts.length} 个 ${productName} 账号 · 尚未指定当前`;
   const handlingCount = accounts.filter(needsHandling).length;
 
   return (
@@ -273,7 +303,7 @@ export default function AccountsView({
             账号管理
           </h2>
           <p className="mt-1.5 text-[13px] text-label-2 font-sans" id="accounts-meta-labels">
-            {accounts.length} 个账号 · {handlingCount > 0 ? `${handlingCount} 个需要处理` : `当前套餐 ${currentPlanText}`}
+            {accountsMeta}
           </p>
         </div>
 
@@ -281,14 +311,17 @@ export default function AccountsView({
         <div className="flex items-center gap-3 shrink-0" id="accounts-actions-group">
           <motion.button
             onClick={() => {
+              if (actionsLocked && !oauthStatus?.pending) return;
               setReauthorizeId(null);
               setFormError('');
               setShowAddModal(true);
             }}
+            disabled={actionsLocked && !oauthStatus?.pending}
+            title={actionsLocked && !oauthStatus?.pending ? '已有授权正在进行，请先完成或取消' : undefined}
             whileHover={{ scale: 1.04 }}
             whileTap={{ scale: 0.96 }}
             transition={{ type: 'spring', stiffness: 400, damping: 20 }}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-[10px] bg-accent/15 hover:bg-accent/25 border border-accent/20 text-accent text-[13px] font-medium transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 px-4 py-2 rounded-[10px] bg-accent/15 hover:bg-accent/25 border border-accent/20 text-accent text-[13px] font-medium transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
             id="btn-add-account-modal-trigger"
           >
             <Plus className="w-4 h-4" />
@@ -311,7 +344,7 @@ export default function AccountsView({
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="搜索邮箱或计划..."
+            placeholder="搜索邮箱或套餐..."
             className="w-full pl-10 pr-4 py-2.5 bg-fill border border-sep rounded-xl text-label placeholder-label-3 focus:outline-none focus:ring-2 focus:ring-accent/60 transition-all text-xs font-sans font-medium"
             id="accounts-search-input"
           />
@@ -367,7 +400,7 @@ export default function AccountsView({
             )}
             需要处理
             {handlingCount > 0 && (
-              <span className="px-1.5 py-0.5 bg-danger text-white rounded-full text-[9px] font-bold">
+              <span className="text-danger tabular-nums" id="filter-handling-count">
                 {handlingCount}
               </span>
             )}
@@ -383,7 +416,9 @@ export default function AccountsView({
           </div>
           <h3 className="text-sm font-bold text-white">{accounts.length === 0 ? '还没有账号' : '没有匹配的账号'}</h3>
           <p className="mt-2 max-w-xs text-xs leading-5 text-label-2">
-            {accounts.length === 0 ? '通过 OAuth 授权添加你的第一个 Codex 账号。' : '换个关键词，或切换筛选条件再试试。'}
+            {accounts.length === 0
+              ? `导入本机 ${product === 'cursor' ? 'Cursor' : 'Codex'}，或打开网页授权添加第一个账号。`
+              : '换个关键词，或切换筛选条件再试试。'}
           </p>
           {accounts.length === 0 && (
             <button
@@ -407,23 +442,25 @@ export default function AccountsView({
         <AnimatePresence initial={false}>
         {filteredAccounts.map((account) => {
           const isCardRefreshing = refreshingIds.has(account.id);
+          const cursorAccount = isCursorAccount(account) || product === 'cursor';
+          const quotaBars = quotaBarsForAccount(account);
           const fiveHourSummary = quotaWindowSummary('fiveHour', account);
           const weeklySummary = quotaWindowSummary('weekly', account);
           const fiveHourPct = quotaSummaryPercent(fiveHourSummary.text);
           const weeklyPct = quotaSummaryPercent(weeklySummary.text);
           const quotaNotice = account.warning
-            || (account.weeklyBlocksFiveHour ? '周额度已用尽，5 小时额度暂不可用。' : null)
-            || ((account.status === 'WARNING' || account.status === 'EXPIRED' || account.status === 'LOW_QUOTA')
-              ? '额度状态需要关注。'
-              : null);
+            || (!cursorAccount && account.weeklyBlocksFiveHour ? '周额度已用尽，5 小时额度暂不可用。' : null);
           const switchBlocked = !canSwitchAccount(account);
           const refreshBlocked = !canRefreshQuota(account);
           const needsReauth = account.status === 'SUSPENDED' && !!onReauthorizeAccount;
-          const officialAligned = !oauthMode || (
-            authState?.status === 'aligned' &&
-            authState.currentAccountId === account.id
-          );
-
+          const officialAligned = cursorAccount
+            ? !!account.isCurrent
+            : !oauthMode || (
+              authState?.status === 'aligned' &&
+              authState.currentAccountId === account.id
+            );
+          const switchTitle = cursorAccount ? '将此账号写入官方 Cursor 并登录' : '将此账号写入官方 Codex 并登录';
+          const currentActionLabel = cursorAccount ? '重新登录 Cursor' : '重新登录 Codex';
           const color5h = quotaBarColor(fiveHourPct);
           const colorWeekly = quotaBarColor(weeklyPct);
 
@@ -445,7 +482,7 @@ export default function AccountsView({
               <div className="flex items-start justify-between mb-5" id={`account-m-header-${account.id}`}>
                 <div className="flex items-center gap-3.5" id={`account-m-user-${account.id}`}>
                   <div className={`w-11 h-11 rounded-full flex items-center justify-center ${avatarGradient(account.id)} font-semibold text-base`}>
-                    {(account.name.charAt(0) || '?').toUpperCase()}
+                    {(account.email.charAt(0) || account.name.charAt(0) || '?').toUpperCase()}
                   </div>
 
                   <div className="flex flex-col text-left select-all" id={`account-m-titles-${account.id}`}>
@@ -461,8 +498,8 @@ export default function AccountsView({
                     </div>
                     <div className="flex items-center gap-1.5 mt-1" id={`account-m-badges-${account.id}`}>
                       <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-label-2">
-                        <span className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT[account.status] || 'bg-fill-3'}`} />
-                        {STATUS_TEXT[account.status] || account.status}
+                        <span className={`w-1.5 h-1.5 rounded-full ${statusDotForAccount(account)}`} />
+                        {statusTextForAccount(account)}
                       </span>
                       <span className="text-[11px] text-label-3">{planLabel(account.plan)}</span>
                     </div>
@@ -470,9 +507,9 @@ export default function AccountsView({
                 </div>
               </div>
 
-              {quotaNotice && (
+              {quotaNotice && !isRedundantQuotaNotice(quotaNotice) && (
                 <p
-                  className={`mb-5 text-[12px] leading-5 ${account.status === 'BANNED' ? 'text-danger' : 'text-warn'}`}
+                  className={`mb-5 text-[12px] leading-5 ${isBannedStatus(account) ? 'text-danger' : 'text-warn'}`}
                   id={`warning-banner-${account.id}`}
                 >
                   {quotaNotice}
@@ -484,52 +521,53 @@ export default function AccountsView({
                 {/* TOKEN VALIDITY Row */}
                 <div className="space-y-1.5" id={`token-validity-row-${account.id}`}>
                   <div className="flex items-center justify-between text-xs font-semibold">
-                    <span className="text-[12px] font-medium text-label-3">Token 有效期</span>
-                    <span className="text-label-2 font-semibold">{account.tokenValidity}</span>
+                    <span className="text-[12px] font-medium text-label-3">令牌有效期</span>
+                    <span className="text-label-2 font-semibold">{account.tokenValidity.replace(/^剩余\s*/, '')}</span>
                   </div>
-                  <div className="h-[3px] bg-[#3a3a3c] rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-[#8e8e93]"
-                      style={{ width: `${Math.round(account.tokenValidityPct ?? 0)}%` }}
-                    />
+                  <div className="h-1 bg-[#3a3a3c] rounded-full overflow-hidden" id={`token-validity-track-${account.id}`}>
+                    {typeof account.tokenValidityPct === 'number' ? (
+                      <div
+                        className="h-full rounded-full bg-[rgba(235,235,245,0.55)]"
+                        id={`token-validity-fill-${account.id}`}
+                        style={{ width: `${Math.round(account.tokenValidityPct)}%` }}
+                      />
+                    ) : null}
                   </div>
                 </div>
 
-                {/* Sub Quotas Progress Boxes Grid */}
-                <div className="grid grid-cols-2 gap-4 select-none" id={`quotas-boxes-grid-${account.id}`}>
-                  {/* 5H QUOTA (kept visible even while upstream omits the window) */}
-                  <div className="bg-fill rounded-xl p-4 text-left" id={`quota-box-5h-${account.id}`}>
-                    <span className="text-[12px] font-medium text-label-3">5 小时额度</span>
-                    <span className={`block mt-1.5 tracking-tight ${
-                      fiveHourPct === null ? 'text-[13px] leading-5 font-medium text-label-3' : 'text-[22px] font-semibold tabular-nums text-label'
-                    }`}>{fiveHourPct !== null ? `${fiveHourPct}%` : fiveHourSummary.text}</span>
-                    {fiveHourPct !== null ? (
-                    <div className="h-1 bg-[#3a3a3c] rounded-full overflow-hidden mt-3">
-                      <div className={`h-full rounded-full ${color5h}`} style={{ width: `${fiveHourPct}%` }} />
-                    </div>
-                    ) : null}
-                    <span className="text-[10px] text-label-3 mt-2 block font-medium">
-                      {fiveHourPct !== null ? `重置: ${account.resetInFiveHour}` : ''}
-                    </span>
-                  </div>
-
-                  {/* WEEKLY QUOTA */}
-                  <div className="bg-fill rounded-xl p-4 text-left" id={`quota-box-weekly-${account.id}`}>
-                    <span className="text-[12px] font-medium text-label-3">周额度</span>
-                    <span className={`block mt-1.5 tracking-tight ${
-                      weeklyPct === null ? 'text-[13px] leading-5 font-medium text-label-3' : 'text-[22px] font-semibold tabular-nums text-label'
-                    }`}>
-                      {weeklyPct !== null ? `${weeklyPct}%` : weeklySummary.text}
-                    </span>
-                    {weeklyPct !== null ? (
-                    <div className="h-1 bg-[#3a3a3c] rounded-full overflow-hidden mt-3">
-                      <div className={`h-full rounded-full ${colorWeekly}`} style={{ width: `${weeklyPct}%` }} />
-                    </div>
-                    ) : null}
-                    <span className="text-[10px] text-label-3 mt-2 block font-medium">
-                      {weeklyPct !== null ? `重置: ${account.resetInWeekly}` : ''}
-                    </span>
-                  </div>
+                <div className="grid gap-4 select-none grid-cols-2" id={`quotas-boxes-grid-${account.id}`}>
+                  {quotaBars.map((bar, index) => {
+                    const remaining = bar.remaining;
+                    const color = quotaBarColor(remaining);
+                    const wide = quotaBars.length > 2 && index === 0;
+                    const summaryText = bar.key === 'fiveHour'
+                      ? fiveHourSummary.text
+                      : bar.key === 'weekly'
+                        ? weeklySummary.text
+                        : (remaining === null
+                          ? cursorEmptyQuotaText(account)
+                          : remaining === 0 ? '已用尽' : `${remaining}%`);
+                    const compact = remaining === null || remaining === 0 || !/^\d+%$/.test(summaryText);
+                    return (
+                      <div className={`bg-fill rounded-xl p-4 text-left ${wide ? 'col-span-2' : ''}`} id={`quota-box-${bar.key}-${account.id}`} key={bar.key}>
+                        <span className="text-[12px] font-medium text-label-3">{bar.label}</span>
+                        <span className={`block mt-1.5 tracking-tight ${
+                          compact ? 'text-[13px] leading-5 font-medium text-label-3' : 'text-[22px] font-semibold tabular-nums text-label'
+                        }`}>{summaryText}</span>
+                        {remaining !== null ? (
+                        <div className="h-1 bg-[#3a3a3c] rounded-full overflow-hidden mt-3">
+                          <div className={`h-full rounded-full ${color}`} style={{ width: `${remaining}%` }} />
+                        </div>
+                        ) : null}
+                        {!cursorAccount && bar.key === 'fiveHour' && fiveHourPct !== null ? (
+                          <span className="text-[10px] text-label-3 mt-2 block font-medium">重置 {account.resetInFiveHour}</span>
+                        ) : null}
+                        {!cursorAccount && bar.key === 'weekly' && weeklyPct !== null ? (
+                          <span className="text-[10px] text-label-3 mt-2 block font-medium">重置 {account.resetInWeekly}</span>
+                        ) : null}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -538,7 +576,7 @@ export default function AccountsView({
                 {needsReauth ? (
                   <motion.button
                     onClick={() => startReauthorize(account.id)}
-                    disabled={!!oauthStatus?.pending}
+                    disabled={oauthBusy}
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.95 }}
                     transition={{ type: 'spring', stiffness: 450, damping: 20 }}
@@ -550,15 +588,15 @@ export default function AccountsView({
                   </motion.button>
                 ) : (
                   <motion.button
-                    onClick={() => handleSingleRefresh(account.id, account.name)}
+                    onClick={() => handleSingleRefresh(account.id, account.email)}
                     disabled={isCardRefreshing || refreshBlocked}
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.95 }}
                     transition={{ type: 'spring', stiffness: 450, damping: 20 }}
                     className="flex-1 py-3 px-2 bg-fill hover:bg-fill-2 rounded-[10px] text-label-2 hover:text-label transition-all text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
                     title={refreshBlocked
-                      ? (account.status === 'BANNED' ? '账号已封号，无法刷新额度' : '该账号需要重新授权后才能刷新额度')
-                      : '刷新此账号'}
+                      ? (isBannedStatus(account) ? '账号已封号，无法刷新额度' : '该账号需要重新授权后才能刷新额度')
+                      : '刷新额度'}
                     id={`action-refresh-${account.id}`}
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${isCardRefreshing ? 'animate-spin text-accent' : ''}`} />
@@ -568,16 +606,16 @@ export default function AccountsView({
 
                 {needsReauth ? (
                   <motion.button
-                    onClick={() => handleSingleRefresh(account.id, account.name)}
+                    onClick={() => handleSingleRefresh(account.id, account.email)}
                     disabled={isCardRefreshing || refreshBlocked}
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.95 }}
                     transition={{ type: 'spring', stiffness: 450, damping: 20 }}
                     className="py-3 px-3 bg-fill hover:bg-fill-2 rounded-[10px] text-label-2 hover:text-label transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
                     title={refreshBlocked
-                      ? (account.status === 'BANNED' ? '账号已封号，无法刷新额度' : '该账号需要重新授权后才能刷新额度')
-                      : '刷新此账号'}
-                    id={`action-refresh-${account.id}`}
+                      ? (isBannedStatus(account) ? '账号已封号，无法刷新额度' : '该账号需要重新授权后才能刷新额度')
+                      : '刷新额度'}
+                    id={`action-reauth-refresh-${account.id}`}
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${isCardRefreshing ? 'animate-spin text-accent' : ''}`} />
                   </motion.button>
@@ -587,18 +625,18 @@ export default function AccountsView({
                       if (officialAligned) return
                       void handleSwitchAccount(account.id)
                     }}
-                    disabled={officialAligned || switchBlocked || switchingId !== null || deletingId === account.id || !!oauthStatus?.pending}
+                    disabled={officialAligned || switchBlocked || switchingId !== null || deletingId === account.id || oauthBusy}
                     aria-busy={switchingId === account.id}
                     title={
-                      oauthStatus?.pending
+                      oauthBusy
                         ? '已有授权正在进行，请先完成或取消'
-                        : account.status === 'BANNED'
+                        : isBannedStatus(account)
                         ? '账号已封号，无法切换'
                         : account.status === 'SUSPENDED'
                         ? '该账号需要重新授权后才能切换'
                         : officialAligned
                           ? '官方已是此账号'
-                          : '将此账号写入官方 Codex 并登录'
+                          : switchTitle
                     }
                     whileHover={officialAligned ? {} : { scale: 1.02 }}
                     whileTap={officialAligned ? {} : { scale: 0.95 }}
@@ -615,17 +653,17 @@ export default function AccountsView({
                       ? '登录中...'
                       : officialAligned
                         ? '当前'
-                        : '重新登录 Codex'}
+                        : currentActionLabel}
                   </motion.button>
                 ) : (
                   <motion.button
                     onClick={() => void handleSwitchAccount(account.id)}
-                    disabled={switchBlocked || switchingId !== null || deletingId === account.id || !!oauthStatus?.pending}
+                    disabled={switchBlocked || switchingId !== null || deletingId === account.id || oauthBusy}
                     aria-busy={switchingId === account.id}
                     title={
-                      oauthStatus?.pending
+                      oauthBusy
                         ? '已有授权正在进行，请先完成或取消'
-                        : account.status === 'BANNED'
+                        : isBannedStatus(account)
                           ? '账号已封号，无法切换'
                           : account.status === 'SUSPENDED'
                           ? '该账号需要重新授权后才能切换'
@@ -677,11 +715,11 @@ export default function AccountsView({
                               setMoreMenuId(null);
                               void handleSwitchAccount(account.id);
                             }}
-                            disabled={officialAligned || switchBlocked || switchingId !== null || deletingId === account.id || !!oauthStatus?.pending}
+                            disabled={officialAligned || switchBlocked || switchingId !== null || deletingId === account.id || oauthBusy}
                             title={
-                              oauthStatus?.pending
+                              oauthBusy
                                 ? '已有授权正在进行，请先完成或取消'
-                                : account.status === 'BANNED'
+                                : isBannedStatus(account)
                                   ? '账号已封号，无法切换'
                                   : '该账号需要重新授权后才能切换'
                             }
@@ -689,7 +727,7 @@ export default function AccountsView({
                             id={`account-menu-switch-${account.id}`}
                           >
                             {account.isCurrent ? <Star className="w-3.5 h-3.5" /> : <ArrowLeftRight className="w-3.5 h-3.5" />}
-                            {account.isCurrent ? (officialAligned ? '当前' : '重新登录 Codex') : '切换'}
+                            {account.isCurrent ? (officialAligned ? '当前' : currentActionLabel) : '切换'}
                           </button>
                         ) : null}
                         <button
@@ -760,11 +798,15 @@ export default function AccountsView({
                 {reauthorizeId ? '重新授权账号' : '添加账号'}
               </h3>
               <p className="text-xs text-label-2 mb-6 font-sans">
-                {oauthMode
-                  ? (reauthorizeId
-                    ? '将打开登录授权页面。请用这个账号登录，完成后会自动回来。'
-                    : '将打开登录授权页面，邮箱、套餐与凭证会在授权完成后自动读取。')
-                  : '为 Codex 账号管理器配置一个新的接入凭证和配额检测对象。'}
+                {reauthorizeId
+                  ? (product === 'cursor'
+                    ? '将打开 Cursor 登录页。请用这个账号登录，完成后会自动回来。'
+                    : '将打开网页授权。请用这个账号登录，完成后会自动回来。')
+                  : onImportLocal
+                    ? `可以先导入本机已登录的 ${product === 'cursor' ? 'Cursor' : 'Codex'}，也可以打开网页授权添加账号。`
+                    : oauthMode
+                      ? '将打开网页授权，邮箱、套餐与凭证会在授权完成后自动读取。'
+                      : '填写邮箱和展示名称后即可加入管理列表。'}
               </p>
 
               <form onSubmit={handleAddSubmit} className="space-y-5" id="add-account-form">
@@ -772,7 +814,7 @@ export default function AccountsView({
                   <>
                     <div className="space-y-2">
                       <label className="text-[13px] font-medium text-label-2 block ml-1">
-                        电子邮箱
+                        邮箱
                       </label>
                       <div className="relative">
                         <span className="absolute inset-y-0 left-0 flex items-center pl-4 text-label-3">
@@ -782,7 +824,7 @@ export default function AccountsView({
                           type="text"
                           value={newEmail}
                           onChange={(e) => setNewEmail(e.target.value)}
-                          placeholder="user@example.com"
+                          placeholder="请输入邮箱"
                           className="w-full pl-11 pr-4 py-3 bg-fill border border-sep rounded-xl text-white placeholder-label-3 focus:outline-none focus:ring-2 focus:ring-accent/60 transition-all font-sans text-xs"
                           id="input-add-email"
                         />
@@ -801,49 +843,13 @@ export default function AccountsView({
                           type="text"
                           value={newName}
                           onChange={(e) => setNewName(e.target.value)}
-                          placeholder="My Operations Node"
+                          placeholder="展示名称"
                           className="w-full pl-11 pr-4 py-3 bg-fill border border-sep rounded-xl text-white placeholder-label-3 focus:outline-none focus:ring-2 focus:ring-accent/60 transition-all font-sans text-xs"
                           id="input-add-name"
                         />
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <label className="text-[13px] font-medium text-label-2 block ml-1">
-                          套餐
-                        </label>
-                        <select
-                          value={newPlan}
-                          onChange={(e) => setNewPlan(e.target.value as any)}
-                          className="w-full px-4 py-3 bg-fill rounded-[10px] text-label-2 focus:outline-none focus:ring-2 focus:ring-accent/60 transition-all text-xs"
-                          id="input-add-plan"
-                        >
-                          <option value="Plus">Plus</option>
-                          <option value="Pro">Pro</option>
-                          <option value="Go">Go</option>
-                          <option value="Standard">Standard</option>
-                          <option value="Enterprise">Enterprise</option>
-                        </select>
-                      </div>
-
-                      <div className="space-y-2">
-                        <label className="text-[13px] font-medium text-label-2 block ml-1">
-                          轮转优先级
-                        </label>
-                        <select
-                          value={newPriority}
-                          onChange={(e) => setNewPriority(e.target.value as any)}
-                          className="w-full px-4 py-3 bg-fill rounded-[10px] text-label-2 focus:outline-none focus:ring-2 focus:ring-accent/60 transition-all text-xs"
-                          id="input-add-priority"
-                        >
-                          <option value="Ultra">Ultra</option>
-                          <option value="High">High</option>
-                          <option value="Normal">Normal</option>
-                          <option value="Low">Low</option>
-                        </select>
-                      </div>
-                    </div>
                   </>
                 )}
 
@@ -853,7 +859,37 @@ export default function AccountsView({
                   </p>
                 )}
 
-                {isAdding && oauthMode && (
+                {oauthMode && !isAdding && !reauthorizeId && onImportLocal && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (oauthBusy) return;
+                      setFormError('');
+                      void Promise.resolve(onImportLocal())
+                        .then(() => {
+                          setShowAddModal(false);
+                        })
+                        .catch((error) => {
+                          setFormError(formMessage(product, error instanceof Error ? error.message : String(error)));
+                        });
+                    }}
+                    disabled={oauthBusy}
+                    className="w-full py-3 bg-fill hover:bg-fill-2 text-label rounded-xl text-xs font-semibold cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                    id="btn-import-local-account"
+                  >
+                    {`导入本机 ${product === 'cursor' ? 'Cursor' : 'Codex'}`}
+                  </button>
+                )}
+
+                {isAdding && oauthMode && product === 'cursor' && (
+                  <div className="space-y-3 rounded-xl border border-sep bg-fill p-4">
+                    <p className="text-xs text-label-2">
+                      请在浏览器完成 Cursor 登录。完成后会自动回来，不用粘贴回调地址。
+                    </p>
+                  </div>
+                )}
+
+                {isAdding && oauthMode && product !== 'cursor' && (
                   <div className="space-y-3 rounded-xl border border-sep bg-fill p-4">
                     <p className="text-xs text-label-2">
                       请在浏览器完成授权，完成后会自动回来。如果浏览器没有自动跳回，请粘贴完整的回调网址。
@@ -873,7 +909,7 @@ export default function AccountsView({
                           setFormError('');
                           setIsSubmittingCallback(true);
                           Promise.resolve(onCompleteOAuthManually(manualCallbackUrl))
-                            .catch(error => setFormError(toUserMessage(error instanceof Error ? error.message : String(error))))
+                            .catch(error => setFormError(formMessage(product, error instanceof Error ? error.message : String(error))))
                             .finally(() => setIsSubmittingCallback(false));
                         }}
                         disabled={!manualCallbackUrl || !onCompleteOAuthManually || isSubmittingCallback}
@@ -908,7 +944,7 @@ export default function AccountsView({
                     disabled={isAdding}
                     className="flex-1 py-3 bg-accent/12 hover:bg-accent/20 border border-accent/20 text-accent hover:text-accent-hi rounded-xl text-xs font-bold transition-all cursor-pointer"
                   >
-                    {isAdding ? '等待浏览器授权...' : oauthMode ? '打开登录授权' : '添加账号'}
+                    {isAdding ? '等待浏览器授权...' : oauthMode ? '打开网页授权' : '添加账号'}
                   </button>
                 </div>
               </form>

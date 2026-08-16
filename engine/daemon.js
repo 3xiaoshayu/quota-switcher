@@ -44,8 +44,8 @@ async function runDaemonWorker(options = {}) {
   // in-flight refresh of the same account.
   const preIndex = loadIdx();
   authState = preIndex.current_account_id
-    ? await withAccountLock(preIndex.current_account_id, async () => inspectAuthState())
-    : inspectAuthState();
+    ? await withAccountLock(preIndex.current_account_id, async () => inspectAuthState({ migrateProjection: false }))
+    : inspectAuthState({ migrateProjection: false });
   if (authState.requiresResolution) {
     return {
       startedAt,
@@ -146,13 +146,15 @@ async function runDaemonWorker(options = {}) {
 
       if (isCancelled()) return;
       const latestIndex = loadIdx();
-      const latestAuthState = inspectAuthState();
-      if (latestIndex.current_account_id === current.id && !latestAuthState.requiresResolution) {
+      const latestAuthState = inspectAuthState({ migrateProjection: false });
+      if (latestIndex.current_account_id === current.id && latestAuthState.status === "aligned") {
         try {
           if (isCancelled()) return;
-          const authValue = writeAuthJson(current);
+          const latest = loadAcct(current.id);
+          if (!latest) return;
+          const authValue = writeAuthJson(latest);
           if (isCancelled()) return;
-          writeProjection(current, authValue);
+          writeProjection(latest, authValue);
         } catch (error) {
           failures.push(failure("auth_projection", current, error));
         }
@@ -167,7 +169,10 @@ async function runDaemonWorker(options = {}) {
       autoSwitchResult = await autoSwitchTick(config, { isCancelled });
       if (isCancelled() || autoSwitchResult?.reason === "cancelled") return stopped();
       if (autoSwitchResult?.reason === "current_quota_refresh_failed") {
-        failures.push(failure("auto_switch", null, new Error(autoSwitchResult.error || autoSwitchResult.reason)));
+        const retrying = /waiting for retry|quota_retry_pending/i.test(String(autoSwitchResult.error || ""));
+        if (!retrying) {
+          failures.push(failure("auto_switch", null, new Error(autoSwitchResult.error || autoSwitchResult.reason)));
+        }
       }
     } catch (error) {
       failures.push(failure("auto_switch", null, error));

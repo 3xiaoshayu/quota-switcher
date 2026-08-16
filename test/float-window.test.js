@@ -229,13 +229,215 @@ test("float window shows immediately and again after hide", async () => {
   controller.destroy();
 });
 
+test("float window persists the current product", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "float-window-"));
+  const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
+  const sent = [];
+  class FakeWindow {
+    constructor(opts) {
+      this.bounds = { x: opts.x, y: opts.y, width: opts.width, height: opts.height };
+      this.destroyed = false;
+      this.visible = false;
+      this.title = opts.title;
+      this.url = "";
+      const win = this;
+      this.webContents = {
+        setWindowOpenHandler() {},
+        on() {},
+        once(event, cb) {
+          if (event === "did-finish-load") setImmediate(cb);
+        },
+        send(channel, payload) { sent.push([channel, payload]); },
+        getURL: () => win.url,
+        isLoadingMainFrame: () => !win.url,
+      };
+    }
+    isDestroyed() { return this.destroyed; }
+    getBounds() { return { ...this.bounds }; }
+    setBounds(next) { this.bounds = { ...this.bounds, ...next }; }
+    setSize() {}
+    setResizable() {}
+    setMinimumSize() {}
+    setMaximumSize() {}
+    setMenuBarVisibility() {}
+    setBackgroundColor() {}
+    setHasShadow() {}
+    setAlwaysOnTop() {}
+    setSkipTaskbar() {}
+    setTitle(title) { this.title = title; }
+    isVisible() { return this.visible; }
+    isMinimized() { return false; }
+    restore() {}
+    moveTop() {}
+    show() { this.visible = true; }
+    hide() { this.visible = false; }
+    focus() {}
+    once(event, cb) {
+      if (event === "ready-to-show") setImmediate(cb);
+    }
+    loadFile() {
+      this.url = "file://index.html#float";
+      return Promise.resolve();
+    }
+    on() {}
+    removeAllListeners() {}
+    destroy() { this.destroyed = true; }
+  }
+
+  const controller = createFloatWindowController({
+    app: { getPath: () => dir },
+    BrowserWindow: FakeWindow,
+    screen: {
+      getDisplayNearestPoint: () => ({ workArea }),
+      getPrimaryDisplay: () => ({ workArea }),
+    },
+    trustWebContents() {},
+    rendererHtml: "index.html",
+    preloadPath: "preload.js",
+    iconPath: "icon.ico",
+    isQuitting: () => true,
+    writeJsonAtomic(file, data) {
+      fs.writeFileSync(file, JSON.stringify(data));
+    },
+  });
+
+  controller.show("cursor");
+  assert.equal(controller.getState().product, "cursor");
+  assert.equal(loadFloatState(dir).product, "cursor");
+  assert.ok(sent.some((item) => item[0] === "float:product" && item[1] === "cursor"));
+  controller.destroy();
+});
+
+test("setProduct updates the float product without showing the window", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "float-window-"));
+  const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
+  const sent = [];
+  class FakeWindow {
+    constructor(opts) {
+      this.bounds = { x: opts.x, y: opts.y, width: opts.width, height: opts.height };
+      this.destroyed = false;
+      this.visible = false;
+      this.title = opts.title;
+      this.url = "";
+      const win = this;
+      this.webContents = {
+        setWindowOpenHandler() {},
+        on() {},
+        once(event, cb) {
+          if (event === "did-finish-load") setImmediate(cb);
+        },
+        send(channel, payload) { sent.push([channel, payload]); },
+        getURL: () => win.url,
+        isLoadingMainFrame: () => !win.url,
+      };
+    }
+    isDestroyed() { return this.destroyed; }
+    getBounds() { return { ...this.bounds }; }
+    setBounds(next) { this.bounds = { ...this.bounds, ...next }; }
+    setSize() {}
+    setResizable() {}
+    setMinimumSize() {}
+    setMaximumSize() {}
+    setMenuBarVisibility() {}
+    setBackgroundColor() {}
+    setHasShadow() {}
+    setAlwaysOnTop() {}
+    setSkipTaskbar() {}
+    setTitle(title) { this.title = title; }
+    isVisible() { return this.visible; }
+    isMinimized() { return false; }
+    restore() {}
+    moveTop() {}
+    show() { this.visible = true; }
+    hide() { this.visible = false; }
+    focus() {}
+    once(event, cb) {
+      if (event === "ready-to-show") setImmediate(cb);
+    }
+    loadFile() {
+      this.url = "file://index.html#float";
+      return Promise.resolve();
+    }
+    on() {}
+    removeAllListeners() {}
+    destroy() { this.destroyed = true; }
+  }
+
+  const controller = createFloatWindowController({
+    app: { getPath: () => dir },
+    BrowserWindow: FakeWindow,
+    screen: {
+      getDisplayNearestPoint: () => ({ workArea }),
+      getPrimaryDisplay: () => ({ workArea }),
+    },
+    trustWebContents() {},
+    rendererHtml: "index.html",
+    preloadPath: "preload.js",
+    iconPath: "icon.ico",
+    isQuitting: () => true,
+    writeJsonAtomic(file, data) {
+      fs.writeFileSync(file, JSON.stringify(data));
+    },
+  });
+
+  controller.setProduct("cursor");
+  assert.equal(controller.getState().product, "cursor");
+  assert.equal(controller.getState().visible, false);
+  assert.equal(controller.inspect().exists, false);
+  assert.equal(loadFloatState(dir).product, "cursor");
+  assert.equal(sent.length, 0);
+
+  controller.show();
+  assert.equal(controller.getState().visible, true);
+  controller.hide();
+  sent.length = 0;
+  controller.setProduct("codex");
+  assert.equal(controller.getState().product, "codex");
+  assert.equal(controller.getState().visible, false);
+  assert.equal(loadFloatState(dir).product, "codex");
+  assert.ok(sent.some((item) => item[0] === "float:product" && item[1] === "codex"));
+  controller.destroy();
+});
+
+test("dashboard product changes sync the float product and auto-open once", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "src", "renderer-react", "App.tsx"), "utf8");
+  assert.match(source, /persistProduct/);
+  assert.match(source, /setFloatProduct/);
+  assert.match(source, /pickStartupFloatProduct/);
+  assert.match(source, /didAutoShowFloat/);
+  assert.match(source, /showFloatWindow\(chosen\)/);
+  assert.match(source, /const handleProductChange = \(next: ProductKind\) => \{\s*persistProduct\(next\);/);
+  assert.match(source, /setSwitchTarget\(null\)/);
+  assert.match(source, /setIsRefreshingAll\(refreshAllKindRef\.current === next\)/);
+  assert.match(source, /actionsLocked=\{productById\(product\)\.id === 'cursor' \? !!cursorOAuthStatus\?\.pending : !!oauthStatus\?\.pending\}/);
+  assert.match(source, /productRef\.current === 'cursor'\s*\? !!cursorOAuthStatusRef\.current\?\.pending/);
+  assert.match(source, /result\.account\?\.id && productRef\.current === kind/);
+  assert.match(source, /account\?\.id && productRef\.current === kind/);
+  assert.match(source, /wasCursorOAuthPendingRef/);
+  assert.match(source, /pending && !wasCursorOAuthPendingRef\.current && productRef\.current === 'cursor'/);
+  assert.match(source, /nextOAuth\.pending && !wasOAuthPendingRef\.current && productRef\.current === 'codex'/);
+  assert.match(source, /localOAuth\?\.pending && !incomingOAuth\.pending && incomingOAuth\.status === 'idle'/);
+  assert.match(source, /if \(productRef\.current !== kind\) return;/);
+});
+
 test("float lens footer does not crash while accounts are loading", () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "src", "renderer-react", "components", "FloatLens.tsx"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "..", "src", "renderer-react", "components", "FloatLens.css"), "utf8");
   assert.match(source, /!viewed \|\| canRefreshQuota\(viewed\)/);
   assert.match(source, /该账号需要重新授权后才能刷新额度/);
   assert.match(source, /STATUS_TEXT/);
+  assert.match(source, /switchCursorAccount/);
+  assert.match(source, /if \(productRef.current === kind\) setSwitching\(false\);/);
+  assert.match(source, /setRefreshing\(false\);\s*setSwitching\(false\);/);
+  assert.match(source, /setAccounts\(\[\]\);\s*setViewedId\(null\);\s*setLoading\(true\);/);
+  assert.match(source, /if \(!silent\) setRefreshing\(false\);/);
+  assert.match(source, /next\?\.status === 'SYNC_FAILED'/);
+  assert.match(source, /会关掉正在运行的官方 Cursor/);
+  assert.match(source, /float-lens-mark/);
   assert.doesNotMatch(source, /请回主窗口重新授权/);
   assert.doesNotMatch(source, /title=\{viewed\.status/);
   assert.match(css, /\.float-lens-icon:disabled/);
+  assert.match(css, /\.float-lens-confirm/);
+  assert.match(css, /-webkit-line-clamp:\s*2/);
+  assert.doesNotMatch(css, /\.float-lens-error[\s\S]*white-space:\s*nowrap/);
 });

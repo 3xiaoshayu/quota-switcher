@@ -440,6 +440,10 @@ function startPendingSession(pending, options = {}) {
 }
 
 function oauthLoginFlow(options = {}) {
+  const { getCursorOAuthStatus } = require("./cursor-oauth");
+  if (getCursorOAuthStatus().pending) {
+    throw new Error("authorization is already in progress");
+  }
   return startPendingSession(buildPending(options), {
     openBrowser: options.openBrowser !== false,
     exchangeCode: options.exchangeCode,

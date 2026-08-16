@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type SetStateAction } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  INITIAL_ACCOUNTS, 
+  INITIAL_ACCOUNTS,
+  INITIAL_CURSOR_ACCOUNTS,
   INITIAL_DAEMON_STATE, 
   INITIAL_LOGS, 
   INITIAL_SETTINGS 
@@ -12,8 +13,10 @@ import {
   DesktopAutoSwitchConfig,
   DesktopAuthState,
   DesktopCodexStatus,
+  DesktopCursorStatus,
   DesktopOAuthStatus,
   DesktopUpdateStatus,
+  ProductKind,
   LogEntry,
   SystemSettings,
   DaemonState,
@@ -22,18 +25,22 @@ import {
   countUnreadAlertLogs,
   desktopApi,
   formatDateTime,
+  formatLogTime,
   hasDesktopBridge,
   canJoinAutoSwitch,
   needsHandling,
   needsQuotaAutoSync,
+  isCursorAccount,
+  pickStartupFloatProduct,
   pruneAutoSwitchAccountIds,
   quotaAutoSyncStaleMs,
   selectedAccountIdsEqual,
   summarizeRefreshAllResults,
-  summarizeTokenCheckResults,
+  formatTokenCheckMessage,
   QUOTA_AUTO_SYNC_MIN_GAP_MS,
 } from './api/desktop';
-import { logTypeLabel, toUserMessage } from './api/user-messages';
+import { logTypeLabel, toCursorUserMessage, toUserMessage } from './api/user-messages';
+import { productById, readStoredProduct } from './data/products';
 import Login from './components/Login';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
@@ -54,7 +61,8 @@ import {
   Trash2,
   Activity,
   RefreshCw,
-  LoaderCircle
+  LoaderCircle,
+  ArrowLeftRight,
 } from 'lucide-react';
 
 const desktopBridgeAvailable = hasDesktopBridge();
@@ -98,12 +106,15 @@ function settingsFromDesktopState(
   appInfo: DesktopAppInfo | null,
   codexStatus: DesktopCodexStatus | null,
   updateStatus: DesktopUpdateStatus | null,
+  cursorStatus: DesktopCursorStatus | null = null,
 ): SystemSettings {
   return {
     globalSwitch: !!config.enabled,
     fiveHourThreshold: Number(config.primary_threshold ?? 20),
     weeklyThreshold: Number(config.secondary_threshold ?? 30),
     clientDetected: !!codexStatus?.installed,
+    cursorDetected: !!cursorStatus?.installed,
+    cursorHasLocalLogin: !!cursorStatus?.vscdbPresent,
     updateChannel: updateChannelForUi(updateStatus),
     version: appInfo?.version || INITIAL_SETTINGS.version,
     latestStatus: latestStatusForUi(updateStatus),
@@ -137,7 +148,11 @@ function DashboardApp() {
   });
   const [accountsFilterTab, setAccountsFilterTab] = useState<'all' | 'current' | 'warning'>('all');
   const didPickLandingTab = useRef(false);
-  const [accounts, setAccounts] = useState<AccountQuota[]>(desktopBridgeAvailable ? [] : INITIAL_ACCOUNTS);
+  const didAutoShowFloat = useRef(false);
+  const [product, setProduct] = useState<ProductKind>(() => readStoredProduct());
+  const [codexAccounts, setCodexAccounts] = useState<AccountQuota[]>(desktopBridgeAvailable ? [] : INITIAL_ACCOUNTS);
+  const [cursorAccounts, setCursorAccounts] = useState<AccountQuota[]>(desktopBridgeAvailable ? [] : INITIAL_CURSOR_ACCOUNTS);
+  const accounts = product === 'cursor' ? cursorAccounts : codexAccounts;
   const [daemonState, setDaemonState] = useState<DaemonState>(
     desktopBridgeAvailable ? { status: 'Stopped', syncInterval: 1, lastChecked: '' } : INITIAL_DAEMON_STATE,
   );
@@ -146,9 +161,11 @@ function DashboardApp() {
   const [autoSwitchConfig, setAutoSwitchConfig] = useState<DesktopAutoSwitchConfig>(DEFAULT_CONFIG);
   const [appInfo, setAppInfo] = useState<DesktopAppInfo | null>(null);
   const [codexStatus, setCodexStatus] = useState<DesktopCodexStatus | null>(null);
+  const [cursorStatus, setCursorStatus] = useState<DesktopCursorStatus | null>(null);
   const [updateStatus, setUpdateStatus] = useState<DesktopUpdateStatus | null>(null);
   const [authState, setAuthState] = useState<DesktopAuthState>(EMPTY_AUTH_STATE);
   const [oauthStatus, setOAuthStatus] = useState<DesktopOAuthStatus | null>(null);
+  const [cursorOAuthStatus, setCursorOAuthStatus] = useState<DesktopOAuthStatus | null>(null);
   const [isResolvingAuth, setIsResolvingAuth] = useState(false);
   const [dashboardLoadState, setDashboardLoadState] = useState<'loading' | 'ready' | 'error'>(
     desktopBridgeAvailable ? 'loading' : 'ready',
@@ -158,6 +175,9 @@ function DashboardApp() {
   const quotaAutoSyncPromise = useRef<Promise<void> | null>(null);
   const lastQuotaAutoSyncAt = useRef(0);
   const accountsRef = useRef<AccountQuota[]>(accounts);
+  const codexAccountsRef = useRef<AccountQuota[]>(codexAccounts);
+  const productRef = useRef(product);
+  const cursorOAuthStatusRef = useRef<DesktopOAuthStatus | null>(cursorOAuthStatus);
   const accountOperationIds = useRef<Set<string>>(new Set());
   const autoSwitchConfigRef = useRef<DesktopAutoSwitchConfig>(autoSwitchConfig);
   const authStateRef = useRef<DesktopAuthState>(authState);
@@ -175,6 +195,14 @@ function DashboardApp() {
   }, [accounts]);
 
   useEffect(() => {
+    codexAccountsRef.current = codexAccounts;
+  }, [codexAccounts]);
+
+  useEffect(() => {
+    cursorOAuthStatusRef.current = cursorOAuthStatus;
+  }, [cursorOAuthStatus]);
+
+  useEffect(() => {
     autoSwitchConfigRef.current = autoSwitchConfig;
   }, [autoSwitchConfig]);
 
@@ -184,6 +212,7 @@ function DashboardApp() {
 
   // UI Interactive triggers
   const [isRefreshingAll, setIsRefreshingAll] = useState(false);
+  const refreshAllKindRef = useRef<ProductKind | null>(null);
   const [showNotifications, setShowNotifications] = useState(false);
   const [authBannerDismissedKey, setAuthBannerDismissedKey] = useState<string | null>(null);
   const [lastReadLogId, setLastReadLogId] = useState<string | null>(null);
@@ -194,6 +223,8 @@ function DashboardApp() {
   const [sessionSwitchCount, setSessionSwitchCount] = useState(0);
   // In-app delete confirmation (replaces the native window.confirm).
   const [deleteTarget, setDeleteTarget] = useState<AccountQuota | null>(null);
+  const [switchTarget, setSwitchTarget] = useState<AccountQuota | null>(null);
+  const [isConfirmingSwitch, setIsConfirmingSwitch] = useState(false);
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
 
   // Custom Toast notifications array
@@ -206,9 +237,11 @@ function DashboardApp() {
     toastTimers.current.delete(id);
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
-  const addToast = useCallback((msg: string, type: 'success' | 'info' | 'warning' | 'error' = 'info') => {
+  const addToast = useCallback((msg: string, type: 'success' | 'info' | 'warning' | 'error' = 'info', source: ProductKind | 'auto' = 'auto') => {
     const id = `toast_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-    setToasts(prev => [...prev, { id, msg: toUserMessage(msg), type }]);
+    const kind = source === 'auto' ? productRef.current : source;
+    const text = kind === 'cursor' ? toCursorUserMessage(msg) : toUserMessage(msg);
+    setToasts(prev => [...prev, { id, msg: text, type }]);
     const timer = setTimeout(() => {
       toastTimers.current.delete(id);
       setToasts(prev => prev.filter(t => t.id !== id));
@@ -216,12 +249,13 @@ function DashboardApp() {
     toastTimers.current.set(id, timer);
   }, []);
 
-  const addLogEntry = useCallback((message: string, type: LogEntry['type']) => {
-    const timestamp = new Date().toLocaleString('sv-SE');
+  const addLogEntry = useCallback((message: string, type: LogEntry['type'], source: ProductKind | 'auto' = 'auto') => {
+    const timestamp = formatLogTime();
+    const kind = source === 'auto' ? productRef.current : source;
     const newLog: LogEntry = {
       id: `l_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
       timestamp,
-      message: toUserMessage(message),
+      message: kind === 'cursor' ? toCursorUserMessage(message) : toUserMessage(message),
       type,
     };
     // Cap the in-memory feed so long sessions cannot grow it without bound.
@@ -252,6 +286,7 @@ function DashboardApp() {
   // refs to stale values).
   const dashboardLoadSeqRef = useRef(0);
   const wasOAuthPendingRef = useRef(false);
+  const wasCursorOAuthPendingRef = useRef(false);
   const oauthStatusRef = useRef<DesktopOAuthStatus | null>(oauthStatus);
   const oauthReportKeyRef = useRef<string | null>(null);
 
@@ -259,9 +294,50 @@ function DashboardApp() {
     oauthStatusRef.current = oauthStatus;
   }, [oauthStatus]);
 
+  useEffect(() => {
+    productRef.current = product;
+  }, [product]);
+
+  const persistProduct = useCallback((next: ProductKind) => {
+    setProduct(next);
+    localStorage.setItem('cam_product', next);
+    if (hasDesktopBridge()) {
+      void desktopApi.setFloatProduct(next).catch(() => {});
+    }
+  }, []);
+
+  const setVisibleAccounts = useCallback((updater: SetStateAction<AccountQuota[]>) => {
+    const apply = (prev: AccountQuota[]) => typeof updater === 'function' ? updater(prev) : updater;
+    if (productById(productRef.current).id === 'cursor') setCursorAccounts(apply);
+    else setCodexAccounts(apply);
+  }, []);
+
+  const applyCursorState = useCallback((snapshot: Awaited<ReturnType<typeof desktopApi.loadCursorState>>) => {
+    setCursorAccounts(snapshot.accounts);
+    const incomingOAuth = snapshot.oauthStatus;
+    const localOAuth = cursorOAuthStatusRef.current;
+    const nextOAuth = localOAuth?.pending && !incomingOAuth.pending && incomingOAuth.status === 'idle'
+      ? localOAuth
+      : incomingOAuth;
+    setCursorOAuthStatus(nextOAuth);
+    cursorOAuthStatusRef.current = nextOAuth;
+    setCursorStatus(snapshot.cursorStatus);
+    setSettings((prev) => ({
+      ...prev,
+      cursorDetected: !!snapshot.cursorStatus?.installed,
+      cursorHasLocalLogin: !!snapshot.cursorStatus?.vscdbPresent,
+    }));
+    const pending = !!nextOAuth.pending;
+    if (pending && !wasCursorOAuthPendingRef.current && productRef.current === 'cursor') {
+      persistProduct('cursor');
+      setActiveTab('accounts');
+    }
+    wasCursorOAuthPendingRef.current = pending;
+  }, [persistProduct]);
+
   const applyDashboardState = useCallback((snapshot: Awaited<ReturnType<typeof desktopApi.loadDashboardState>>) => {
-    setAccounts(snapshot.accounts);
-    accountsRef.current = snapshot.accounts;
+    setCodexAccounts(snapshot.accounts);
+    accountsRef.current = productRef.current === 'cursor' ? accountsRef.current : snapshot.accounts;
     const prunedSelected = snapshot.config.account_scope_mode === 'selected'
       ? pruneAutoSwitchAccountIds(snapshot.config.selected_account_ids || [], snapshot.accounts)
       : snapshot.accounts.filter(canJoinAutoSwitch).map((account) => account.id);
@@ -274,7 +350,14 @@ function DashboardApp() {
         ...snapshot.config,
         selected_account_ids: prunedSelected,
       };
-      void desktopApi.saveAutoSwitchConfig(nextConfig).catch(() => {});
+      const revision = configSaveRevision.current;
+      const saveOperation = configSaveQueue.current
+        .catch(() => {})
+        .then(() => {
+          if (revision !== configSaveRevision.current) return;
+          return desktopApi.saveAutoSwitchConfig(nextConfig);
+        });
+      configSaveQueue.current = saveOperation.catch(() => {});
     }
     setAutoSwitchConfig(nextConfig);
     autoSwitchConfigRef.current = nextConfig;
@@ -290,9 +373,16 @@ function DashboardApp() {
       : incomingOAuth;
     setOAuthStatus(nextOAuth);
     oauthStatusRef.current = nextOAuth;
-    if (nextOAuth.pending && !wasOAuthPendingRef.current) setActiveTab('accounts');
+    if (nextOAuth.pending && !wasOAuthPendingRef.current && productRef.current === 'codex') {
+      persistProduct('codex');
+      setActiveTab('accounts');
+    }
     wasOAuthPendingRef.current = !!nextOAuth.pending;
-    setSettings(settingsFromDesktopState(nextConfig, snapshot.appInfo, snapshot.codexStatus, snapshot.updateStatus));
+    setSettings((prev) => ({
+      ...settingsFromDesktopState(nextConfig, snapshot.appInfo, snapshot.codexStatus, snapshot.updateStatus),
+      cursorDetected: prev.cursorDetected,
+      cursorHasLocalLogin: prev.cursorHasLocalLogin,
+    }));
     setDaemonState({
       status: snapshot.daemonRunning ? 'Running' : 'Stopped',
       syncInterval: snapshot.daemonSyncInterval,
@@ -307,7 +397,7 @@ function DashboardApp() {
       setUserEmail(snapshot.currentAccount.email);
       localStorage.setItem('codex_auth_email', snapshot.currentAccount.email);
     }
-  }, []);
+  }, [persistProduct]);
 
   const loadDashboardState = useCallback(async (showLoading = false) => {
     if (!desktopBridgeAvailable) return null;
@@ -317,38 +407,62 @@ function DashboardApp() {
       setDashboardLoadError(null);
     }
     try {
-      const snapshot = await desktopApi.loadDashboardState();
+      const [snapshot, cursorSnapshot] = await Promise.all([
+        desktopApi.loadDashboardState(),
+        desktopApi.loadCursorState().catch(() => null),
+      ]);
       if (seq !== dashboardLoadSeqRef.current) return null;
       applyDashboardState(snapshot);
+      if (cursorSnapshot) applyCursorState(cursorSnapshot);
       hasLoadedDashboard.current = true;
+      const landingProduct = cursorSnapshot?.oauthStatus?.pending
+        ? 'cursor'
+        : snapshot.oauthStatus.pending
+          ? 'codex'
+          : productRef.current;
       if (!didPickLandingTab.current) {
         didPickLandingTab.current = true;
-        if (snapshot.accounts.some(needsHandling)) {
+        const landingAccounts = landingProduct === 'cursor'
+          ? (cursorSnapshot?.accounts || [])
+          : snapshot.accounts;
+        if (landingAccounts.some(needsHandling)) {
           setActiveTab('accounts');
+        }
+      }
+      if (!didAutoShowFloat.current) {
+        didAutoShowFloat.current = true;
+        const chosen = pickStartupFloatProduct(
+          landingProduct,
+          snapshot.accounts,
+          cursorSnapshot?.accounts || [],
+        );
+        if (chosen) {
+          void desktopApi.showFloatWindow(chosen).catch(() => {});
         }
       }
       setDashboardLoadState('ready');
       setDashboardLoadError(null);
-      return snapshot;
+      return { ...snapshot, cursorAccounts: cursorSnapshot?.accounts || [] };
     } catch (error) {
       if (seq !== dashboardLoadSeqRef.current) return null;
       const message = toUserMessage(error instanceof Error ? error.message : String(error));
-      addToast(message, 'error');
-      addLogEntry(message, 'error');
+      addToast(message, 'error', 'codex');
+      addLogEntry(message, 'error', 'codex');
       if (!hasLoadedDashboard.current) {
         setDashboardLoadState('error');
         setDashboardLoadError(message);
       }
       return null;
     }
-  }, [addLogEntry, addToast, applyDashboardState]);
+  }, [addLogEntry, addToast, applyCursorState, applyDashboardState]);
 
   const queueQuotaAutoSync = useCallback((candidateAccounts: AccountQuota[]) => {
     if (!desktopBridgeAvailable || quotaAutoSyncPromise.current) return;
     if (authStateRef.current.requiresResolution) return;
     if (Date.now() - lastQuotaAutoSyncAt.current < QUOTA_AUTO_SYNC_MIN_GAP_MS) return;
     const staleAccounts = candidateAccounts.filter((account) => (
-      !accountOperationIds.current.has(account.id)
+      !String(account.id).startsWith('cursor_')
+      && !accountOperationIds.current.has(account.id)
       && needsQuotaAutoSync(
         account,
         quotaAutoSyncStaleMs(account, autoSwitchConfigRef.current.sync_interval_minutes),
@@ -363,7 +477,7 @@ function DashboardApp() {
           await desktopApi.refreshQuota(account.id, false);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          addLogEntry(`${account.email}: ${toUserMessage(message)}`, 'info');
+          addLogEntry(`${account.email}: ${message}`, 'info', 'codex');
         }
       }
       await loadDashboardState(false);
@@ -380,8 +494,8 @@ function DashboardApp() {
     localStorage.setItem('codex_auth_email', email);
     
     // Add toast and log
-    addToast('登录成功，欢迎回来！', 'success');
-    addLogEntry(`用户 ${email} 已进入控制中心。`, 'success');
+    addToast('已解锁', 'success');
+    addLogEntry(`用户 ${email} 已进入。`, 'success');
     if (desktopBridgeAvailable) {
       hasLoadedDashboard.current = false;
       setDashboardLoadState('loading');
@@ -399,7 +513,7 @@ function DashboardApp() {
       setDashboardLoadState('loading');
       setDashboardLoadError(null);
     }
-    addToast('已安全退出登录', 'info');
+    addToast('已锁定界面', 'info');
   };
 
   // Escape closes the topmost dismissible overlay.
@@ -410,19 +524,23 @@ function DashboardApp() {
         if (!isDeletingAccount) setDeleteTarget(null);
         return;
       }
+      if (switchTarget) {
+        if (!isConfirmingSwitch) setSwitchTarget(null);
+        return;
+      }
       if (showNotifications) { setShowNotifications(false); return; }
       if (showSupport) { setShowSupport(false); return; }
       if (showUpdates) { setShowUpdates(false); }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [deleteTarget, isDeletingAccount, showNotifications, showSupport, showUpdates]);
+  }, [deleteTarget, isDeletingAccount, switchTarget, isConfirmingSwitch, showNotifications, showSupport, showUpdates]);
 
   useEffect(() => {
-    if (deleteTarget || showSupport || showUpdates) {
+    if (deleteTarget || switchTarget || showSupport || showUpdates) {
       setShowNotifications(false);
     }
-  }, [deleteTarget, showSupport, showUpdates]);
+  }, [deleteTarget, switchTarget, showSupport, showUpdates]);
 
   useEffect(() => {
     if (!desktopBridgeAvailable) return;
@@ -446,7 +564,7 @@ function DashboardApp() {
     }, 5000);
 
     const syncTimer = window.setInterval(() => {
-      if (!disposed) queueQuotaAutoSync(accountsRef.current);
+      if (!disposed) queueQuotaAutoSync(codexAccountsRef.current);
     }, QUOTA_AUTO_SYNC_MIN_GAP_MS);
 
     const unsubscribe = desktopApi.subscribe({
@@ -456,13 +574,13 @@ function DashboardApp() {
         });
       },
       onDaemonError: (message) => {
-        addToast(message, 'error');
-        addLogEntry(message, 'error');
+        addToast(message, 'error', 'codex');
+        addLogEntry(message, 'error', 'codex');
       },
       onAutoSwitch: (result) => {
         if (result?.switched) {
           setSessionSwitchCount(count => count + 1);
-          addToast(`已自动切换至 ${result.to?.email || '新账号'}`, 'warning');
+          addToast(`已自动切换至 ${result.to?.email || '新账号'}`, 'warning', 'codex');
         }
         loadDashboardState(false);
       },
@@ -473,7 +591,7 @@ function DashboardApp() {
       onAuthConflict: (state) => {
         setAuthState(state);
         authStateRef.current = state;
-        addToast(state.message || '官方 Codex 登录状态已变更。', 'warning');
+        addToast(state.message || '官方 Codex 登录状态已变更。', 'warning', 'codex');
       },
     });
 
@@ -485,11 +603,13 @@ function DashboardApp() {
     };
   }, [addLogEntry, addToast, isAuthenticated, loadDashboardState, queueQuotaAutoSync]);
 
-  const reportOAuthFinished = useCallback((status: DesktopOAuthStatus) => {
+  const reportOAuthFinished = useCallback((status: DesktopOAuthStatus, source: ProductKind | 'auto' = 'auto') => {
     if (status.pending) return;
     if (status.status === 'idle' || status.status === 'pending') return;
+    const kind = source === 'auto' ? productRef.current : source;
     const result = status.result;
     const key = [
+      kind,
       status.status,
       result?.accountId || '',
       result?.email || '',
@@ -501,14 +621,14 @@ function DashboardApp() {
     oauthReportKeyRef.current = key;
 
     if (status.status === 'cancelled') {
-      addToast('授权已取消。', 'warning');
-      addLogEntry('授权已取消。', 'warning');
+      addToast('授权已取消。', 'warning', kind);
+      addLogEntry('授权已取消。', 'warning', kind);
       return;
     }
     if (status.status === 'error' || status.status === 'expired') {
       const message = status.message || '授权未完成。';
-      addToast(message, 'warning');
-      addLogEntry(message, 'warning');
+      addToast(message, 'warning', kind);
+      addLogEntry(message, 'warning', kind);
       return;
     }
     if (status.status !== 'completed') return;
@@ -516,17 +636,21 @@ function DashboardApp() {
       const message = result.email
         ? `浏览器登录的不是这个账号，已另存为 ${result.email}。原来的账号仍需重新授权。`
         : '浏览器登录的不是这个账号，已另存为新账号。原来的账号仍需重新授权。';
-      addToast(message, 'warning');
-      addLogEntry(message, 'warning');
+      addToast(message, 'warning', kind);
+      addLogEntry(message, 'warning', kind);
       return;
     }
     const isReauth = !!(status.targetAccountId || result?.targetAccountId);
     const message = result?.email
       ? (isReauth ? `已重新授权 ${result.email}` : `已添加 ${result.email}`)
       : (isReauth ? '账号已重新授权' : '账号已添加');
-    addToast(message, 'success');
-    addLogEntry(message, 'success');
+    addToast(message, 'success', kind);
+    addLogEntry(message, 'success', kind);
   }, [addLogEntry, addToast]);
+
+  const anyOAuthPending = () => productRef.current === 'cursor'
+    ? !!cursorOAuthStatusRef.current?.pending
+    : !!oauthStatusRef.current?.pending;
 
   const markOAuthPending = useCallback((targetAccountId: string | null) => {
     dashboardLoadSeqRef.current += 1;
@@ -540,6 +664,11 @@ function DashboardApp() {
       expiresAt: null,
       callbackPort: 1455,
     };
+    if (productById(productRef.current).id === 'cursor') {
+      cursorOAuthStatusRef.current = nextStatus;
+      setCursorOAuthStatus(nextStatus);
+      return;
+    }
     oauthStatusRef.current = nextStatus;
     setOAuthStatus(nextStatus);
   }, []);
@@ -559,11 +688,11 @@ function DashboardApp() {
         }
         setOAuthStatus(status);
         await loadDashboardState(false);
-        reportOAuthFinished(status);
+        reportOAuthFinished(status, 'codex');
       } catch {
         failCount += 1;
         if (!disposed && (failCount === 5 || failCount % 15 === 0)) {
-          addToast('授权状态读取失败，可点取消后重试。', 'error');
+          addToast('授权状态读取失败，可点取消后重试。', 'error', 'codex');
         }
       }
     };
@@ -577,50 +706,93 @@ function DashboardApp() {
     };
   }, [addToast, isAuthenticated, loadDashboardState, oauthStatus?.pending, reportOAuthFinished]);
 
+  useEffect(() => {
+    if (!isAuthenticated || !desktopBridgeAvailable || !cursorOAuthStatus?.pending) return;
+    let disposed = false;
+    let failCount = 0;
+    const pollCursorOAuthStatus = async () => {
+      try {
+        const status = await desktopApi.getCursorOAuthStatus();
+        failCount = 0;
+        if (disposed) return;
+        setCursorOAuthStatus(status);
+        if (status.pending) return;
+        await loadDashboardState(false);
+        reportOAuthFinished(status, 'cursor');
+      } catch {
+        failCount += 1;
+        if (!disposed && (failCount === 5 || failCount % 15 === 0)) {
+          addToast('授权状态读取失败，可点取消后重试。', 'error', 'cursor');
+        }
+      }
+    };
+    void pollCursorOAuthStatus();
+    const timer = window.setInterval(() => {
+      void pollCursorOAuthStatus();
+    }, 1000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [addToast, isAuthenticated, loadDashboardState, cursorOAuthStatus?.pending, reportOAuthFinished]);
+
   // Global Refresh All trigger
   const handleRefreshAll = async () => {
     if (desktopBridgeAvailable) {
+      const currentProduct = productById(productRef.current);
+      const kind = currentProduct.id;
+      refreshAllKindRef.current = kind;
       setIsRefreshingAll(true);
-      addToast('正在刷新全部账号额度...', 'info');
-      addLogEntry('开始同步全部账号额度...', 'info');
+      addToast('正在刷新全部账号额度...', 'info', kind);
+      addLogEntry('开始同步全部账号额度...', 'info', kind);
       try {
-        const results = await desktopApi.refreshAllQuotas();
+        const results = kind === 'cursor'
+          ? await desktopApi.refreshAllCursorQuotas()
+          : await desktopApi.refreshAllQuotas();
         const { refreshed, reauthSkipped, bannedSkipped, failed } = summarizeRefreshAllResults(results);
         const snapshot = await loadDashboardState(false);
-        if (snapshot) queueQuotaAutoSync(snapshot.accounts);
+        if (snapshot && currentProduct.features.autoSwitch) queueQuotaAutoSync(snapshot.accounts);
+        if (productRef.current !== kind) return;
         if (failed || bannedSkipped) {
           const parts = [`已刷新 ${refreshed} 个`];
           if (reauthSkipped) parts.push(`${reauthSkipped} 个需重新授权`);
-          if (bannedSkipped) parts.push(`${bannedSkipped} 个已封号`);
-          if (failed) parts.push(`${failed} 个同步失败`);
-          addToast(parts.join('，'), 'warning');
+          if (bannedSkipped && currentProduct.features.autoSwitch) parts.push(`${bannedSkipped} 个已封号`);
+          if (failed) parts.push(kind === 'cursor' ? `${failed} 个这次没查清` : `${failed} 个同步失败`);
+          addToast(parts.join('，'), 'warning', kind);
           const logParts = [];
           if (reauthSkipped) logParts.push(`需重新授权 ${reauthSkipped} 个`);
-          if (bannedSkipped) logParts.push(`封号 ${bannedSkipped} 个`);
-          if (failed) logParts.push(`失败 ${failed} 个`);
-          addLogEntry(`额度刷新完成：${logParts.join('，')}。`, 'warning');
+          if (bannedSkipped && currentProduct.features.autoSwitch) logParts.push(`封号 ${bannedSkipped} 个`);
+          if (failed) logParts.push(kind === 'cursor' ? `没查清 ${failed} 个` : `失败 ${failed} 个`);
+          addLogEntry(`额度刷新完成：${logParts.join('，')}。`, 'warning', kind);
         } else if (reauthSkipped) {
-          addToast(`已刷新 ${refreshed} 个；${reauthSkipped} 个需重新授权`, 'info');
-          addLogEntry(`额度刷新完成；${reauthSkipped} 个账号需要重新授权。`, 'info');
+          addToast(`已刷新 ${refreshed} 个；${reauthSkipped} 个需重新授权`, 'info', kind);
+          addLogEntry(`额度刷新完成；${reauthSkipped} 个账号需要重新授权。`, 'info', kind);
         } else {
-          addToast(`已刷新 ${refreshed} 个账号额度`, 'success');
-          addLogEntry('全部账号额度同步完成。', 'success');
+          addToast(`已刷新 ${refreshed} 个账号额度`, 'success', kind);
+          addLogEntry('全部账号额度同步完成。', 'success', kind);
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        addToast(message, 'error');
-        addLogEntry(message, 'error');
+        if (productRef.current === kind) {
+          const message = error instanceof Error ? error.message : String(error);
+          addToast(message, 'error', kind);
+          addLogEntry(message, 'error', kind);
+        }
       } finally {
-        setIsRefreshingAll(false);
+        if (refreshAllKindRef.current === kind) refreshAllKindRef.current = null;
+        if (productRef.current === kind) setIsRefreshingAll(false);
       }
       return;
     }
+    const kind = productRef.current;
+    refreshAllKindRef.current = kind;
     setIsRefreshingAll(true);
-    addToast('正在刷新同步所有账号配额...', 'info');
-    addLogEntry('开始同步全部账号额度...', 'info');
+    addToast('正在刷新全部账号额度...', 'info', kind);
+    addLogEntry('开始同步全部账号额度...', 'info', kind);
 
     setTimeout(() => {
-      setAccounts(prev => prev.map(acc => {
+      if (refreshAllKindRef.current === kind) refreshAllKindRef.current = null;
+      if (productRef.current !== kind) return;
+      setVisibleAccounts(prev => prev.map(acc => {
         // Randomly adjust quota slightly to simulate active refreshing
         if (acc.status === 'EXPIRED') return acc;
         const change = Math.floor(Math.random() * 200) + 50;
@@ -629,72 +801,100 @@ function DashboardApp() {
           ...acc,
           fiveHourQuotaRemaining: newRemaining,
           status: newRemaining <= 0 ? 'EXPIRED' : acc.status,
-          tokenValidity: '23h 59m left',
+          tokenValidity: '剩余 23 小时 59 分钟',
         };
       }));
       setIsRefreshingAll(false);
-      addToast('所有账号配额已刷新完成！', 'success');
-      addLogEntry('全部账号额度同步完成。', 'success');
+      addToast('已刷新全部账号额度', 'success', kind);
+      addLogEntry('全部账号额度同步完成。', 'success', kind);
     }, 1500);
   };
 
   // Refresh single account
   const handleRefreshAccount = async (id: string) => {
     if (desktopBridgeAvailable) {
+      const kind = productById(productRef.current).id;
       const account = accountsRef.current.find(item => item.id === id);
       let refreshError: unknown = null;
       try {
-        await runAccountOperation(id, () => desktopApi.refreshQuota(id));
+        await runAccountOperation(id, () => (
+          kind === 'cursor' ? desktopApi.refreshCursorQuota(id) : desktopApi.refreshQuota(id)
+        ));
       } catch (error) {
         refreshError = error;
       }
       const snapshot = await loadDashboardState(false);
-      if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-      const fresh = snapshot?.accounts.find(item => item.id === id);
+      if (snapshot && kind !== 'cursor') queueQuotaAutoSync(snapshot.accounts);
+      if (productRef.current !== kind) return;
+      const fresh = kind === 'cursor'
+        ? snapshot?.cursorAccounts?.find(item => item.id === id)
+        : snapshot?.accounts.find(item => item.id === id);
       const label = account?.email || id;
       if (!refreshError) {
         if (fresh?.status === 'SUSPENDED') {
           const detail = `${label} 额度已刷新，仍需重新授权后才能继续使用`;
-          addToast(detail, 'success');
-          addLogEntry(detail, 'success');
+          addToast(detail, 'warning', kind);
+          addLogEntry(detail, 'warning', kind);
           return;
         }
-        addToast(`${label} 额度已刷新`, 'success');
-        addLogEntry(`账号额度已刷新：${label}`, 'success');
+        if (fresh?.status === 'SYNC_FAILED') {
+          const detail = fresh.warning || (kind === 'cursor' ? '这次没查清额度，请稍后重试。' : '额度同步失败，请稍后重试。');
+          addToast(detail, 'warning', kind);
+          addLogEntry(`${label}：${detail}`, 'warning', kind);
+          return;
+        }
+        if (fresh?.status === 'BANNED' && kind !== 'cursor') {
+          const detail = fresh.warning || '账号已封号，无法继续使用。';
+          addToast(detail, 'error', kind);
+          addLogEntry(`${label}：${detail}`, 'error', kind);
+          return;
+        }
+        if (fresh?.status === 'LIMITED' || fresh?.status === 'EXPIRED') {
+          const detail = fresh.warning || (fresh.status === 'EXPIRED' ? '额度已用尽。' : '额度已达上限或触发限流。');
+          addToast(detail, 'warning', kind);
+          addLogEntry(`${label}：${detail}`, 'warning', kind);
+          return;
+        }
+        if (!snapshot || !fresh) {
+          addToast('额度已请求，列表还在更新，请稍候。', 'info', kind);
+          return;
+        }
+        addToast(`${label} 额度已刷新`, 'success', kind);
+        addLogEntry(`账号额度已刷新：${label}`, 'success', kind);
         return;
       }
-      if (fresh?.status === 'BANNED') {
+      if (fresh?.status === 'BANNED' && kind !== 'cursor') {
         const detail = fresh.warning || '账号已封号，无法继续使用。';
-        addToast(detail, 'error');
-        addLogEntry(`${label}：${detail}`, 'error');
+        addToast(detail, 'error', kind);
+        addLogEntry(`${label}：${detail}`, 'error', kind);
         return;
       }
-      if (fresh?.status === 'LIMITED') {
-        const detail = fresh.warning || '额度已达上限或触发限流。';
-        addToast(detail, 'warning');
-        addLogEntry(`${label}：${detail}`, 'warning');
+      if (fresh?.status === 'LIMITED' || fresh?.status === 'EXPIRED') {
+        const detail = fresh.warning || (fresh.status === 'EXPIRED' ? '额度已用尽。' : '额度已达上限或触发限流。');
+        addToast(detail, 'warning', kind);
+        addLogEntry(`${label}：${detail}`, 'warning', kind);
         return;
       }
       if (fresh?.status === 'SUSPENDED') {
         const detail = fresh.warning || '该账号需要重新授权后才能刷新额度';
-        addToast(detail, 'warning');
-        addLogEntry(`${label}：${detail}`, 'warning');
+        addToast(detail, 'warning', kind);
+        addLogEntry(`${label}：${detail}`, 'warning', kind);
         return;
       }
       if (fresh?.status === 'SYNC_FAILED') {
-        const detail = fresh.warning || '额度同步失败，请稍后重试。';
-        addToast(detail, 'warning');
-        addLogEntry(`${label}：${detail}`, 'warning');
+        const detail = fresh.warning || (kind === 'cursor' ? '这次没查清额度，请稍后重试。' : '额度同步失败，请稍后重试。');
+        addToast(detail, 'warning', kind);
+        addLogEntry(`${label}：${detail}`, 'warning', kind);
         return;
       }
       const message = refreshError instanceof Error ? refreshError.message : String(refreshError);
-      addToast(message, 'error');
-      addLogEntry(message, 'error');
+      addToast(message, 'error', kind);
+      addLogEntry(message, 'error', kind);
       throw refreshError;
     }
-    setAccounts(prev => prev.map(acc => {
+    setVisibleAccounts(prev => prev.map(acc => {
       if (acc.id === id) {
-        addToast(`账号 ${acc.name} 的配额已重新同步`, 'success');
+        addToast(`账号 ${acc.email || acc.name} 的额度已重新同步`, 'success');
         return {
           ...acc,
           fiveHourQuotaRemaining: Math.min(acc.fiveHourQuotaTotal, (acc.fiveHourQuotaRemaining ?? 0) + 400),
@@ -707,17 +907,56 @@ function DashboardApp() {
 
   const handleRefreshToken = async (id: string) => {
     if (!desktopBridgeAvailable) return;
+    const kind = productRef.current;
     const account = accountsRef.current.find(item => item.id === id);
     try {
-      const result = await runAccountOperation(id, () => desktopApi.refreshToken(id));
-      if (!result.ok) throw new Error(result.error || 'Token refresh failed');
-      await loadDashboardState(false);
-      addToast(result?.skipped ? `${account?.email || id} 的 Token 仍然有效` : `${account?.email || id} 的 Token 已刷新`, 'success');
-      addLogEntry(`Token 检查完成：${account?.email || id}`, 'success');
+      const result = await runAccountOperation(id, () => (
+        kind === 'cursor' ? desktopApi.refreshCursorToken(id) : desktopApi.refreshToken(id)
+      ));
+      const snapshot = await loadDashboardState(false);
+      if (productRef.current !== kind) return;
+      const fresh = kind === 'cursor'
+        ? snapshot?.cursorAccounts?.find(item => item.id === id)
+        : snapshot?.accounts.find(item => item.id === id);
+      if (fresh?.status === 'SUSPENDED' || result.reauthRequired) {
+        const detail = `${account?.email || id} 仍需重新授权后才能继续使用`;
+        addToast(detail, 'warning', kind);
+        addLogEntry(detail, 'warning', kind);
+        return;
+      }
+      if (fresh?.status === 'BANNED' && kind !== 'cursor') {
+        const detail = fresh.warning || '账号已封号，无法继续使用。';
+        addToast(detail, 'error', kind);
+        addLogEntry(`${account?.email || id}：${detail}`, 'error', kind);
+        return;
+      }
+      if (!result.ok) {
+        const raw = String(result.error || '').trim();
+        throw new Error(raw && /token refresh failed/i.test(raw) ? raw : `Token refresh failed${raw ? `: ${raw}` : ''}`);
+      }
+      addToast(result?.skipped ? `${account?.email || id} 的令牌仍然有效` : `${account?.email || id} 的令牌已刷新`, 'success', kind);
+      addLogEntry(`令牌检查完成：${account?.email || id}`, 'success', kind);
     } catch (error) {
+      const snapshot = await loadDashboardState(false);
+      if (productRef.current !== kind) return;
+      const fresh = kind === 'cursor'
+        ? snapshot?.cursorAccounts?.find(item => item.id === id)
+        : snapshot?.accounts.find(item => item.id === id);
+      if (fresh?.status === 'SUSPENDED') {
+        const detail = `${account?.email || id} 仍需重新授权后才能继续使用`;
+        addToast(detail, 'warning', kind);
+        addLogEntry(detail, 'warning', kind);
+        return;
+      }
+      if (fresh?.status === 'BANNED' && kind !== 'cursor') {
+        const detail = fresh.warning || '账号已封号，无法继续使用。';
+        addToast(detail, 'error', kind);
+        addLogEntry(`${account?.email || id}：${detail}`, 'error', kind);
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
-      addToast(message, 'error');
-      addLogEntry(message, 'error');
+      addToast(message, 'error', kind);
+      addLogEntry(message, 'error', kind);
     }
   };
 
@@ -730,25 +969,25 @@ function DashboardApp() {
         else await desktopApi.startDaemon();
         await loadDashboardState(false);
         if (nextAction === 'stop' && autoSwitchConfigRef.current.enabled) {
-          addToast('守护进程已停止。自动切号已打开，但不会再自动换号。', 'warning');
+          addToast('Daemon 已停止。自动切号已打开，但不会再自动换号。', 'warning', 'codex');
         } else {
-          addToast(`守护进程已${nextAction === 'stop' ? '停止' : '启动'}`, nextAction === 'stop' ? 'warning' : 'success');
+          addToast(`Daemon 已${nextAction === 'stop' ? '停止' : '启动'}`, nextAction === 'stop' ? 'warning' : 'success', 'codex');
         }
-        addLogEntry(`守护进程已${nextAction === 'stop' ? '停止' : '启动'}。`, nextAction === 'stop' ? 'warning' : 'success');
+        addLogEntry(`Daemon 已${nextAction === 'stop' ? '停止' : '启动'}。`, nextAction === 'stop' ? 'warning' : 'success', 'codex');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        addToast(message, 'error');
-        addLogEntry(message, 'error');
+        addToast(message, 'error', 'codex');
+        addLogEntry(message, 'error', 'codex');
       }
       return;
     }
     setDaemonState(prev => {
       const nextStatus = prev.status === 'Running' ? 'Stopped' : 'Running';
-      addToast(`守护进程已${nextStatus === 'Running' ? '启用' : '暂停'}`, nextStatus === 'Running' ? 'success' : 'warning');
+      addToast(`Daemon 已${nextStatus === 'Running' ? '启用' : '暂停'}`, nextStatus === 'Running' ? 'success' : 'warning');
       return {
         ...prev,
         status: nextStatus,
-        lastChecked: 'Just now',
+        lastChecked: '刚刚',
       };
     });
   };
@@ -781,27 +1020,38 @@ function DashboardApp() {
   // Add new account
   const handleAddAccount = async (acc: Omit<AccountQuota, 'id'>) => {
     if (desktopBridgeAvailable) {
-      if (oauthStatusRef.current?.pending) {
-        addToast('已有授权正在进行，请先完成或取消。', 'warning');
+      const kind = productById(productRef.current).id;
+      if (anyOAuthPending()) {
+        addToast('已有授权正在进行，请先完成或取消。', 'warning', kind);
         throw new Error('已有授权正在进行，请先完成或取消。');
       }
       markOAuthPending(null);
-      addToast('正在打开授权页面，请在浏览器里完成登录。', 'info');
-      addLogEntry('正在为新账号打开授权。', 'info');
+      addToast('正在打开授权页面，请在浏览器里完成登录。', 'info', kind);
+      addLogEntry('正在为新账号打开授权。', 'info', kind);
       try {
-        await desktopApi.addAccount();
+        if (kind === 'cursor') await desktopApi.addCursorAccount();
+        else await desktopApi.addAccount();
         const snapshot = await loadDashboardState(false);
-        if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-        if (snapshot?.oauthStatus) reportOAuthFinished(snapshot.oauthStatus);
+        if (snapshot && kind !== 'cursor') queueQuotaAutoSync(snapshot.accounts);
+        if (productRef.current !== kind) return;
+        if (kind === 'cursor') {
+          reportOAuthFinished(await desktopApi.getCursorOAuthStatus(), 'cursor');
+        } else if (snapshot?.oauthStatus) {
+          reportOAuthFinished(snapshot.oauthStatus, 'codex');
+        }
       } catch (error) {
         const snapshot = await loadDashboardState(false);
-        if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-        if (snapshot?.oauthStatus && !snapshot.oauthStatus.pending) {
-          reportOAuthFinished(snapshot.oauthStatus);
+        if (snapshot && kind !== 'cursor') queueQuotaAutoSync(snapshot.accounts);
+        if (productRef.current !== kind) throw error;
+        const finished = kind === 'cursor'
+          ? await desktopApi.getCursorOAuthStatus().catch(() => null)
+          : snapshot?.oauthStatus;
+        if (finished && !finished.pending) {
+          reportOAuthFinished(finished, kind);
         } else {
           const message = error instanceof Error ? error.message : String(error);
-          addToast(message, 'error');
-          addLogEntry(message, 'error');
+          addToast(message, 'error', kind);
+          addLogEntry(message, 'error', kind);
         }
         throw error;
       }
@@ -811,24 +1061,32 @@ function DashboardApp() {
       ...acc,
       id: `acc_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
     };
-    setAccounts(prev => [...prev, newAcc]);
+    setVisibleAccounts(prev => [...prev, newAcc]);
     addToast(`已成功添加账号 ${acc.email}`, 'success');
   };
 
   const handleReauthorizeAccount = async (id: string) => {
-    if (oauthStatusRef.current?.pending) {
-      addToast('已有授权正在进行，请先完成或取消。', 'warning');
+    const kind = productById(productRef.current).id;
+    if (anyOAuthPending()) {
+      addToast('已有授权正在进行，请先完成或取消。', 'warning', kind);
       throw new Error('已有授权正在进行，请先完成或取消。');
     }
     markOAuthPending(id);
-    addToast('正在打开授权页面，请在浏览器里完成登录。', 'info');
-    addLogEntry('正在打开重新授权。', 'info');
+    addToast('正在打开授权页面，请在浏览器里完成登录。', 'info', kind);
+    addLogEntry('正在打开重新授权。', 'info', kind);
     try {
-      const result = await desktopApi.reauthorizeAccount(id);
+      const result = kind === 'cursor'
+        ? await desktopApi.reauthorizeCursorAccount(id)
+        : await desktopApi.reauthorizeAccount(id);
       const snapshot = await loadDashboardState(false);
-      if (snapshot) queueQuotaAutoSync(snapshot.accounts);
+      if (snapshot && kind !== 'cursor') queueQuotaAutoSync(snapshot.accounts);
+      if (productRef.current !== kind) return;
+      if (kind === 'cursor') {
+        reportOAuthFinished(await desktopApi.getCursorOAuthStatus(), 'cursor');
+        return;
+      }
       if (snapshot?.oauthStatus) {
-        reportOAuthFinished(snapshot.oauthStatus);
+        reportOAuthFinished(snapshot.oauthStatus, 'codex');
         return;
       }
       reportOAuthFinished({
@@ -841,26 +1099,37 @@ function DashboardApp() {
           targetAccountId: result.targetAccountId || id,
         },
         targetAccountId: id,
-      });
+      }, 'codex');
     } catch (error) {
       const snapshot = await loadDashboardState(false);
-      if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-      if (snapshot?.oauthStatus && !snapshot.oauthStatus.pending) {
-        reportOAuthFinished(snapshot.oauthStatus);
+      if (snapshot && kind !== 'cursor') queueQuotaAutoSync(snapshot.accounts);
+      if (productRef.current !== kind) throw error;
+      const finished = kind === 'cursor'
+        ? await desktopApi.getCursorOAuthStatus().catch(() => null)
+        : snapshot?.oauthStatus;
+      if (finished && !finished.pending) {
+        reportOAuthFinished(finished, kind);
       } else {
         const message = error instanceof Error ? error.message : String(error);
-        addToast(message, 'error');
-        addLogEntry(message, 'error');
+        addToast(message, 'error', kind);
+        addLogEntry(message, 'error', kind);
       }
       throw error;
     }
   };
 
   const handleCancelOAuth = async () => {
+    if (productById(productRef.current).id === 'cursor') {
+      await desktopApi.cancelCursorOAuth();
+      const status = await desktopApi.getCursorOAuthStatus();
+      setCursorOAuthStatus(status);
+      reportOAuthFinished(status, 'cursor');
+      return;
+    }
     await desktopApi.cancelOAuth();
     const status = await desktopApi.getOAuthStatus();
     setOAuthStatus(status);
-    reportOAuthFinished(status);
+    reportOAuthFinished(status, 'codex');
   };
 
   const handleCompleteOAuthManually = async (callbackUrl: string) => {
@@ -870,7 +1139,7 @@ function DashboardApp() {
       const status = await desktopApi.getOAuthStatus();
       setOAuthStatus(status);
       await loadDashboardState(false);
-      reportOAuthFinished(status);
+      reportOAuthFinished(status, 'codex');
     }
   };
 
@@ -879,16 +1148,16 @@ function DashboardApp() {
     try {
       if (action === 'adopt') {
         const account = await desktopApi.adoptOfficialAccount();
-        addToast(`已采用官方 Codex 账号：${account.email}`, 'success');
+        addToast(`已采用官方 Codex 账号：${account.email}`, 'success', 'codex');
       } else {
         await desktopApi.reapplyManagedAccount(authState.currentAccountId || null);
-        addToast('管理账号已重新应用到官方 Codex。', 'success');
+        addToast('管理账号已重新应用到官方 Codex。', 'success', 'codex');
       }
       await loadDashboardState(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      addToast(message, 'error');
-      addLogEntry(message, 'error');
+      addToast(message, 'error', 'codex');
+      addLogEntry(message, 'error', 'codex');
     } finally {
       setIsResolvingAuth(false);
     }
@@ -902,61 +1171,85 @@ function DashboardApp() {
       setDeleteTarget(target);
       return;
     }
-    setAccounts(prev => prev.filter(acc => acc.id !== id));
+    setVisibleAccounts(prev => prev.filter(acc => acc.id !== id));
     addToast(`已成功移除账号 ${target.email}`, 'warning');
   };
 
   const confirmDeleteAccount = async () => {
     if (!deleteTarget || isDeletingAccount) return;
     setIsDeletingAccount(true);
+    const kind = productRef.current;
     try {
-      await runAccountOperation(deleteTarget.id, () => desktopApi.deleteAccount(deleteTarget.id));
+      await runAccountOperation(deleteTarget.id, () => (
+        kind === 'cursor'
+          ? desktopApi.deleteCursorAccount(deleteTarget.id)
+          : desktopApi.deleteAccount(deleteTarget.id)
+      ));
       const snapshot = await loadDashboardState(false);
-      if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-      addToast(`已删除 ${deleteTarget.email}`, 'warning');
-      addLogEntry(`已从管理器中删除账号 ${deleteTarget.email}。`, 'warning');
+      if (snapshot && kind !== 'cursor') queueQuotaAutoSync(snapshot.accounts);
+      if (productRef.current !== kind) {
+        setDeleteTarget(null);
+        return;
+      }
+      addToast(`已删除 ${deleteTarget.email}`, 'warning', kind);
+      addLogEntry(`已从管理器中删除账号 ${deleteTarget.email}。`, 'warning', kind);
       setDeleteTarget(null);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      addToast(message, 'error');
-      addLogEntry(message, 'error');
+      if (productRef.current === kind) {
+        const message = error instanceof Error ? error.message : String(error);
+        addToast(message, 'error', kind);
+        addLogEntry(message, 'error', kind);
+      }
     } finally {
       setIsDeletingAccount(false);
     }
   };
 
-  // Switch Current Active Account
-  const handleSwitchCurrentAccount = async (id: string) => {
+  const performAccountSwitch = async (id: string) => {
     if (desktopBridgeAvailable) {
-      if (oauthStatusRef.current?.pending) {
-        addToast('已有授权正在进行，请先完成或取消。', 'warning');
+      const kind = productRef.current;
+      if (anyOAuthPending()) {
+        addToast('已有授权正在进行，请先完成或取消。', 'warning', kind);
         return;
       }
       const selected = accountsRef.current.find(a => a.id === id);
       const isCurrent = !!selected?.isCurrent;
-      addToast(isCurrent ? '正在重新写入官方 Codex，请稍候。' : '正在切换账号，请稍候。', 'info');
+      addToast(
+        kind === 'cursor'
+          ? (isCurrent ? '正在重新写入官方 Cursor，请稍候。' : '正在切换 Cursor 账号，请稍候。')
+          : (isCurrent ? '正在重新写入官方 Codex，请稍候。' : '正在切换账号，请稍候。'),
+        'info',
+        kind,
+      );
       try {
-        await runAccountOperation(id, () => (
-          isCurrent ? desktopApi.reapplyManagedAccount(id) : desktopApi.switchAccount(id)
-        ));
+        const result = await runAccountOperation(id, () => {
+          if (kind === 'cursor') return desktopApi.switchCursorAccount(id);
+          return isCurrent ? desktopApi.reapplyManagedAccount(id) : desktopApi.switchAccount(id);
+        }) as { launched?: boolean; launchError?: string | null } | undefined;
         setSessionSwitchCount(count => count + 1);
         const snapshot = await loadDashboardState(false);
-        if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-        if (isCurrent) {
-          addToast(`已将 Codex 重新登录为 ${selected?.email || id}`, 'success');
-          addLogEntry(`已将 Codex 重新登录为 ${selected?.email || id}`, 'success');
+        if (snapshot && kind !== 'cursor') queueQuotaAutoSync(snapshot.accounts);
+        if (productRef.current !== kind) return;
+        if (kind === 'cursor' && result?.launchError) {
+          addToast(result.launchError, 'warning', kind);
+          addLogEntry(`${selected?.email || id}：${result.launchError}`, 'warning', kind);
+        } else if (isCurrent) {
+          const clientName = kind === 'cursor' ? 'Cursor' : 'Codex';
+          addToast(`已将 ${clientName} 重新登录为 ${selected?.email || id}`, 'success', kind);
+          addLogEntry(`已将 ${clientName} 重新登录为 ${selected?.email || id}`, 'success', kind);
         } else {
-          addToast(`当前账号已切换至 ${selected?.email || id}`, 'success');
-          addLogEntry(`已切换当前账号：${selected?.email || id}`, 'success');
+          addToast(`当前账号已切换至 ${selected?.email || id}`, 'success', kind);
+          addLogEntry(`已切换当前账号：${selected?.email || id}`, 'success', kind);
         }
       } catch (error) {
+        if (productRef.current !== kind) return;
         const message = error instanceof Error ? error.message : String(error);
-        addToast(message, 'error');
-        addLogEntry(message, 'error');
+        addToast(message, 'error', kind);
+        addLogEntry(message, 'error', kind);
       }
       return;
     }
-    setAccounts(prev => prev.map(acc => ({
+    setVisibleAccounts(prev => prev.map(acc => ({
       ...acc,
       isCurrent: acc.id === id,
     })));
@@ -964,8 +1257,30 @@ function DashboardApp() {
     const selected = accounts.find(a => a.id === id);
     if (selected) {
       addToast(selected.isCurrent
-        ? `已将 Codex 重新登录为 ${selected.email}`
+        ? `已将 ${productRef.current === 'cursor' ? 'Cursor' : 'Codex'} 重新登录为 ${selected.email}`
         : `当前主账号已切换至 ${selected.email}`, 'success');
+    }
+  };
+
+  const handleSwitchCurrentAccount = async (id: string) => {
+    if (desktopBridgeAvailable && productRef.current === 'cursor') {
+      const pending = accountsRef.current.find(a => a.id === id);
+      if (!pending) return;
+      setSwitchTarget(pending);
+      return;
+    }
+    await performAccountSwitch(id);
+  };
+
+  const confirmSwitchAccount = async () => {
+    if (!switchTarget || isConfirmingSwitch) return;
+    const id = switchTarget.id;
+    setIsConfirmingSwitch(true);
+    try {
+      await performAccountSwitch(id);
+    } finally {
+      setIsConfirmingSwitch(false);
+      setSwitchTarget(null);
     }
   };
 
@@ -976,6 +1291,7 @@ function DashboardApp() {
       addToast(
         selected.status === 'BANNED' ? '账号已封号，无法加入自动切号' : '该账号需要重新授权后才能加入自动切号',
         'info',
+        'codex',
       );
       return;
     }
@@ -987,7 +1303,7 @@ function DashboardApp() {
       const currentSelected = selectedAccountIdsRef.current;
       const nextSelected = currentSelected.includes(id)
         ? currentSelected.filter(item => item !== id)
-        : pruneAutoSwitchAccountIds([...currentSelected, id], accountsRef.current);
+        : pruneAutoSwitchAccountIds([...currentSelected, id], codexAccountsRef.current);
       const nextConfig: DesktopAutoSwitchConfig = {
         ...autoSwitchConfigRef.current,
         account_scope_mode: 'selected',
@@ -1006,10 +1322,10 @@ function DashboardApp() {
     setSelectedAccountIds(prev => {
       const isSelected = prev.includes(id);
       if (isSelected) {
-        addLogEntry(`已将 ${selected?.name} 移出自动切号轮换范围。`, 'warning');
+        addLogEntry(`已将 ${selected?.email || selected?.name} 移出自动切号轮换范围。`, 'warning');
         return prev.filter(item => item !== id);
       } else {
-        addLogEntry(`已将 ${selected?.name} 加入自动切号轮换范围。`, 'info');
+        addLogEntry(`已将 ${selected?.email || selected?.name} 加入自动切号轮换范围。`, 'info');
         return [...prev, id];
       }
     });
@@ -1019,11 +1335,20 @@ function DashboardApp() {
     const revision = ++configSaveRevision.current;
     const prunedConfig: DesktopAutoSwitchConfig = {
       ...nextConfig,
-      selected_account_ids: pruneAutoSwitchAccountIds(nextConfig.selected_account_ids || [], accountsRef.current),
+      selected_account_ids: pruneAutoSwitchAccountIds(nextConfig.selected_account_ids || [], codexAccountsRef.current),
     };
     autoSwitchConfigRef.current = prunedConfig;
     setAutoSwitchConfig(prunedConfig);
-    setSettings(settingsFromDesktopState(prunedConfig, appInfo, codexStatus, updateStatus || null));
+    setSettings((prev) => settingsFromDesktopState(
+      prunedConfig,
+      appInfo,
+      codexStatus,
+      updateStatus || null,
+      cursorStatus || {
+        installed: prev.cursorDetected,
+        vscdbPresent: prev.cursorHasLocalLogin,
+      },
+    ));
     const saveOperation = configSaveQueue.current
       .catch(() => {})
       .then(() => desktopApi.saveAutoSwitchConfig(prunedConfig));
@@ -1036,8 +1361,8 @@ function DashboardApp() {
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      addToast(message, 'error');
-      addLogEntry(message, 'error');
+      addToast(message, 'error', 'codex');
+      addLogEntry(message, 'error', 'codex');
       if (revision === configSaveRevision.current) {
         await loadDashboardState(false);
       }
@@ -1049,8 +1374,8 @@ function DashboardApp() {
     if (!desktopBridgeAvailable) {
       setSettings(prev => {
         const updated = !prev.globalSwitch;
-        addToast(`全局切号已${updated ? '启用' : '禁用'}`, updated ? 'success' : 'warning');
-        addLogEntry(`全局自动切号已${updated ? '启用' : '禁用'}。`, 'info');
+        addToast(`全局切号已${updated ? '启用' : '禁用'}`, updated ? 'success' : 'warning', 'codex');
+        addLogEntry(`全局自动切号已${updated ? '启用' : '禁用'}。`, 'info', 'codex');
         return { ...prev, globalSwitch: updated };
       });
       return;
@@ -1063,8 +1388,8 @@ function DashboardApp() {
     const enabled = nextConfig.enabled;
     const saved = await saveAutoSwitchConfig(nextConfig);
     if (saved) {
-      addToast(`全局切号已${enabled ? '启用' : '禁用'}`, enabled ? 'success' : 'warning');
-      addLogEntry(`全局自动切号已${enabled ? '启用' : '禁用'}。`, 'info');
+      addToast(`全局切号已${enabled ? '启用' : '禁用'}`, enabled ? 'success' : 'warning', 'codex');
+      addLogEntry(`全局自动切号已${enabled ? '启用' : '禁用'}。`, 'info', 'codex');
     }
   };
 
@@ -1090,37 +1415,92 @@ function DashboardApp() {
 
   const handleBatchVerifyTokens = async () => {
     if (!desktopBridgeAvailable) return;
-    const summary = await desktopApi.refreshAllTokens(false);
+    let cursorError: string | null = null;
+    const [codex, cursor] = await Promise.all([
+      desktopApi.refreshAllTokens(false),
+      desktopApi.refreshAllCursorTokens(false).catch((error) => {
+        cursorError = error instanceof Error ? error.message : String(error);
+        return { results: [] };
+      }),
+    ]);
     await loadDashboardState(false);
-    const total = summary.results.length;
-    const { passed, reauthSkipped, bannedSkipped, failed } = summarizeTokenCheckResults(summary.results);
-    if (failed || bannedSkipped) {
-      const parts = [`${passed}/${total} 通过`];
-      if (reauthSkipped) parts.push(`${reauthSkipped} 个需重新授权`);
-      if (bannedSkipped) parts.push(`${bannedSkipped} 个已封号`);
-      if (failed) parts.push(`${failed} 个失败`);
-      const message = `令牌检查完成：${parts.join('，')}。`;
-      addToast(message, 'warning');
-      addLogEntry(message, 'warning');
+    if (cursorError) {
+      addToast(cursorError, 'error', 'cursor');
+      addLogEntry(cursorError, 'error', 'cursor');
+    }
+    const summaries = [
+      { kind: 'codex' as const, label: 'Codex', results: codex?.results || [] },
+      { kind: 'cursor' as const, label: 'Cursor', results: cursor?.results || [] },
+    ].filter((item) => item.results.length > 0);
+    if (summaries.length === 0) {
+      if (!cursorError) addToast('没有可检查的账号', 'info');
       return;
     }
-    if (reauthSkipped) {
-      const message = `令牌检查完成：${passed}/${total} 通过，${reauthSkipped} 个需重新授权。`;
-      addToast(message, 'warning');
-      addLogEntry(message, 'warning');
-      return;
+    for (const item of summaries) {
+      const { message, tone } = formatTokenCheckMessage(item.results, { product: item.kind });
+      const text = summaries.length > 1 ? `${item.label} ${message}` : message;
+      addToast(text, tone, item.kind);
+      addLogEntry(text, tone === 'info' ? 'info' : tone, item.kind);
     }
-    const message = total > 0 ? `已检查 ${total} 个账号的令牌` : '没有可检查的账号';
-    addToast(message, total > 0 ? 'success' : 'info');
-    addLogEntry(message, total > 0 ? 'success' : 'info');
   };
 
   const handleDetectClient = async () => {
     if (!desktopBridgeAvailable) return;
-    const status = await desktopApi.getCodexStatus();
+    const [status, cursor] = await Promise.all([
+      desktopApi.getCodexStatus(),
+      desktopApi.getCursorStatus().catch(() => null),
+    ]);
     setCodexStatus(status);
-    setSettings(prev => ({ ...prev, clientDetected: !!status?.installed }));
-    addToast(status?.installed ? '已检测到官方 Codex' : '未检测到官方 Codex', status?.installed ? 'success' : 'warning');
+    setCursorStatus(cursor);
+    setSettings(prev => ({
+      ...prev,
+      clientDetected: !!status?.installed,
+      cursorDetected: !!cursor?.installed,
+      cursorHasLocalLogin: !!cursor?.vscdbPresent,
+    }));
+    const cursorLabel = cursor?.installed ? '已安装' : cursor?.vscdbPresent ? '有本机登录' : '未安装';
+    addToast(
+      `Codex ${status?.installed ? '已安装' : '未安装'}，Cursor ${cursorLabel}`,
+      status?.installed || cursor?.installed || cursor?.vscdbPresent ? 'success' : 'warning',
+    );
+  };
+
+  const handleImportLocalAccount = async () => {
+    if (!desktopBridgeAvailable) return;
+    const kind = productRef.current;
+    if (anyOAuthPending()) {
+      addToast('已有授权正在进行，请先完成或取消。', 'warning', kind);
+      throw new Error('已有授权正在进行，请先完成或取消。');
+    }
+    if (kind === 'cursor') {
+      const result = await desktopApi.importLocalCursorAccount();
+      if (!result?.found) {
+        await loadDashboardState(false);
+        if (productRef.current !== kind) throw new Error('本机没有已登录的 Cursor');
+        addToast('本机没有已登录的 Cursor', 'warning', 'cursor');
+        throw new Error('本机没有已登录的 Cursor');
+      }
+      if (result.account?.id && productRef.current === kind) {
+        try { await desktopApi.refreshCursorQuota(result.account.id); } catch {}
+      }
+      await loadDashboardState(false);
+      if (productRef.current !== kind) return;
+      if (result.stalePossible) {
+        addToast('已导入。Cursor 开着时导入的可能不是最新登录。', 'warning', 'cursor');
+      } else {
+        addToast(`已导入 ${result.account?.email || 'Cursor 账号'}`, 'success', 'cursor');
+      }
+      addLogEntry(`已从本机导入 Cursor 账号 ${result.account?.email || ''}`, 'success', 'cursor');
+      return;
+    }
+    const account = await desktopApi.adoptOfficialAccount();
+    if (account?.id && productRef.current === kind) {
+      try { await desktopApi.refreshQuota(account.id); } catch {}
+    }
+    await loadDashboardState(false);
+    if (productRef.current !== kind) return;
+    addToast(`已导入 ${account?.email || 'Codex 账号'}`, 'success', 'codex');
+    addLogEntry(`已从本机导入 Codex 账号 ${account?.email || ''}`, 'success', 'codex');
   };
 
   const handleCheckUpdates = async () => {
@@ -1170,9 +1550,9 @@ function DashboardApp() {
     if (snapshot) queueQuotaAutoSync(snapshot.accounts);
     if (result?.switched) {
       setSessionSwitchCount(count => count + 1);
-      addToast(`已切换至 ${result.to?.email || '新账号'}`, 'success');
+      addToast(`已切换至 ${result.to?.email || '新账号'}`, 'success', 'codex');
     } else if (result?.reason === 'disabled') {
-      addToast('额度已低于阈值，但全局开关已关闭，未切换账号。', 'warning');
+      addToast('额度已低于阈值，但全局开关已关闭，未切换账号。', 'warning', 'codex');
     }
     return result;
   };
@@ -1187,7 +1567,7 @@ function DashboardApp() {
       const existing = autoSwitchConfigRef.current.selected_account_ids || [];
       const seeded = pruneAutoSwitchAccountIds(
         existing.length > 0 ? existing : selectedAccountIdsRef.current.filter((id) => String(id || '').trim() !== ''),
-        accountsRef.current,
+        codexAccountsRef.current,
       );
       nextConfig.selected_account_ids = seeded;
       selectedAccountIdsRef.current = seeded;
@@ -1197,7 +1577,17 @@ function DashboardApp() {
   };
 
   const authBannerKey = `${authState.status}:${authState.currentAccountId || ''}:${authState.officialIdentity?.email || ''}`;
-  const showAuthBanner = desktopBridgeAvailable && authState.requiresResolution && authBannerDismissedKey !== authBannerKey;
+  const showAuthBanner = desktopBridgeAvailable && productById(product).features.autoSwitch && authState.requiresResolution && authBannerDismissedKey !== authBannerKey;
+
+  const handleProductChange = (next: ProductKind) => {
+    persistProduct(next);
+    if (!productById(next).features.autoSwitch && activeTab === 'autoswitch') setActiveTab('accounts');
+    setAccountsFilterTab('all');
+    setSwitchTarget(null);
+    setIsConfirmingSwitch(false);
+    setDeleteTarget(null);
+    setIsRefreshingAll(refreshAllKindRef.current === next);
+  };
 
   if (!isAuthenticated) {
     return <Login onLogin={handleLogin} userEmail={userEmail} appVersion={settings.version} showDemoShortcuts={!desktopBridgeAvailable && !wantsDesktopLoginPreview()} />;
@@ -1249,9 +1639,10 @@ function DashboardApp() {
       {/* Main Sidebar Component */}
       <Sidebar 
         activeTab={activeTab} 
-        setActiveTab={setActiveTab} 
+        setActiveTab={setActiveTab}
+        product={product}
+        onProductChange={handleProductChange}
         daemonState={daemonState}
-        handlingCount={accounts.filter(needsHandling).length}
         onShowSupport={() => setShowSupport(true)}
         onShowUpdates={() => setShowUpdates(true)}
       />
@@ -1310,7 +1701,7 @@ function DashboardApp() {
                     <LoaderCircle className="mb-4 h-8 w-8 animate-spin text-accent" />
                     <h2 className="text-base font-bold text-white">正在加载账号数据</h2>
                     <p className="mt-2 text-xs leading-5 text-label-2">
-                      正在读取本地账号、额度状态与守护进程设置。
+                      正在读取本地账号、额度状态与 Daemon 设置。
                     </p>
                   </div>
                 </div>
@@ -1346,7 +1737,9 @@ function DashboardApp() {
               {dashboardLoadState === 'ready' && (
                 <>
               {activeTab === 'quotas' && (
-                <QuotasView 
+                <QuotasView
+                  key={`quotas-${product}`}
+                  product={product}
                   accounts={accounts}
                   onRefreshAccount={handleRefreshAccount}
                   onRefreshToken={desktopBridgeAvailable ? handleRefreshToken : undefined}
@@ -1360,7 +1753,7 @@ function DashboardApp() {
                 />
               )}
 
-              {activeTab === 'autoswitch' && (
+              {activeTab === 'autoswitch' && productById(product).features.autoSwitch && (
                 <AutoSwitchView 
                   accounts={accounts}
                   logs={logs}
@@ -1380,7 +1773,9 @@ function DashboardApp() {
               )}
 
               {activeTab === 'accounts' && (
-                <AccountsView 
+                <AccountsView
+                  key={`accounts-${product}`}
+                  product={product}
                   accounts={accounts}
                   filterTab={accountsFilterTab}
                   onFilterTabChange={setAccountsFilterTab}
@@ -1390,17 +1785,20 @@ function DashboardApp() {
                   onRefreshAccount={handleRefreshAccount}
                   onReauthorizeAccount={desktopBridgeAvailable ? handleReauthorizeAccount : undefined}
                   onCancelOAuth={desktopBridgeAvailable ? handleCancelOAuth : undefined}
-                  onCompleteOAuthManually={desktopBridgeAvailable ? handleCompleteOAuthManually : undefined}
+                  onCompleteOAuthManually={productById(product).features.oauthPasteCallback && desktopBridgeAvailable ? handleCompleteOAuthManually : undefined}
+                  onImportLocal={desktopBridgeAvailable && productById(product).features.localImport ? handleImportLocalAccount : undefined}
                   onAddLog={addLogEntry}
                   oauthMode={desktopBridgeAvailable}
-                  oauthStatus={oauthStatus}
-                  authState={desktopBridgeAvailable ? authState : null}
+                  oauthStatus={productById(product).id === 'cursor' ? cursorOAuthStatus : oauthStatus}
+                  actionsLocked={productById(product).id === 'cursor' ? !!cursorOAuthStatus?.pending : !!oauthStatus?.pending}
+                  authState={desktopBridgeAvailable && productById(product).features.autoSwitch ? authState : null}
                   onOpenModal={() => setShowNotifications(false)}
                 />
               )}
 
               {activeTab === 'settings' && (
                 <SettingsView 
+                  product={product}
                   settings={settings}
                   daemonState={daemonState}
                   onToggleDaemon={handleToggleDaemon}
@@ -1413,12 +1811,12 @@ function DashboardApp() {
                   onInstallUpdate={desktopBridgeAvailable ? handleInstallUpdate : undefined}
                   canInstallUpdate={updateStatus?.status === 'downloaded'}
                   updateEnabled={!!appInfo?.updateEnabled}
-                  accountCount={accounts.length}
+                  tokenAccountsByProduct={{ codex: codexAccounts, cursor: cursorAccounts }}
                   repositoryUrl={appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}
                   onOpenLogs={desktopBridgeAvailable ? async () => { await desktopApi.openLogs(); } : undefined}
                   onShowFloatWindow={async () => {
                     if (!desktopBridgeAvailable) return;
-                    const state = await desktopApi.showFloatWindow();
+                    const state = await desktopApi.showFloatWindow(product);
                     if (state?.visible) {
                       addToast('桌面额度已打开。看不见时点任务栏或右上角。', 'info');
                       return;
@@ -1489,6 +1887,53 @@ function DashboardApp() {
                 id="delete-confirm-accept"
               >
                 {isDeletingAccount ? '删除中...' : '确认删除'}
+              </button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+      {switchTarget && (
+        <motion.div
+          className="app-dialog-overlay bg-black/50"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.15 }}
+        >
+          <motion.div
+            initial={{ opacity: 0, scale: 0.94 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.96 }}
+            transition={{ duration: 0.16, ease: 'easeOut' }}
+            className="glass-card glass-sheet w-full max-w-sm rounded-2xl border border-sep p-7 text-left shadow-2xl"
+            id="cursor-switch-confirm-modal"
+            role="alertdialog"
+            aria-modal="true"
+          >
+            <ArrowLeftRight className="mb-4 h-9 w-9 text-accent" />
+            <h3 className="text-lg font-bold text-white">写入官方 Cursor</h3>
+            <p className="mt-2 text-xs leading-relaxed text-label-2">
+              会先关掉正在运行的官方 Cursor，再把 <strong className="text-white">{switchTarget.email}</strong> 写进去并重新打开。未保存的编辑可能会丢。
+            </p>
+            <div className="mt-6 grid grid-cols-2 gap-3">
+              <button
+                onClick={() => { if (!isConfirmingSwitch) setSwitchTarget(null); }}
+                disabled={isConfirmingSwitch}
+                className="rounded-xl bg-fill hover:bg-fill-2 px-4 py-3 text-xs font-bold text-label disabled:opacity-50 cursor-pointer"
+                id="cursor-switch-confirm-cancel"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => void confirmSwitchAccount()}
+                disabled={isConfirmingSwitch}
+                className="rounded-xl border border-accent/30 bg-accent/15 px-4 py-3 text-xs font-bold text-accent hover:bg-accent/25 disabled:opacity-50 cursor-pointer"
+                id="cursor-switch-confirm-accept"
+              >
+                {isConfirmingSwitch ? '切换中...' : '确认切换'}
               </button>
             </div>
           </motion.div>
@@ -1586,9 +2031,9 @@ function DashboardApp() {
               </button>
 
               <HelpCircle className="w-12 h-12 text-accent mb-4" />
-              <h3 className="text-lg font-bold tracking-tight mb-2 font-sans">客户服务</h3>
+              <h3 className="text-lg font-bold tracking-tight mb-2 font-sans">帮助</h3>
               <p className="text-xs text-label-2 leading-relaxed mb-6 font-sans">
-                如果您在使用 Codex 账号管理器时遇到配额验证、客户端连接或服务问题，请通过 GitHub Issues 提交可复现信息。
+                遇到额度、登录或客户端问题时，请到 GitHub 提交 Issue。
               </p>
 
               <div className="mb-6" id="support-channels-list">
@@ -1599,11 +2044,11 @@ function DashboardApp() {
                     className="text-accent cursor-pointer"
                     onClick={() => void handleOpenExternal(`${appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}/issues`)}
                   >
-                    打开 Issues
+                    去提交
                   </button>
                 </div>
                 <p className="mt-2 px-1 text-[11px] text-label-3 leading-5">
-                  支持方式：社区协助，尽力而为
+                  社区协助，尽力而为
                 </p>
               </div>
 
@@ -1611,7 +2056,7 @@ function DashboardApp() {
                 onClick={() => setShowSupport(false)}
                 className="w-full py-3 bg-accent/12 hover:bg-accent/20 border border-accent/20 text-accent hover:text-accent-hi rounded-xl text-xs font-bold transition-all cursor-pointer"
               >
-                好的，我知道了
+                知道了
               </button>
             </motion.div>
           </motion.div>
@@ -1653,10 +2098,11 @@ function DashboardApp() {
                 <div>
                   <h4 className="font-bold text-white mb-1">本轮打磨</h4>
                   <ul className="list-disc pl-4 space-y-1 text-label-2 text-[11px]">
-                    <li>需要处理的账号会在侧栏和账号页标出来；配额卡上也能直接重新授权。</li>
-                    <li>顶栏显示当前 Codex 邮箱，点击即可复制。</li>
-                    <li>空的「更多」菜单已去掉；「立即检查」改成次按钮，避免误切号。</li>
-                    <li>额度检查仍能区分已封号、需重新授权、额度限流和这次没查清。</li>
+                    <li>侧栏名称改回 Account Manager。</li>
+                    <li>额度稍后重试不再当成 Daemon 失败，设置里也不再挂着警告。</li>
+                    <li>Cursor 额度条和小窗统一叫 Auto，不再写 Auto + Composer。</li>
+                    <li>帮助不再要求提交可复现信息，入口改成去提交。</li>
+                    <li>需重新授权的账号不再重复写一整句说明。</li>
                   </ul>
                 </div>
                 <div>
@@ -1673,7 +2119,7 @@ function DashboardApp() {
                 onClick={() => setShowUpdates(false)}
                 className="w-full py-3 bg-accent/12 hover:bg-accent/20 border border-accent/20 text-accent hover:text-accent-hi rounded-xl text-xs font-bold transition-all cursor-pointer"
               >
-                确认版本
+                知道了
               </button>
             </motion.div>
           </motion.div>

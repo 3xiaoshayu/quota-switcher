@@ -2,7 +2,7 @@
 
 # Codex Account Manager
 
-多个 Codex 账号，一个窗口里照看。额度、身份和切号都在本地完成。
+多个 Codex 和 Cursor 账号，一个窗口里照看。额度、身份和切号都在本地完成。
 
 [![Release](https://img.shields.io/github/v/release/3xiaoshayu/codex-account-manager?include_prereleases&sort=semver&label=release)](https://github.com/3xiaoshayu/codex-account-manager/releases)
 [![CI](https://github.com/3xiaoshayu/codex-account-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/3xiaoshayu/codex-account-manager/actions/workflows/ci.yml)
@@ -24,9 +24,9 @@
 
 ## 这是什么
 
-Codex 多号之后，看剩余额度和换身份都会变成一件琐事。这个应用把它们收进同一个
-Windows 窗口：每个账号一张卡片，额度一眼能看完；要换号时，由它去处理登录态和
-官方客户端。
+Codex 和 Cursor 多号之后，看剩余额度和换身份都会变成一件琐事。这个应用把它们
+收进同一个 Windows 窗口：每个账号一张卡片，额度一眼能看完；要换号时，由它去
+处理登录态和官方客户端。侧栏可在两个产品之间切换。
 
 它不会改任何账号的额度上限。自动切号只是在你保存的账号之间选一个还能用的。
 
@@ -34,7 +34,7 @@ Windows 窗口：每个账号一张卡片，额度一眼能看完；要换号时
 
 - **账号卡片** — 5 小时额度、周额度、重置时间和令牌剩余时间都在卡片上。可以搜索、筛选，也可以添加、刷新、切换、重新授权或删除。顶栏会显示当前账号邮箱，点击即可复制。
 - **配额总览** — 所有账号的用量放在一页。读不到额度时显示为未知，不会写成 0。
-- **自动切号** — 本地守护进程按你设的阈值换到下一个可用账号。关掉主窗口也不会停。
+- **自动切号** — 本地守护进程按你设的阈值换到下一个可用 Codex 账号。关掉主窗口也不会停。Cursor 暂不参与自动切号。
 - **关窗进托盘** — 点叉是收到托盘。左键托盘图标可再打开窗口；要退出，用托盘菜单里的「退出」。
 - **桌面额度镜** — 桌面上的小环表，中间是更紧的那档额度。可以翻页预览、置顶、刷新，也可以从这里切号。
 - **只留在本机** — 账号和 token 存在这台电脑上，token 用 Windows DPAPI 加密。没有遥测，也没有自建云。

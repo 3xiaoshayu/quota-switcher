@@ -45,18 +45,29 @@ function floatStatePath(userDataPath) {
     return path.join(userDataPath, "float-window.json");
 }
 
+function normalizeFloatProduct(value) {
+    return value === "cursor" ? "cursor" : "codex";
+}
+
+function floatWindowTitle(product) {
+    return normalizeFloatProduct(product) === "cursor" ? "Cursor 桌面额度" : "Codex 桌面额度";
+}
+
 function loadFloatState(userDataPath) {
     try {
         const state = JSON.parse(fs.readFileSync(floatStatePath(userDataPath), "utf8"));
-        if (!state || typeof state !== "object") return { alwaysOnTop: false, x: null, y: null, height: null };
+        if (!state || typeof state !== "object") {
+            return { alwaysOnTop: false, x: null, y: null, height: null, product: "codex" };
+        }
         return {
             alwaysOnTop: !!state.alwaysOnTop,
             x: Number.isFinite(state.x) ? state.x : null,
             y: Number.isFinite(state.y) ? state.y : null,
             height: Number.isFinite(state.height) ? clampFloatHeight(state.height) : null,
+            product: normalizeFloatProduct(state.product),
         };
     } catch {
-        return { alwaysOnTop: false, x: null, y: null, height: null };
+        return { alwaysOnTop: false, x: null, y: null, height: null, product: "codex" };
     }
 }
 
@@ -77,8 +88,12 @@ function createFloatWindowController(options) {
     let persistTimer = null;
     let showRequested = false;
     let alwaysOnTop = false;
+    let activeProduct = "codex";
 
     const persistPath = () => floatStatePath(app.getPath("userData"));
+    try {
+        activeProduct = normalizeFloatProduct(loadFloatState(app.getPath("userData")).product);
+    } catch {}
 
     const persistNow = (extra = {}) => {
         if (!writeJsonAtomic) return;
@@ -92,6 +107,7 @@ function createFloatWindowController(options) {
                 x: bounds ? bounds.x : current.x,
                 y: bounds ? bounds.y : current.y,
                 height: bounds ? clampFloatHeight(bounds.height) : (current.height || FLOAT_HEIGHT),
+                product: activeProduct,
                 ...extra,
             }, { backup: false });
         } catch {}
@@ -136,6 +152,20 @@ function createFloatWindowController(options) {
         else win.setAlwaysOnTop(false);
     };
 
+    const notifyProduct = (win) => {
+        if (!win || win.isDestroyed() || !win.webContents) return;
+        if (typeof win.setTitle === "function") win.setTitle(floatWindowTitle(activeProduct));
+        if (typeof win.webContents.send === "function") {
+            win.webContents.send("float:product", activeProduct);
+        }
+    };
+
+    const applyProduct = (product) => {
+        activeProduct = normalizeFloatProduct(product);
+        if (floatWindow && !floatWindow.isDestroyed()) notifyProduct(floatWindow);
+        persistNow({ product: activeProduct });
+    };
+
     const presentWindow = (win) => {
         if (!showRequested || !win || win.isDestroyed()) return;
         const saved = loadFloatState(app.getPath("userData"));
@@ -178,6 +208,7 @@ function createFloatWindowController(options) {
 
         const saved = loadFloatState(app.getPath("userData"));
         alwaysOnTop = !!saved.alwaysOnTop;
+        activeProduct = normalizeFloatProduct(saved.product);
         const bounds = resolveBounds(saved);
 
         const win = new BrowserWindow({
@@ -198,7 +229,7 @@ function createFloatWindowController(options) {
             autoHideMenuBar: true,
             show: false,
             alwaysOnTop,
-            title: "Codex 桌面额度",
+            title: floatWindowTitle(activeProduct),
             icon: iconPath,
             webPreferences: {
                 preload: preloadPath,
@@ -231,7 +262,10 @@ function createFloatWindowController(options) {
         });
         win.once("ready-to-show", () => presentWindow(win));
         if (typeof win.webContents?.once === "function") {
-            win.webContents.once("did-finish-load", () => presentWindow(win));
+            win.webContents.once("did-finish-load", () => {
+                notifyProduct(win);
+                presentWindow(win);
+            });
         }
 
         win.loadFile(rendererHtml, { hash: FLOAT_HASH })
@@ -242,9 +276,15 @@ function createFloatWindowController(options) {
     };
 
     return {
-        show() {
+        show(product) {
             showRequested = true;
-            presentWindow(ensureWindow());
+            const win = ensureWindow();
+            if (product != null) applyProduct(product);
+            else notifyProduct(win);
+            presentWindow(win);
+        },
+        setProduct(product) {
+            applyProduct(product);
         },
         hide() {
             showRequested = false;
@@ -275,16 +315,17 @@ function createFloatWindowController(options) {
         },
         getState() {
             const visible = !!(floatWindow && !floatWindow.isDestroyed() && floatWindow.isVisible());
-            return { visible, alwaysOnTop };
+            return { visible, alwaysOnTop, product: activeProduct };
         },
         inspect() {
             if (!floatWindow || floatWindow.isDestroyed()) {
-                return { exists: false, visible: false, alwaysOnTop };
+                return { exists: false, visible: false, alwaysOnTop, product: activeProduct };
             }
             return {
                 exists: true,
                 visible: floatWindow.isVisible(),
                 alwaysOnTop,
+                product: activeProduct,
                 bounds: floatWindow.getBounds(),
                 url: floatWindow.webContents.getURL(),
             };
@@ -319,5 +360,6 @@ module.exports = {
     floatBoundsVisible,
     defaultFloatPosition,
     loadFloatState,
+    normalizeFloatProduct,
     createFloatWindowController,
 };

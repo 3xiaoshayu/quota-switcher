@@ -1,4 +1,4 @@
-const { b64url, sha256hex, codeChallenge, ts, tsIso, buildId, jwtPayload, jwtExp, isTokenExpired, extractChatgptAccountId, extractChatgptOrganizationId } = require("./crypto-utils");
+const { b64url, sha256hex, codeChallenge, ts, tsIso, buildId, buildCursorId, jwtPayload, jwtExp, isTokenExpired, extractChatgptAccountId, extractChatgptOrganizationId, extractCursorWorkosUserId } = require("./crypto-utils");
 const { parseTsStr } = require("./time-utils");
 const { httpJson, buildCodexHeaders, extractErrorCode } = require("./http-client");
 const { setSecretCodec, protectData, unprotectData, ensureDir, normalizeAccountId, accountFilePath, loadIdx, saveIdx, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct, getStorageDiagnostics, rebuildIndex } = require("./storage");
@@ -14,10 +14,19 @@ const { withAccountLock, withAccountLocks } = require("./operation-locks");
 const { metricCrossedThreshold, accountMustLeave, buildSwitchCandidate, pickBestCandidate, resolveMonitoredIds, autoSwitchTick } = require("./auto-switch");
 const { runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes } = require("./daemon");
 const { getCodexInstallationStatus, getCodexInstallationStatusAsync, assertOfficialCodexInstalled, assertOfficialCodexInstalledAsync } = require("./codex-installation");
+const { listCursorAccts, loadCursorAcct, saveCursorAcct, currentCursorAcct, deleteCursorAcct, loadCursorIdx } = require("./cursor-storage");
+const { importLocalCursorAccount, upsertCursorAccount, accountFromCursorTokens, authFromLocalValues, syncCurrentCursorFromOfficial } = require("./cursor-local");
+const { doCursorSwitch } = require("./cursor-switch");
+const { refreshCursorQuota, parseCursorUsage, buildCursorUsageCookie } = require("./cursor-quota");
+const { refreshCursorToken, refreshAllCursorTokens } = require("./cursor-token");
+const { cursorLoginFlow, cancelCursorOAuth, discardPendingCursorOAuth, getCursorOAuthStatus, restorePendingCursorOAuth } = require("./cursor-oauth");
+const { getCursorInstallationStatus, getCursorInstallationStatusAsync, assertOfficialCursorInstalled } = require("./cursor-install");
+const { setCursorRuntimeForTests, setCursorOpenUrlHandler } = require("./cursor-runtime");
+const { readCursorAuth, writeCursorAuth, hasPendingWal, waitForWalToClear } = require("./cursor-db");
 
 module.exports = {
   // crypto-utils
-  b64url, sha256hex, codeChallenge, ts, tsIso, buildId, jwtPayload, jwtExp, isTokenExpired, extractChatgptAccountId, extractChatgptOrganizationId,
+  b64url, sha256hex, codeChallenge, ts, tsIso, buildId, buildCursorId, jwtPayload, jwtExp, isTokenExpired, extractChatgptAccountId, extractChatgptOrganizationId, extractCursorWorkosUserId,
   // time-utils
   parseTsStr,
   // http-client
@@ -47,4 +56,10 @@ module.exports = {
   runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes,
   // codex installation
   getCodexInstallationStatus, getCodexInstallationStatusAsync, assertOfficialCodexInstalled, assertOfficialCodexInstalledAsync,
+  listCursorAccts, loadCursorAcct, saveCursorAcct, currentCursorAcct, deleteCursorAcct, loadCursorIdx,
+  importLocalCursorAccount, upsertCursorAccount, accountFromCursorTokens, authFromLocalValues, syncCurrentCursorFromOfficial,
+  doCursorSwitch, refreshCursorQuota, parseCursorUsage, buildCursorUsageCookie, refreshCursorToken, refreshAllCursorTokens,
+  cursorLoginFlow, cancelCursorOAuth, discardPendingCursorOAuth, getCursorOAuthStatus, restorePendingCursorOAuth,
+  getCursorInstallationStatus, getCursorInstallationStatusAsync, assertOfficialCursorInstalled,
+  setCursorRuntimeForTests, setCursorOpenUrlHandler, readCursorAuth, writeCursorAuth, hasPendingWal, waitForWalToClear,
 };

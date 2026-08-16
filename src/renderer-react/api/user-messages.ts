@@ -5,7 +5,7 @@ const RULES: Array<{ test: RegExp; to: string }> = [
   { test: /is banned and cannot be switched/i, to: '账号已封号，无法切换' },
   { test: /is banned and token refresh is skipped/i, to: '账号已封号，不再刷新令牌' },
   { test: /requires reauthorization before it can be switched/i, to: '该账号需要重新授权后才能切换' },
-  { test: /requires reauthorization before tokens can be refreshed/i, to: '该账号需要重新授权后才能刷新 Token' },
+  { test: /requires reauthorization before tokens can be refreshed/i, to: '该账号需要重新授权后才能刷新令牌' },
   { test: /requires reauthorization before quotas can be refreshed/i, to: '该账号需要重新授权后才能刷新额度' },
   { test: /requires reauthorization before/i, to: '该账号需要重新授权后才能继续操作' },
   { test: /has no refresh token and must be reauthorized/i, to: '该账号没有刷新令牌，请重新授权' },
@@ -19,13 +19,22 @@ const RULES: Array<{ test: RegExp; to: string }> = [
   { test: /Automatic quota sync is paused/i, to: '请先处理官方登录后再自动同步额度' },
   { test: /Quota authorization could not be repaired/i, to: '额度授权无法修复，刷新令牌已失效，请重新授权' },
   { test: /refresh_token_invalidated|invalid_refresh_token|invalid_grant/i, to: '刷新令牌已失效，请重新授权' },
-  { test: /Token 已过期且刷新失败/i, to: 'Token 已过期且刷新失败，请重新授权' },
+  { test: /Token 已过期且刷新失败|令牌已过期且刷新失败/i, to: '令牌已过期且刷新失败，请重新授权' },
   { test: /target account is incomplete/i, to: '该账号资料不完整，无法切换' },
   { test: /did not exit/i, to: '官方 Codex 未能退出，请稍后重试' },
   { test: /crash recovery window/i, to: '官方 Codex 打开了崩溃恢复窗口，未能正常启动' },
   { test: /did not start within the expected time/i, to: '官方 Codex 未能在预期时间内启动' },
+  { test: /Official Cursor was not found|cursor_app_path_not_found/i, to: '没有找到官方 Cursor，请先安装后再切号' },
+  { test: /Official Cursor did not exit|cursor_process_still_running/i, to: '官方 Cursor 没能退出，请手动关掉后再切' },
+  { test: /还没把登录库写完|cursor_vscdb_wal_pending/i, to: '官方 Cursor 还没把登录库写完，请再试一次' },
+  { test: /Could not enumerate official Cursor processes/i, to: '无法读取官方 Cursor 进程' },
+  { test: /Cursor refresh token/i, to: 'Cursor 刷新令牌已失效，请重新授权' },
+  { test: /Cursor 会话已过期/i, to: 'Cursor 登录已失效，请重新授权' },
+  { test: /Cursor session cookie|Cursor usage request failed|Cursor usage response was not JSON|cursor_session_missing|invalid_usage_json/i, to: '这次没查清 Cursor 额度，请稍后重试' },
+  { test: /未找到本地 Cursor|not found local Cursor|found":false/i, to: '本机没有已登录的 Cursor' },
+  { test: /cannot be switched into official Codex/i, to: 'Cursor 账号不能写进官方 Codex' },
   { test: /Could not enumerate official Codex processes/i, to: '无法读取官方 Codex 进程' },
-  { test: /No supported official Codex OAuth login was found/i, to: '没有找到可管理的官方 Codex 登录' },
+  { test: /No supported official Codex OAuth login was found/i, to: '本机没有已登录的 Codex' },
   { test: /managed current account is not available/i, to: '管理器当前账号不可用' },
   { test: /Managed current account could not be read/i, to: '无法读取管理器当前账号' },
   { test: /Account does not exist/i, to: '账号不存在' },
@@ -49,17 +58,17 @@ const RULES: Array<{ test: RegExp; to: string }> = [
   { test: /(token refresh failed|quota authorization could not be repaired).{0,160}account_disabled/i, to: '刷新令牌已失效，请重新授权' },
   { test: /HTTP 40[13]\b.*\baccount_disabled\b|\baccount_disabled\b.*HTTP 40[13]\b/i, to: '账号已封号，无法继续使用。' },
   { test: /\baccount_disabled\b/i, to: '刷新令牌已失效，请重新授权' },
-  { test: /Token refresh failed/i, to: 'Token 刷新失败' },
+  { test: /Token refresh failed/i, to: '令牌刷新失败' },
   { test: /Authentication state is busy|Read authentication state timed out/i, to: '正在确认官方登录，稍后会自动刷新' },
   { test: /quota refresh is waiting for retry|quota_retry_pending/i, to: '额度刷新稍后会自动重试' },
   { test: /account_deactivated|account_deleted|workspace_deactivated|deactivated_workspace|deactivated_user/i, to: '账号已封号，无法继续使用。' },
-  { test: /^HTTP \d+/i, to: '上游暂时不可用，请稍后刷新额度' },
+  { test: /^HTTP \d+/i, to: '服务暂时不可用，请稍后刷新额度' },
   { test: /^auth_conflict$/i, to: '官方登录不一致' },
   { test: /^stopped$/i, to: '已停止' },
   { test: /^disabled$/i, to: '全局开关已关闭，不会切号' },
 ]
 
-const NETWORK_FAILURE = '额度暂时没刷到，登录还在。请检查代理后再刷新，或稍后再试。'
+const NETWORK_FAILURE = '额度暂时没刷到，登录还在。请稍后再试。'
 
 function hasChinese(text: string): boolean {
   return /[\u4e00-\u9fff]/.test(text)
@@ -82,6 +91,12 @@ export function toUserMessage(raw: unknown): string {
     return text
   }
   return FALLBACK
+}
+
+export function toCursorUserMessage(raw: unknown): string {
+  const text = toUserMessage(raw)
+  if (text.includes('已封号')) return 'Cursor 登录已失效，请重新授权'
+  return text
 }
 
 export function logTypeLabel(type: string): string {

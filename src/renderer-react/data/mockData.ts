@@ -1,4 +1,4 @@
-import { AccountQuota, DaemonState, SystemSettings, LogEntry } from '../types';
+import { AccountQuota, DaemonState, ProductKind, SystemSettings, LogEntry } from '../types';
 
 export const INITIAL_ACCOUNTS: AccountQuota[] = [
   {
@@ -177,13 +177,59 @@ export const INITIAL_DAEMON_STATE: DaemonState = {
   lastChecked: '刚刚',
 };
 
+export const INITIAL_CURSOR_ACCOUNTS: AccountQuota[] = [
+  {
+    id: 'cursor_demo_1',
+    name: 'cursor-main',
+    email: 'cursor-main@example.com',
+    status: 'ACTIVE',
+    quotaKind: 'cursor',
+    fiveHourQuotaRemaining: 72,
+    fiveHourQuotaTotal: 100,
+    weeklyQuotaRemaining: 90,
+    weeklyQuotaTotal: 100,
+    cursorPlanRemaining: 72,
+    cursorAutoRemaining: 90,
+    cursorApiRemaining: 55,
+    priority: 'High',
+    plan: 'Pro',
+    tokenValidity: '剩余 12h',
+    tokenValidityPct: 70,
+    resetInFiveHour: '',
+    resetInWeekly: '',
+    isCurrent: true,
+  },
+  {
+    id: 'cursor_demo_2',
+    name: 'cursor-low',
+    email: 'cursor-low@example.com',
+    status: 'LOW_QUOTA',
+    quotaKind: 'cursor',
+    fiveHourQuotaRemaining: 12,
+    fiveHourQuotaTotal: 100,
+    weeklyQuotaRemaining: 40,
+    weeklyQuotaTotal: 100,
+    cursorPlanRemaining: 12,
+    cursorAutoRemaining: 40,
+    cursorApiRemaining: 8,
+    priority: 'Normal',
+    plan: 'Pro',
+    tokenValidity: '剩余 6h',
+    tokenValidityPct: 40,
+    resetInFiveHour: '',
+    resetInWeekly: '',
+    warning: '额度已用尽或所剩不多。',
+  },
+];
+
 export const INITIAL_SETTINGS: SystemSettings = {
   globalSwitch: true,
   fiveHourThreshold: 10,
   weeklyThreshold: 5,
   clientDetected: true,
+  cursorDetected: true,
   updateChannel: 'Beta Channel',
-  version: '0.1.0-beta.24',
+  version: '0.1.0-beta.25',
   latestStatus: 'Up to date',
 };
 
@@ -231,9 +277,10 @@ function remainingAsPercent(
   return Math.max(0, Math.min(100, Math.round((remaining / total) * 100)));
 }
 
-export const previewAccountsForLens = (): AccountQuota[] => {
+export const previewAccountsForLens = (product: ProductKind = 'codex'): AccountQuota[] => {
   const now = Date.now();
-  return INITIAL_ACCOUNTS.map((account) => ({
+  const source = product === 'cursor' ? INITIAL_CURSOR_ACCOUNTS : INITIAL_ACCOUNTS;
+  return source.map((account) => ({
     ...account,
     fiveHourQuotaRemaining: remainingAsPercent(
       account.fiveHourQuotaRemaining,
@@ -247,7 +294,11 @@ export const previewAccountsForLens = (): AccountQuota[] => {
       account.weeklyQuotaPresent,
     ),
     weeklyQuotaTotal: 100,
-    fiveHourResetAt: account.fiveHourQuotaPresent === false ? null : now + (3 * 60 * 60 * 1000),
-    weeklyResetAt: account.weeklyQuotaPresent === false ? null : now + (4 * 24 * 60 * 60 * 1000),
+    fiveHourResetAt: product === 'cursor' || account.fiveHourQuotaPresent === false
+      ? null
+      : now + (3 * 60 * 60 * 1000),
+    weeklyResetAt: product === 'cursor' || account.weeklyQuotaPresent === false
+      ? null
+      : now + (4 * 24 * 60 * 60 * 1000),
   }));
 };

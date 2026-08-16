@@ -430,6 +430,10 @@ test("token refresh IPC does not convert an engine failure into success", () => 
     tokenRefreshResponse({ ok: true, skipped: true }),
     { success: true, data: { ok: true, skipped: true } },
   );
+  assert.deepEqual(
+    tokenRefreshResponse({ ok: false, skipped: true, reauthRequired: true, error: "该账号需要重新授权后才能刷新令牌" }),
+    { success: true, data: { ok: false, skipped: true, reauthRequired: true, error: "该账号需要重新授权后才能刷新令牌" } },
+  );
 });
 
 test("background quota IPC stops at an authentication conflict", async () => {
@@ -1013,6 +1017,55 @@ test("auto-switch refuses to use stale quota after current refresh failure", asy
   });
   assert.equal(result.switched, false);
   assert.equal(result.reason, "current_quota_refresh_failed");
+});
+
+test("auto-switch keeps cached quota when refresh is only waiting to retry", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "retry-current@example.com", "acct-retry-current", "retry-current");
+  const now = engine.ts();
+  account.quota = {
+    hourly_window_present: false,
+    weekly_remaining_percentage: 93,
+    weekly_window_present: true,
+  };
+  account.quota_error = { code: "quota_retry_pending", message: "Quota refresh is waiting for retry until 1" };
+  account.usage_updated_at = now - 1200;
+  engine.saveAcct(account);
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(account);
+  engine.writeProjection(account, auth);
+
+  const quotaModule = require("../engine/quota");
+  const originalRefresh = quotaModule.refreshQuota;
+  quotaModule.refreshQuota = async () => {
+    const error = new Error("Quota refresh is waiting for retry until 1");
+    error.code = "quota_retry_pending";
+    throw error;
+  };
+  t.after(() => { quotaModule.refreshQuota = originalRefresh; });
+
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+  assert.equal(result.switched, false);
+  assert.equal(result.reason, "quota_sufficient");
+
+  engine.saveAutoSwitchCfg({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+    sync_interval_minutes: 60,
+  });
+  const worker = await engine.runDaemonWorker();
+  assert.ok(!worker.failures.some((item) => /waiting for retry|quota_retry_pending/i.test(item.message || "")));
 });
 
 test("auto-switch cancellation prevents switching after a daemon stop", async t => {
@@ -2181,6 +2234,7 @@ test("an invalid_refresh_token error marks the account for reauthorization", asy
   });
   assert.equal(result.ok, false);
   assert.equal(result.revoked, true);
+  assert.equal(result.reauthRequired, true);
   assert.equal(result.code, "invalid_refresh_token");
   const persisted = engine.loadAcct(account.id);
   assert.equal(persisted.requires_reauth, true);

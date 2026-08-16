@@ -374,15 +374,21 @@ function saveIdx(index) {
 
 function loadAcct(id) {
   if (!id) return null;
-  const filePath = accountFilePath(id);
+  const safeId = normalizeAccountId(id);
+  if (!safeId.startsWith("codex_")) return null;
+  const filePath = accountFilePath(safeId);
   if (!fs.existsSync(filePath)) return null;
   return loadAccountPath(filePath);
 }
 
 function saveAcct(account) {
   if (!account?.id) throw new Error("Account id is required");
+  const safeId = normalizeAccountId(account.id);
+  if (!safeId.startsWith("codex_")) {
+    throw new Error("Cursor accounts cannot be stored in the Codex account directory");
+  }
   ensureDir(ACCTS_DIR);
-  const filePath = accountFilePath(account.id);
+  const filePath = accountFilePath(safeId);
   writeJsonAtomic(filePath, encodeAccount(account));
 }
 
@@ -481,4 +487,8 @@ module.exports = {
   currentAcct,
   getStorageDiagnostics,
   rebuildIndex,
+  encodeAccount,
+  decodeAccount,
+  loadAccountPath,
+  accountSummary,
 };

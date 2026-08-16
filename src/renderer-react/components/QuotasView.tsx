@@ -10,8 +10,8 @@ import {
   Activity,
   KeyRound
 } from 'lucide-react';
-import { AccountQuota } from '../types';
-import { avatarGradient, canRefreshQuota, formatDateTime, hideStaleQuota, needsHandling, quotaBarColor, quotaSummaryPercent, quotaWindowSummary, STATUS_DOT, STATUS_TEXT } from '../api/desktop';
+import { AccountQuota, ProductKind } from '../types';
+import { averageRemainingCaption, avatarGradient, canRefreshQuota, cursorEmptyQuotaText, formatDateTime, hideStaleQuota, isBannedStatus, isCursorAccount, isRedundantQuotaNotice, needsHandling, planLabel, quotaBarColor, quotaBarsForAccount, quotaSummaryPercent, quotaWindowSummary, statusDotForAccount, statusTextForAccount } from '../api/desktop';
 
 interface QuotasProps {
   accounts: AccountQuota[];
@@ -21,6 +21,7 @@ interface QuotasProps {
   isRefreshingAll: boolean;
   onOpenAccounts?: (filter: 'all' | 'warning') => void;
   onReauthorizeAccount?: (id: string) => void | Promise<void>;
+  product?: ProductKind;
 }
 
 function toEpochMs(value: string | number | null | undefined): number | null {
@@ -39,6 +40,7 @@ export default function QuotasView({
   isRefreshingAll,
   onOpenAccounts,
   onReauthorizeAccount,
+  product = 'codex',
 }: QuotasProps) {
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
 
@@ -54,30 +56,31 @@ export default function QuotasView({
   const [refreshingCardIds, setRefreshingCardIds] = useState<Set<string>>(new Set());
   const [refreshingTokenId, setRefreshingTokenId] = useState<string | null>(null);
 
+  useEffect(() => {
+    setRefreshingCardIds(new Set());
+    setRefreshingTokenId(null);
+    setActiveMenuId(null);
+  }, [product]);
+
   const gridAccounts = accounts;
 
   // Calculate dynamic stats
   const totalAccounts = accounts.length;
   const actionRequiredCount = accounts.filter(needsHandling).length;
   
-  // Calculate average quota remaining
-  const visibleQuotaPercentages = accounts.flatMap((account) => {
-    if (hideStaleQuota(account)) return [];
-    const percentages: number[] = [];
-    if (account.fiveHourQuotaRemaining != null) {
-      percentages.push((account.fiveHourQuotaRemaining / account.fiveHourQuotaTotal) * 100);
-    }
-    if (account.weeklyQuotaRemaining != null) {
-      percentages.push((account.weeklyQuotaRemaining / account.weeklyQuotaTotal) * 100);
-    }
-    return percentages;
-  });
-  const avgRemaining = visibleQuotaPercentages.length
-    ? `${Math.round(visibleQuotaPercentages.reduce((sum, percentage) => sum + percentage, 0) / visibleQuotaPercentages.length)}%`
-    : '--';
+  const avgRemaining = averageRemainingCaption(accounts, product);
 
-  const syncedCount = accounts.filter(acc => acc.quotaUpdatedAt && !acc.quotaError).length;
+  const syncedCount = accounts.filter((acc) => (
+    acc.quotaUpdatedAt
+    && !acc.quotaError
+    && acc.status !== 'SYNC_FAILED'
+    && !hideStaleQuota(acc)
+  )).length;
+  const syncCaption = actionRequiredCount > 0
+    ? `已同步 ${syncedCount} 个 · ${actionRequiredCount} 个需处理`
+    : `已同步 ${syncedCount}/${accounts.length}`;
   const lastUpdatedAtMs = accounts.reduce<number | null>((latest, account) => {
+    if (account.status === 'SYNC_FAILED' || hideStaleQuota(account)) return latest;
     const updated = toEpochMs(account.quotaUpdatedAt);
     if (updated === null) return latest;
     return latest === null || updated > latest ? updated : latest;
@@ -109,16 +112,16 @@ export default function QuotasView({
     }
   };
 
-  const getStatusBadge = (status: AccountQuota['status']) => (
+  const getStatusBadge = (account: AccountQuota) => (
     <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-label-2">
-      <span className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT[status] || 'bg-fill-3'}`} />
-      {STATUS_TEXT[status] || status}
+      <span className={`w-1.5 h-1.5 rounded-full ${statusDotForAccount(account)}`} />
+      {statusTextForAccount(account)}
     </span>
   );
 
   const getAccountIcon = (account: AccountQuota) => (
     <div className={`w-11 h-11 rounded-full flex items-center justify-center ${avatarGradient(account.id)} font-semibold text-base`}>
-      {(account.name.charAt(0) || '?').toUpperCase()}
+      {(account.email.charAt(0) || account.name.charAt(0) || '?').toUpperCase()}
     </div>
   );
 
@@ -131,7 +134,7 @@ export default function QuotasView({
             配额总览
           </h2>
           <p className="mt-1.5 text-[13px] text-label-2 font-sans" id="quotas-meta-row">
-            已同步 {syncedCount}/{accounts.length} · 最近同步 {lastUpdatedAtMs !== null ? formatDateTime(lastUpdatedAtMs) : '等待同步'}
+            {syncCaption} · 最近同步 {lastUpdatedAtMs !== null ? formatDateTime(lastUpdatedAtMs) : '等待同步'}
           </p>
         </div>
 
@@ -145,7 +148,7 @@ export default function QuotasView({
           id="quotas-btn-refresh-all-secondary"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingAll ? 'animate-spin text-accent' : ''}`} />
-          全部刷新
+          刷新全部
         </motion.button>
       </div>
 
@@ -209,7 +212,11 @@ export default function QuotasView({
             <AtSign className="w-6 h-6" />
           </div>
           <h3 className="text-sm font-bold text-white">还没有账号</h3>
-          <p className="mt-2 max-w-xs text-xs leading-5 text-label-2">前往“账号管理”页面添加你的第一个 Codex 账号，额度状态会在这里展示。</p>
+          <p className="mt-2 max-w-xs text-xs leading-5 text-label-2">
+            {product === 'cursor'
+              ? '前往“账号管理”导入或授权 Cursor 账号，额度状态会在这里展示。'
+              : '前往“账号管理”导入或授权 Codex 账号，额度状态会在这里展示。'}
+          </p>
         </div>
       )}
 
@@ -218,6 +225,8 @@ export default function QuotasView({
         <AnimatePresence initial={false}>
         {gridAccounts.map((account) => {
           const isCardRefreshing = refreshingCardIds.has(account.id);
+          const cursorAccount = isCursorAccount(account) || product === 'cursor';
+          const quotaBars = quotaBarsForAccount(account);
           const fiveHourSummary = quotaWindowSummary('fiveHour', account);
           const weeklySummary = quotaWindowSummary('weekly', account);
           const fiveHourPercentage = quotaSummaryPercent(fiveHourSummary.text);
@@ -225,7 +234,7 @@ export default function QuotasView({
           const fiveHourBar = fiveHourSummary.text === '已用尽' ? 0 : fiveHourPercentage;
           const weeklyBar = weeklySummary.text === '已用尽' ? 0 : weeklyPercentage;
           const tokenRefreshUnavailable = account.status === 'SUSPENDED' || account.status === 'BANNED' || account.tokenRefreshAvailable === false;
-          const accountBanned = account.status === 'BANNED';
+          const accountBanned = isBannedStatus(account);
           const refreshBlocked = !canRefreshQuota(account);
           const needsReauth = account.status === 'SUSPENDED' && !!onReauthorizeAccount;
 
@@ -250,23 +259,47 @@ export default function QuotasView({
               <div className="flex items-start justify-between mb-6" id={`quota-card-header-${account.id}`}>
                 <div className="flex items-center gap-4" id={`quota-card-meta-${account.id}`}>
                   {getAccountIcon(account)}
-                  <div className="flex flex-col select-all" id={`quota-card-titles-${account.id}`}>
-                    <h3 className="font-bold text-label tracking-wide text-sm font-sans">{account.name}</h3>
-                    <span className="text-xs text-label-2 mt-0.5 select-text">{account.email}</span>
+                  <div className="flex flex-col select-all min-w-0" id={`quota-card-titles-${account.id}`}>
+                    <h3 className="font-bold text-label tracking-wide text-sm font-sans truncate" title={account.email}>{account.email}</h3>
+                    <span className="text-xs text-label-2 mt-0.5">{planLabel(account.plan)}</span>
                   </div>
                 </div>
-                {getStatusBadge(account.status)}
+                {getStatusBadge(account)}
               </div>
 
-              {account.warning ? (
-                <p className={`mb-4 text-[12px] leading-5 ${account.status === 'BANNED' ? 'text-danger' : 'text-warn'}`} id={`quota-card-notice-${account.id}`}>
+              {account.warning && !isRedundantQuotaNotice(account.warning) ? (
+                <p className={`mb-4 text-[12px] leading-5 ${isBannedStatus(account) ? 'text-danger' : 'text-warn'}`} id={`quota-card-notice-${account.id}`}>
                   {account.warning}
                 </p>
               ) : null}
 
-              {/* Quotas Progress Info */}
               <div className="space-y-4 flex-1 select-none" id={`quota-progress-container-${account.id}`}>
-                {/* 5h Quota (kept visible even while upstream omits the window) */}
+                {cursorAccount ? quotaBars.map((bar) => {
+                  const remaining = bar.remaining;
+                  return (
+                    <div className="space-y-1.5" id={`quota-${bar.key}-row-${account.id}`} key={bar.key}>
+                      <div className="flex items-center justify-between text-xs font-semibold">
+                        <span className="text-label-2">{bar.label}</span>
+                        <span className={`tabular-nums ${remaining === null ? 'text-label-3' : 'text-label-2'}`}>
+                          {remaining === null
+                            ? cursorEmptyQuotaText(account)
+                            : remaining === 0 ? '已用尽' : `剩余 ${remaining}%`}
+                        </span>
+                      </div>
+                      {remaining !== null ? (
+                      <div className="h-1 bg-fill-2 rounded-full overflow-hidden relative">
+                        <motion.div
+                          initial={{ width: 0 }}
+                          animate={{ width: `${remaining}%` }}
+                          transition={{ duration: 0.8, ease: 'easeOut' }}
+                          className={`h-full rounded-full ${quotaBarColor(remaining)}`}
+                        />
+                      </div>
+                      ) : null}
+                    </div>
+                  );
+                }) : (
+                  <>
                 <div className="space-y-1.5" id={`quota-5h-row-${account.id}`}>
                   <div className="flex items-center justify-between text-xs font-semibold" id={`quota-5h-labels-${account.id}`}>
                     <span className="text-label-2">5 小时额度</span>
@@ -286,7 +319,6 @@ export default function QuotasView({
                   ) : null}
                 </div>
 
-                {/* Weekly Quota */}
                 <div className="space-y-1.5" id={`quota-weekly-row-${account.id}`}>
                   <div className="flex items-center justify-between text-xs font-semibold" id={`quota-weekly-labels-${account.id}`}>
                     <span className="text-label-2">周额度</span>
@@ -305,6 +337,8 @@ export default function QuotasView({
                   </div>
                   ) : null}
                 </div>
+                  </>
+                )}
               </div>
 
               {/* Action Buttons Row */}
@@ -374,11 +408,11 @@ export default function QuotasView({
                             disabled={!onRefreshToken || refreshingTokenId !== null}
                             aria-busy={refreshingTokenId === account.id}
                             id={`quota-menu-refresh-token-${account.id}`}
-                            title="刷新 Token"
-                            className="w-full px-3 py-2 hover:bg-fill rounded-xl text-left text-xs text-danger hover:text-danger flex items-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                            title="刷新令牌"
+                            className="w-full px-3 py-2 hover:bg-fill rounded-xl text-left text-xs flex items-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           >
                             <Activity className={`w-3.5 h-3.5 ${refreshingTokenId === account.id ? 'animate-spin' : ''}`} />
-                            {refreshingTokenId === account.id ? '刷新中...' : '刷新 Token'}
+                            {refreshingTokenId === account.id ? '刷新中...' : '刷新令牌'}
                           </button>
                         </motion.div>
                       </>

@@ -164,6 +164,9 @@ function buildAuthJson(account) {
 }
 
 function writeAuthJson(account) {
+  if (String(account?.id || "").startsWith("cursor_")) {
+    throw new Error("Cursor accounts cannot be written to official Codex");
+  }
   ensureDir(CODEX_DIR);
   const value = buildAuthJson(account);
   writeJsonAtomic(path.join(CODEX_DIR, "auth.json"), value);
@@ -264,6 +267,9 @@ function restoreFile(filePath, content) {
 }
 
 async function doSwitch(account, options = {}) {
+  if (String(account?.id || "").startsWith("cursor_")) {
+    throw new Error("Cursor accounts cannot be switched into official Codex");
+  }
   if (!account?.id || !account.tokens?.access_token) throw new Error("The target account is incomplete");
   if (account.banned) {
     throw new Error("The target account is banned and cannot be switched to");

@@ -27,6 +27,21 @@ function buildId(email, aid, oid) {
   return "codex_" + sha256hex(`${(email || "").toLowerCase()}|${aid || ""}|${oid || ""}`).slice(0, 32);
 }
 
+function buildCursorId(email, authId) {
+  return "cursor_" + sha256hex(`${(email || "").toLowerCase()}|${authId || ""}`).slice(0, 32);
+}
+
+function extractCursorWorkosUserId(accessToken) {
+  const payload = jwtPayload(accessToken);
+  const sub = String(payload?.sub || "").trim();
+  if (!sub) return null;
+  const parts = sub.split("|");
+  const last = String(parts[parts.length - 1] || "").trim();
+  if (last.startsWith("user_")) return last;
+  if (sub.startsWith("user_")) return sub;
+  return null;
+}
+
 function jwtPayload(tok) {
   try {
     const parts = tok.split(".");
@@ -75,6 +90,7 @@ function extractChatgptOrganizationId(token) {
 }
 
 module.exports = {
-  b64url, sha256hex, codeChallenge, ts, tsIso, buildId,
+  b64url, sha256hex, codeChallenge, ts, tsIso, buildId, buildCursorId,
   jwtPayload, jwtExp, isTokenExpired, extractChatgptAccountId, extractChatgptOrganizationId,
+  extractCursorWorkosUserId,
 };

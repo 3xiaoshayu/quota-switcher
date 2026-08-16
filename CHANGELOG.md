@@ -5,6 +5,20 @@ All notable changes to Codex Account Manager are documented here.
 The project follows [Semantic Versioning](https://semver.org/) once a stable
 release is published.
 
+## Unreleased
+
+## [0.1.0-beta.25] - 2026-08-16
+
+- Add a parallel Cursor pipeline: import the official login, switch into
+  Cursor, refresh plan/Auto/API usage, and sign in through the browser.
+  Codex auto-switch and ban status stay Codex-only.
+- Follow a live local HTTP/SOCKS proxy so quota refresh does not hang on
+  poisoned chatgpt.com DNS, and reuse that path for Electron and Node.
+- Keep a quota retry backoff from showing as a Daemon failure, and continue
+  auto-switch with cached quota instead of stalling the tick.
+- Polish the Chinese UI: Team 套餐, 已用尽, 知道了, and restore the sidebar
+  brand to Account Manager.
+
 ## [0.1.0-beta.24] - 2026-08-16
 
 - Make pending-account actions obvious: reauthorize on quota cards, hide empty

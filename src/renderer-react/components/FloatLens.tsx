@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeftRight, ChevronLeft, ChevronRight, ExternalLink, Pin, RefreshCw, X } from 'lucide-react';
-import { AccountQuota } from '../types';
+import { CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeftRight, Ban, ChevronLeft, ChevronRight, ExternalLink, KeyRound, Pin, RefreshCw, X } from 'lucide-react';
+import { AccountQuota, ProductKind } from '../types';
 import {
   desktopApi,
   formatResetLine,
@@ -8,19 +8,31 @@ import {
   canRefreshQuota,
   canSwitchAccount,
   hideStaleQuota,
+  isCursorAccount,
+  lensQuotaWindows,
+  planLabel,
   quotaHero,
   quotaStroke,
+  statusTextForAccount,
   STATUS_TEXT,
 } from '../api/desktop';
-import { toUserMessage } from '../api/user-messages';
+import { toCursorUserMessage, toUserMessage } from '../api/user-messages';
 import { previewAccountsForLens } from '../data/mockData';
+import { productById, readStoredProduct } from '../data/products';
 import './FloatLens.css';
 
 const RING_SIZE = 188;
 const RING_CENTER = RING_SIZE / 2;
 const OUTER_RADIUS = 78;
 const INNER_RADIUS = 62;
+const PAIR_SIZE = 112;
+const PAIR_CENTER = PAIR_SIZE / 2;
+const PAIR_RADIUS = 44;
 const SILENT_REFRESH_MS = 60_000;
+
+function hasFill(percent: number | null | undefined): boolean {
+  return percent != null && Number.isFinite(percent) && percent > 0;
+}
 
 function ringLength(radius: number): number {
   return 2 * Math.PI * radius;
@@ -32,129 +44,186 @@ function arcOffset(radius: number, percent: number | null): number {
   return length * (1 - Math.max(0, Math.min(100, percent)) / 100);
 }
 
-function percentLabel(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '—';
-  return `${Math.round(value)}%`;
-}
-
 function blockedRefreshText(account: AccountQuota): string {
-  return account.status === 'BANNED' ? '账号已封号，无法刷新额度' : '该账号需要重新授权后才能刷新额度';
+  return account.status === 'BANNED' && !isCursorAccount(account)
+    ? '账号已封号，无法刷新额度'
+    : '该账号需要重新授权后才能刷新额度';
 }
 
 function blockedSwitchText(account: AccountQuota): string {
-  return account.status === 'BANNED' ? '账号已封号，无法切换' : '该账号需要重新授权后才能切换';
+  return account.status === 'BANNED' && !isCursorAccount(account)
+    ? '账号已封号，无法切换'
+    : '该账号需要重新授权后才能切换';
 }
 
-function identityStatusText(account: AccountQuota): string {
-  if (
-    account.status === 'BANNED'
-    || account.status === 'SUSPENDED'
-    || account.status === 'LIMITED'
-    || account.status === 'SYNC_FAILED'
-  ) {
-    return STATUS_TEXT[account.status] || account.status;
+function planBadgeText(account: AccountQuota): string {
+  return planLabel(account.plan);
+}
+
+function statusBadgeText(account: AccountQuota): string | null {
+  if (account.status === 'BANNED' && !isCursorAccount(account)) return STATUS_TEXT.BANNED;
+  if (account.status === 'SUSPENDED' || account.status === 'LIMITED' || account.status === 'SYNC_FAILED' || account.status === 'EXPIRED') {
+    return statusTextForAccount(account);
   }
-  return String(account.plan || 'Standard').toUpperCase();
+  return null;
+}
+
+function accountErrorText(product: ProductKind, error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  return product === 'cursor' ? toCursorUserMessage(raw) : toUserMessage(raw);
+}
+
+function tokenRemainLine(text: string | null | undefined): string {
+  const value = String(text || '').trim();
+  if (!value) return '';
+  if (value.startsWith('剩余')) return `登录还剩 ${value.slice(2).trim()}`;
+  if (value === '已过期') return '登录已过期';
+  if (value === '已失效') return '登录已失效';
+  if (value === '有效期未知') return '登录有效期未知';
+  return value;
 }
 
 function QuotaDial({
+  size = 'hero',
   weekly,
   fiveHour,
   heroPercent,
   heroLabel,
+  emptyKind,
   preview,
   spinning,
 }: {
+  size?: 'hero' | 'pair';
   weekly: number | null;
   fiveHour: number | null;
   heroPercent: number | null;
   heroLabel: string;
+  emptyKind: 'reauth' | 'banned' | null;
   preview: boolean;
   spinning: boolean;
 }) {
-  const showInner = fiveHour != null;
-  const outerRadius = showInner ? OUTER_RADIUS : 74;
-  const outerWidth = showInner ? 8 : 10;
+  const isPair = size === 'pair';
+  const box = isPair ? PAIR_SIZE : RING_SIZE;
+  const center = isPair ? PAIR_CENTER : RING_CENTER;
+  const showInner = !isPair && fiveHour != null;
+  const outerRadius = isPair ? PAIR_RADIUS : (showInner ? OUTER_RADIUS : 74);
+  const outerWidth = isPair ? 7 : (showInner ? 8 : 10);
   const outerLength = ringLength(outerRadius);
   const innerLength = ringLength(INNER_RADIUS);
+  const outerFill = weekly ?? heroPercent;
+  const rest = !hasFill(heroPercent);
   return (
-    <div className="float-lens-dial">
-      <svg viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`} aria-hidden="true">
+    <div
+      className={`float-lens-dial${isPair ? ' is-pair' : ''}${rest ? ' is-rest' : ''}`}
+      style={isPair && heroPercent != null ? { '--dial-tone': quotaStroke(heroPercent) } as CSSProperties : undefined}
+    >
+      <svg viewBox={`0 0 ${box} ${box}`} aria-hidden="true">
         <circle
-          cx={RING_CENTER}
-          cy={RING_CENTER}
+          cx={center}
+          cy={center}
           r={outerRadius}
           fill="none"
-          stroke="rgba(255,255,255,0.08)"
+          stroke="rgba(255,255,255,0.10)"
           strokeWidth={outerWidth}
           strokeDasharray={preview ? '3 7' : undefined}
           strokeLinecap="round"
         />
-        <circle
-          className="float-lens-dial-arc"
-          cx={RING_CENTER}
-          cy={RING_CENTER}
-          r={outerRadius}
-          fill="none"
-          stroke={quotaStroke(weekly ?? heroPercent)}
-          strokeWidth={outerWidth}
-          strokeLinecap="round"
-          strokeDasharray={outerLength}
-          strokeDashoffset={arcOffset(outerRadius, weekly ?? heroPercent)}
-          transform={`rotate(-90 ${RING_CENTER} ${RING_CENTER})`}
-        />
+        {hasFill(outerFill) ? (
+          <circle
+            className="float-lens-dial-arc"
+            cx={center}
+            cy={center}
+            r={outerRadius}
+            fill="none"
+            stroke={quotaStroke(outerFill)}
+            strokeWidth={outerWidth}
+            strokeLinecap="round"
+            strokeDasharray={outerLength}
+            strokeDashoffset={arcOffset(outerRadius, outerFill)}
+            transform={`rotate(-90 ${center} ${center})`}
+          />
+        ) : null}
         {showInner ? (
           <>
             <circle
-              cx={RING_CENTER}
-              cy={RING_CENTER}
+              cx={center}
+              cy={center}
               r={INNER_RADIUS}
               fill="none"
               stroke="rgba(255,255,255,0.06)"
               strokeWidth="5"
               strokeLinecap="round"
             />
-            <circle
-              className="float-lens-dial-arc"
-              cx={RING_CENTER}
-              cy={RING_CENTER}
-              r={INNER_RADIUS}
-              fill="none"
-              stroke={quotaStroke(fiveHour)}
-              strokeWidth="5"
-              strokeLinecap="round"
-              strokeDasharray={innerLength}
-              strokeDashoffset={arcOffset(INNER_RADIUS, fiveHour)}
-              transform={`rotate(-90 ${RING_CENTER} ${RING_CENTER})`}
-            />
+            {hasFill(fiveHour) ? (
+              <circle
+                className="float-lens-dial-arc"
+                cx={center}
+                cy={center}
+                r={INNER_RADIUS}
+                fill="none"
+                stroke={quotaStroke(fiveHour)}
+                strokeWidth="5"
+                strokeLinecap="round"
+                strokeDasharray={innerLength}
+                strokeDashoffset={arcOffset(INNER_RADIUS, fiveHour)}
+                transform={`rotate(-90 ${center} ${center})`}
+              />
+            ) : null}
           </>
         ) : null}
       </svg>
       <div className={`float-lens-sweep${spinning ? ' is-on' : ''}`} />
       <div className="float-lens-readout">
-        <div className="float-lens-readout-value">
-          {heroPercent == null ? '—' : Math.round(heroPercent)}
-          {heroPercent != null ? <span style={{ fontSize: 18, marginLeft: 1, color: 'rgba(235, 235, 245, 0.62)' }}>%</span> : null}
-        </div>
-        <div className="float-lens-readout-label">{heroLabel}</div>
+        {heroPercent == null ? (
+          <>
+            {emptyKind === 'banned' ? (
+              <Ban className="float-lens-readout-icon" size={isPair ? 18 : 26} strokeWidth={1.6} />
+            ) : (
+              <KeyRound className="float-lens-readout-icon" size={isPair ? 18 : 26} strokeWidth={1.6} />
+            )}
+            <div className="float-lens-readout-label is-empty">{heroLabel}</div>
+          </>
+        ) : (
+          <>
+            <div className={`float-lens-readout-value${rest ? ' is-rest' : ''}${heroPercent === 0 ? ' is-empty-text' : ''}`}>
+              {heroPercent === 0 ? '已用尽' : (
+                <>
+                  {Math.round(heroPercent)}
+                  <span className="float-lens-readout-unit">%</span>
+                </>
+              )}
+            </div>
+            <div className="float-lens-readout-label">{heroLabel}</div>
+          </>
+        )}
       </div>
     </div>
   );
 }
 
 export default function FloatLens() {
+  const [product, setProduct] = useState<ProductKind>(() => readStoredProduct());
   const [accounts, setAccounts] = useState<AccountQuota[]>([]);
   const [viewedId, setViewedId] = useState<string | null>(null);
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [switching, setSwitching] = useState(false);
+  const [confirmSwitch, setConfirmSwitch] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
   const shellRef = useRef<HTMLDivElement | null>(null);
+  const productRef = useRef(product);
+  productRef.current = product;
+  const productLabel = productById(product).label;
+
+  const applyProduct = useCallback((next: ProductKind) => {
+    setProduct((current) => (current === next ? current : next));
+  }, []);
 
   const loadAccounts = useCallback(async () => {
+    const kind = productRef.current;
     if (!hasDesktopBridge()) {
-      const previewAccounts = previewAccountsForLens();
+      const previewAccounts = previewAccountsForLens(kind);
       setAccounts(previewAccounts);
       setViewedId((current) => {
         if (current && previewAccounts.some((account) => account.id === current)) return current;
@@ -162,20 +231,23 @@ export default function FloatLens() {
         return live?.id || previewAccounts[0]?.id || null;
       });
       setLoading(false);
-      return;
+      return previewAccounts;
     }
     try {
-      const snapshot = await desktopApi.loadFloatAccounts();
+      const snapshot = await desktopApi.loadFloatAccounts(kind);
+      if (productRef.current !== kind) return;
       setAccounts(snapshot.accounts);
       setViewedId((current) => {
         if (current && snapshot.accounts.some((account) => account.id === current)) return current;
         const live = snapshot.accounts.find((account) => account.isCurrent);
         return live?.id || snapshot.accounts[0]?.id || null;
       });
+      return snapshot.accounts;
     } catch (error) {
-      setErrorText(toUserMessage(error instanceof Error ? error.message : String(error)));
+      if (productRef.current !== kind) return;
+      setErrorText(accountErrorText(kind, error));
     } finally {
-      setLoading(false);
+      if (productRef.current === kind) setLoading(false);
     }
   }, []);
 
@@ -191,16 +263,33 @@ export default function FloatLens() {
   }, []);
 
   useEffect(() => {
+    setConfirmSwitch(false);
+    setErrorText(null);
+    setRefreshing(false);
+    setSwitching(false);
+    setAccounts([]);
+    setViewedId(null);
+    setLoading(true);
+  }, [product]);
+
+  useEffect(() => {
     void loadAccounts();
+  }, [product, loadAccounts]);
+
+  useEffect(() => {
     if (!hasDesktopBridge()) return undefined;
     void desktopApi.getFloatState().then((state) => {
       setAlwaysOnTop(!!state?.alwaysOnTop);
+      if (state?.product === 'cursor' || state?.product === 'codex') applyProduct(state.product);
     }).catch(() => {});
     return desktopApi.subscribe({
       onDaemonTick: () => { void loadAccounts(); },
       onAutoSwitch: () => { void loadAccounts(); },
+      onFloatProduct: (next) => {
+        if (next === 'cursor' || next === 'codex') applyProduct(next);
+      },
     });
-  }, [loadAccounts]);
+  }, [applyProduct, loadAccounts]);
 
   const viewed = useMemo(
     () => accounts.find((account) => account.id === viewedId) || accounts[0] || null,
@@ -208,17 +297,31 @@ export default function FloatLens() {
   );
   const viewedIndex = viewed ? accounts.findIndex((account) => account.id === viewed.id) : -1;
   const hero = quotaHero(viewed);
+  const windows = lensQuotaWindows(viewed);
   const isCurrent = !!viewed?.isCurrent;
   const hideQuota = hideStaleQuota(viewed);
-  const weeklyValue = hideQuota ? null : (viewed && viewed.weeklyQuotaPresent !== false ? viewed.weeklyQuotaRemaining : null);
-  const fiveHourValue = hideQuota ? null : (viewed && viewed.fiveHourQuotaPresent !== false ? viewed.fiveHourQuotaRemaining : null);
-  const showFiveHour = viewed?.fiveHourQuotaPresent !== false && fiveHourValue != null;
-  const showWeekly = viewed?.weeklyQuotaPresent !== false && weeklyValue != null;
+  const hideFailedQuota = viewed?.status === 'SYNC_FAILED';
+  const outerValue = hideQuota || hideFailedQuota ? null : windows.outer;
+  const innerValue = hideQuota || hideFailedQuota ? null : windows.inner;
+  const showInner = innerValue != null;
+  const showOuter = outerValue != null;
+  const innerReset = formatResetLine(windows.innerReset);
+  const outerReset = formatResetLine(windows.outerReset);
+  const resetLine = hero.key === 'fiveHour' ? innerReset : (outerReset || innerReset);
+  const tokenLine = product === 'cursor' && !hideQuota && !hideFailedQuota ? tokenRemainLine(viewed?.tokenValidity) : '';
+  const caption = tokenLine || (!hideQuota && !hideFailedQuota ? resetLine : '');
+  const showPair = product === 'cursor' && !hideQuota && !hideFailedQuota && (showOuter || showInner);
+  const planBadge = viewed ? planBadgeText(viewed) : '';
+  const statusBadge = viewed ? statusBadgeText(viewed) : null;
+  const emptyKind = hideQuota
+    ? (viewed?.status === 'BANNED' && !isCursorAccount(viewed) ? 'banned' : 'reauth')
+    : null;
 
   const moveAccount = useCallback((step: -1 | 1) => {
     if (accounts.length <= 1 || viewedIndex < 0) return;
     const next = (viewedIndex + step + accounts.length) % accounts.length;
     setViewedId(accounts[next].id);
+    setConfirmSwitch(false);
     setErrorText(null);
   }, [accounts, viewedIndex]);
 
@@ -246,19 +349,35 @@ export default function FloatLens() {
       }
       return;
     }
+    const kind = productRef.current;
+    if ((kind === 'cursor') !== isCursorAccount(viewed)) return;
     if (!silent) {
       setRefreshing(true);
       setErrorText(null);
     }
     try {
-      await desktopApi.refreshQuota(viewed.id, true);
+      if (kind === 'cursor') await desktopApi.refreshCursorQuota(viewed.id, true);
+      else await desktopApi.refreshQuota(viewed.id, true);
     } catch (error) {
-      if (!silent) {
-        setErrorText(toUserMessage(error instanceof Error ? error.message : String(error)));
+      if (!silent && productRef.current === kind) {
+        setErrorText(accountErrorText(kind, error));
       }
     } finally {
-      await loadAccounts();
-      if (!silent) setRefreshing(false);
+      try {
+        if (productRef.current === kind) {
+          const nextAccounts = await loadAccounts();
+          if (!silent && productRef.current === kind) {
+            const next = nextAccounts?.find((item) => item.id === viewed.id);
+            if (next?.status === 'SUSPENDED') {
+              setErrorText(next.warning || '该账号需要重新授权后才能刷新额度');
+            } else if (next?.status === 'SYNC_FAILED') {
+              setErrorText(next.warning || (kind === 'cursor' ? '这次没查清额度，请稍后重试。' : '额度同步失败，请稍后重试。'));
+            }
+          }
+        }
+      } finally {
+        if (!silent) setRefreshing(false);
+      }
     }
   }, [loadAccounts, refreshing, switching, viewed]);
 
@@ -269,15 +388,6 @@ export default function FloatLens() {
     }, SILENT_REFRESH_MS);
     return () => window.clearInterval(timer);
   }, [refreshViewed, viewed]);
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'ArrowLeft') moveAccount(-1);
-      if (event.key === 'ArrowRight') moveAccount(1);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [moveAccount]);
 
   useEffect(() => {
     const shell = shellRef.current;
@@ -305,15 +415,19 @@ export default function FloatLens() {
       setErrorText(blockedSwitchText(viewed));
       return;
     }
+    const kind = productRef.current;
+    if ((kind === 'cursor') !== isCursorAccount(viewed)) return;
     setSwitching(true);
     setErrorText(null);
     try {
-      await desktopApi.switchAccount(viewed.id);
-      await loadAccounts();
+      if (kind === 'cursor') await desktopApi.switchCursorAccount(viewed.id);
+      else await desktopApi.switchAccount(viewed.id);
+      setConfirmSwitch(false);
+      if (productRef.current === kind) await loadAccounts();
     } catch (error) {
-      setErrorText(toUserMessage(error instanceof Error ? error.message : String(error)));
+      if (productRef.current === kind) setErrorText(accountErrorText(kind, error));
     } finally {
-      setSwitching(false);
+      if (productRef.current === kind) setSwitching(false);
     }
   }, [isCurrent, loadAccounts, switching, viewed]);
 
@@ -331,7 +445,12 @@ export default function FloatLens() {
     <div className="float-lens">
       <div className="float-lens-shell app-drag" ref={shellRef}>
         <div className="float-lens-chrome">
-          <div className="float-lens-mark">CODEX</div>
+          <div
+            className={`float-lens-mark${productLabel.length > 5 ? ' is-long' : ''}`}
+            id="float-lens-mark"
+          >
+            {productLabel.toUpperCase()}
+          </div>
           <div className="float-lens-tools">
             <button
               className={`float-lens-icon${alwaysOnTop ? ' is-on' : ''}`}
@@ -355,47 +474,57 @@ export default function FloatLens() {
         <div className="float-lens-body">
           {viewed ? (
             <>
-              <QuotaDial
-                weekly={showWeekly ? weeklyValue : null}
-                fiveHour={showFiveHour ? fiveHourValue : null}
-                heroPercent={hero.percent}
-                heroLabel={hero.label}
-                preview={!isCurrent}
-                spinning={refreshing}
-              />
+              {showPair ? (
+                <div className="float-lens-pair" id="float-lens-pair">
+                  {showOuter ? (
+                    <QuotaDial
+                      size="pair"
+                      weekly={outerValue}
+                      fiveHour={null}
+                      heroPercent={outerValue}
+                      heroLabel={windows.outerLabel}
+                      emptyKind={null}
+                      preview={!isCurrent}
+                      spinning={refreshing}
+                    />
+                  ) : null}
+                  {showInner ? (
+                    <QuotaDial
+                      size="pair"
+                      weekly={innerValue}
+                      fiveHour={null}
+                      heroPercent={innerValue}
+                      heroLabel={windows.innerLabel}
+                      emptyKind={null}
+                      preview={!isCurrent}
+                      spinning={refreshing}
+                    />
+                  ) : null}
+                </div>
+              ) : (
+                <QuotaDial
+                  weekly={showOuter ? outerValue : null}
+                  fiveHour={showInner ? innerValue : null}
+                  heroPercent={hero.percent}
+                  heroLabel={hero.label}
+                  emptyKind={emptyKind}
+                  preview={!isCurrent}
+                  spinning={refreshing}
+                />
+              )}
 
               <div className="float-lens-identity" title={viewed.email}>
                 <div className="float-lens-name">{viewed.email}</div>
-                <div className="float-lens-plan">
-                  {identityStatusText(viewed)}
+                <div className="float-lens-pills">
+                  <div className="float-lens-plan">{planBadge}</div>
+                  {statusBadge ? <div className="float-lens-plan is-status">{statusBadge}</div> : null}
                 </div>
-                {!(showFiveHour && showWeekly) && !hideQuota ? (
+                {caption ? (
                   <div className="float-lens-reset">
-                    {formatResetLine(showWeekly ? viewed.weeklyResetAt : viewed.fiveHourResetAt)}
+                    {caption}
                   </div>
                 ) : null}
               </div>
-
-              {showFiveHour && showWeekly ? (
-              <div className="float-lens-complications">
-                <div className="float-lens-cell">
-                  <div className="float-lens-cell-kicker" style={{ color: quotaStroke(fiveHourValue) }}>
-                    <span className="float-lens-dot" />
-                    5 小时
-                  </div>
-                  <div className="float-lens-cell-value">{percentLabel(fiveHourValue)}</div>
-                  <div className="float-lens-cell-reset">{formatResetLine(viewed.fiveHourResetAt)}</div>
-                </div>
-                <div className="float-lens-cell">
-                  <div className="float-lens-cell-kicker" style={{ color: quotaStroke(weeklyValue) }}>
-                    <span className="float-lens-dot" />
-                    周额度
-                  </div>
-                  <div className="float-lens-cell-value">{percentLabel(weeklyValue)}</div>
-                  <div className="float-lens-cell-reset">{formatResetLine(viewed.weeklyResetAt)}</div>
-                </div>
-              </div>
-              ) : null}
 
               <div className="float-lens-pager">
                 <div className="float-lens-nav">
@@ -423,33 +552,65 @@ export default function FloatLens() {
                 </div>
                 <div className={`float-lens-state${isCurrent ? ' is-live' : ''}`}>
                   <span className="float-lens-state-dot" />
-                  {isCurrent ? '在用' : '预览 · 非当前登录'}
+                  {isCurrent ? '在用' : '未在用'}
                 </div>
               </div>
 
               {!isCurrent ? (
                 <div className="float-lens-action">
-                  <button
-                    className="float-lens-switch"
-                    type="button"
-                    disabled={switching || !canSwitchAccount(viewed)}
-                    title={!canSwitchAccount(viewed) ? blockedSwitchText(viewed) : '切到此账号'}
-                    onClick={() => void handleSwitch()}
-                  >
-                    {switching ? <RefreshCw size={13} className="animate-spin" /> : <ArrowLeftRight size={13} />}
-                    {switching
-                      ? '切换中...'
-                      : !canSwitchAccount(viewed)
-                        ? (viewed.status === 'BANNED' ? '账号已封号，无法切换' : '需授权后才能切换')
-                        : '切到此账号'}
-                  </button>
+                  {confirmSwitch ? (
+                    <div className="float-lens-confirm" id="float-lens-confirm">
+                      <p>会关掉正在运行的官方 Cursor，再写入此账号。未保存的编辑可能会丢。</p>
+                      <div className="float-lens-confirm-row">
+                        <button
+                          className="float-lens-confirm-cancel"
+                          id="float-lens-confirm-cancel"
+                          type="button"
+                          disabled={switching}
+                          onClick={() => setConfirmSwitch(false)}
+                        >
+                          取消
+                        </button>
+                        <button
+                          className="float-lens-confirm-accept"
+                          id="float-lens-confirm-accept"
+                          type="button"
+                          disabled={switching}
+                          onClick={() => void handleSwitch()}
+                        >
+                          {switching ? '切换中...' : '确认切换'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      className="float-lens-switch"
+                      type="button"
+                      disabled={switching || !canSwitchAccount(viewed)}
+                      title={!canSwitchAccount(viewed) ? blockedSwitchText(viewed) : '切到此账号'}
+                      onClick={() => {
+                        if (product === 'cursor') {
+                          setConfirmSwitch(true);
+                          return;
+                        }
+                        void handleSwitch();
+                      }}
+                    >
+                      {switching ? <RefreshCw size={13} className="animate-spin" /> : <ArrowLeftRight size={13} />}
+                      {switching
+                        ? '切换中...'
+                        : !canSwitchAccount(viewed)
+                          ? (viewed.status === 'BANNED' && !isCursorAccount(viewed) ? '账号已封号，无法切换' : '需重新授权后才能切换')
+                          : '切到此账号'}
+                    </button>
+                  )}
                 </div>
               ) : null}
             </>
           ) : (
             <div className="float-lens-empty">
               <strong>{loading ? '正在读取账号' : '还没有账号'}</strong>
-              <span>{loading ? '稍等片刻' : '先在主窗口添加一个 Codex 账号'}</span>
+              <span>{loading ? '稍等片刻' : `先在主窗口添加一个 ${productLabel} 账号`}</span>
             </div>
           )}
         </div>

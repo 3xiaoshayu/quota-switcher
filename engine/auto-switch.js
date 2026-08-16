@@ -66,8 +66,8 @@ async function autoSwitchTick(cfg, options = {}) {
   // rotation sync), so hold the account lock while it runs.
   const preIdx = loadIdx();
   const authState = preIdx.current_account_id
-    ? await withAccountLock(preIdx.current_account_id, async () => inspectAuthState())
-    : inspectAuthState();
+    ? await withAccountLock(preIdx.current_account_id, async () => inspectAuthState({ migrateProjection: false }))
+    : inspectAuthState({ migrateProjection: false });
   if (authState.requiresResolution) {
     return { switched: false, reason: "auth_conflict", authState };
   }
@@ -113,7 +113,7 @@ async function autoSwitchTick(cfg, options = {}) {
       const cached = loadAcct(curId);
       if (accountMustLeave(cached)) {
         cur = cached;
-      } else if (quotaIsFresh(cached)) {
+      } else if (quotaIsFresh(cached) || (error?.code === "quota_retry_pending" && cached)) {
         cur = cached;
       } else {
         return {

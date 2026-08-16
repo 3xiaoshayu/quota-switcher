@@ -9,7 +9,7 @@ import {
   Info
 } from 'lucide-react';
 import { AccountQuota, AutoSwitchRunResult, LogEntry, SystemSettings, DaemonState } from '../types';
-import { STATUS_DOT, STATUS_TEXT, autoSwitchStatusBanner, canJoinAutoSwitch, isCurrentQuotaSufficient, lastCheckCaption, planLabel, quotaScopeCaption } from '../api/desktop';
+import { autoSwitchStatusBanner, canJoinAutoSwitch, isCurrentQuotaSufficient, lastCheckCaption, planLabel, quotaScopeCaption, statusDotForAccount, statusTextForAccount } from '../api/desktop';
 import { toUserMessage } from '../api/user-messages';
 
 interface AutoSwitchProps {
@@ -171,10 +171,10 @@ export default function AutoSwitchView({
     }
   };
 
-  const getScopeStatusBadge = (status: AccountQuota['status']) => (
+  const getScopeStatusBadge = (account: AccountQuota) => (
     <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-label-2">
-      <span className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT[status] || 'bg-fill-3'}`} />
-      {STATUS_TEXT[status] || status}
+      <span className={`w-1.5 h-1.5 rounded-full ${statusDotForAccount(account)}`} />
+      {statusTextForAccount(account)}
     </span>
   );
 
@@ -235,7 +235,7 @@ export default function AutoSwitchView({
                   </div>
 
                   <div className="flex flex-col items-end text-right gap-1.5 shrink-0 pt-0.5" id={`scope-acc-right-${account.id}`}>
-                    {getScopeStatusBadge(account.status)}
+                    {getScopeStatusBadge(account)}
                     <span className="text-[11px] text-label-3">{planLabel(account.plan)}</span>
                   </div>
                 </motion.div>
@@ -298,7 +298,7 @@ export default function AutoSwitchView({
             <div className="flex items-center justify-between pb-6 border-b border-sep" id="autoswitch-global-row">
               <div className="flex flex-col" id="autoswitch-global-text">
                 <span className="font-bold text-label text-sm font-sans">全局开关</span>
-                <span className="text-xs text-label-2 mt-1">启用系统自动监测并切换账号</span>
+                <span className="text-xs text-label-2 mt-1">打开后，额度不够就会换号</span>
               </div>
               {/* Custom IOS style Toggle */}
               <motion.button
