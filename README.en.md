@@ -10,8 +10,8 @@ Several Codex and Cursor accounts, one Windows window.
 [![License](https://img.shields.io/badge/code-MIT-2f855a)](LICENSE)
 
 [Download](https://github.com/3xiaoshayu/codex-account-manager/releases) ·
-[Troubleshooting](docs/troubleshooting.md) ·
-[Privacy](docs/privacy.md) ·
+[Troubleshooting](docs/troubleshooting.en.md) ·
+[Privacy](docs/privacy.en.md) ·
 [简体中文](README.md)
 
 </div>
@@ -112,7 +112,7 @@ Compare that with `SHA256SUMS.txt` from the same release.
 
 Outbound calls go to OpenAI / ChatGPT, Cursor, and GitHub. Windows encryption
 will not help if someone already controls this PC. Details are in
-[Privacy](docs/privacy.md).
+[Privacy](docs/privacy.en.md).
 
 If official Codex and the manager disagree, the window asks whether to adopt
 the official login or write the managed one back.
@@ -133,14 +133,15 @@ Package with `npm run build:dir` or `npm run build:windows`.
 
 ## Docs
 
-[Architecture](docs/architecture.md) ·
-[Privacy](docs/privacy.md) ·
-[Troubleshooting](docs/troubleshooting.md) ·
+[Privacy](docs/privacy.en.md) ·
+[Troubleshooting](docs/troubleshooting.en.md) ·
+[Support](SUPPORT.en.md) ·
+[Security](SECURITY.en.md) ·
+[Changelog](CHANGELOG.md)
+
+For contributors: [Architecture](docs/architecture.md) ·
 [Contributing](CONTRIBUTING.md) ·
-[Security](SECURITY.md) ·
-[Releasing](docs/releasing.md) ·
-[Changelog](CHANGELOG.md) ·
-[Support](SUPPORT.md)
+[Releasing](docs/releasing.md)
 
 ## Notes
 

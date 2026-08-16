@@ -10,8 +10,7 @@ safe around authentication data.
 - Open an issue first for storage migrations, OAuth changes, switching
   behavior, new network destinations, a new product tab, or large UI
   restructuring.
-- Never include real accounts, tokens, callback URLs, logs, or screenshots
-  containing personal information.
+- Never include tokens, callback URLs, account files, or raw logs.
 
 Security vulnerabilities must be reported through
 [private vulnerability reporting](https://github.com/3xiaoshayu/codex-account-manager/security/advisories/new),

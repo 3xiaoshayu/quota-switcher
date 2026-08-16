@@ -1,39 +1,34 @@
-# Support
+# 支持
 
-## Usage and bug reports
+[English](SUPPORT.en.md)
 
-Use the repository's issue forms for reproducible bugs and focused feature
-requests:
+## 使用和报错
 
-- [Report a bug](https://github.com/3xiaoshayu/codex-account-manager/issues/new?template=bug_report.yml)
-- [Request a feature](https://github.com/3xiaoshayu/codex-account-manager/issues/new?template=feature_request.yml)
+能复现的问题、想做的小改进，请用仓库里的表格：
 
-Before opening an issue:
+- [缺陷反馈](https://github.com/3xiaoshayu/codex-account-manager/issues/new?template=bug_report.yml)
+- [功能建议](https://github.com/3xiaoshayu/codex-account-manager/issues/new?template=feature_request.yml)
 
-1. update to the newest release;
-2. read [Troubleshooting](docs/troubleshooting.md);
-3. say whether the issue is Codex, Cursor, or both;
-4. confirm the matching official client is installed when the issue depends on
-   switching or local import;
-5. do not attach tokens, auth files, or OAuth callback URLs. Emails in
-   screenshots are fine.
+开 Issue 之前：
 
-This community project is maintained on a best-effort basis and does not
-provide guaranteed response times.
+1. 先更新到最新一版
+2. 看过[故障排查](docs/troubleshooting.md)
+3. 说清楚是 Codex、Cursor，还是两个都有
+4. 问题跟切号或导入有关时，确认对应的官方客户端已经装着
+5. 不要附 token、账号文件或授权回调。截图可以带邮箱
 
-## Security
+这是社区项目，能看就看，不保证回复时间。
 
-Do not use a public issue for suspected vulnerabilities or credential
-exposure. Follow [SECURITY.md](SECURITY.md) and use
-[private vulnerability reporting](https://github.com/3xiaoshayu/codex-account-manager/security/advisories/new).
+## 安全
 
-## What not to share
+怀疑凭证泄露或安全漏洞，不要开公开 Issue。看 [SECURITY.md](SECURITY.md)，走
+[私下报告](https://github.com/3xiaoshayu/codex-account-manager/security/advisories/new)。
 
-Never upload:
+## 这些不要上传
 
-- `%USERPROFILE%\.codex-switch`;
-- `%USERPROFILE%\.codex\auth.json` or `auth.json.bak`;
-- `%APPDATA%\Cursor\User\globalStorage\state.vscdb` or its WAL/SHM files;
-- OAuth callback URLs;
-- access, ID, or refresh tokens;
-- logs containing authorization headers.
+- `%USERPROFILE%\.codex-switch`
+- `%USERPROFILE%\.codex\auth.json` 或 `auth.json.bak`
+- `%APPDATA%\Cursor\User\globalStorage\state.vscdb` 以及旁边的 WAL / SHM
+- 授权回调地址
+- 访问令牌、刷新令牌
+- 带授权头的日志

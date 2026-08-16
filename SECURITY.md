@@ -1,59 +1,51 @@
-# Security Policy
+# 安全说明
 
-Codex Account Manager handles OAuth credentials and modifies the local Codex
-and Cursor authentication state. Security reports are treated as a priority.
+[English](SECURITY.en.md)
 
-## Supported versions
+这个应用会保存登录，也会改本机官方 Codex / Cursor 的登录。安全报告会优先看。
 
-| Version | Security fixes |
+## 哪些版本还管
+
+| 版本 | 是否修补 |
 | --- | --- |
-| Latest stable release | Supported |
-| Latest prerelease | Supported during beta |
-| Older releases | Not supported |
+| 最新正式版 | 管 |
+| 最新预发布 | Beta 期间管 |
+| 更早的版本 | 不管 |
 
-## Report a vulnerability
+## 怎么报告
 
-Use
-[GitHub private vulnerability reporting](https://github.com/3xiaoshayu/codex-account-manager/security/advisories/new).
+走
+[GitHub 私下报告](https://github.com/3xiaoshayu/codex-account-manager/security/advisories/new)。
 
-Do not open a public issue for:
+这些不要开公开 Issue：
 
-- exposed or recoverable tokens;
-- OAuth callback or state validation problems;
-- arbitrary file access or command execution;
-- unsafe update delivery;
-- credential migration or DPAPI failures;
-- account switching that can corrupt unrelated local data.
+- 能拿出来用的 token
+- 授权回调或校验有漏洞
+- 能乱读文件或跑命令
+- 更新渠道不安全
+- 加密迁移失败
+- 切号可能毁掉别人的本机数据
 
-Include the affected version, Windows version, reproduction steps, impact, and
-the smallest redacted proof needed to understand the issue. Do not send a real
-token or complete authentication file.
+写上版本、Windows 版本、怎么复现、会怎样。不要寄真实 token 或完整账号文件。
 
-The maintainers will acknowledge a valid report as soon as practical, keep
-discussion private while a fix is prepared, and credit the reporter when
-requested and appropriate.
+能确认的报告会尽快回，修好之前私下谈。愿意署名的，可以写进致谢。
 
-## Sensitive local files
+## 这些文件很敏感
 
-- `%USERPROFILE%\.codex-switch` contains encrypted account credentials and configuration.
-- `%USERPROFILE%\.codex\auth.json` contains the active Codex credential state.
-- `%USERPROFILE%\.codex\auth.json.bak` may contain the previous credential state.
-- `%APPDATA%\Cursor\User\globalStorage\state.vscdb` contains the official Cursor login.
+- `%USERPROFILE%\.codex-switch`：加密后的账号和配置
+- `%USERPROFILE%\.codex\auth.json`：官方 Codex 正在用的登录
+- `%USERPROFILE%\.codex\auth.json.bak`：上一份 Codex 登录
+- `%APPDATA%\Cursor\User\globalStorage\state.vscdb`：官方 Cursor 登录
 
-Never attach these files or directories to an issue. Emails in screenshots
-are fine. Strip callback URLs, tokens, and authorization headers from logs.
+不要把这些目录或文件附到 Issue。截图可以带邮箱。日志里的回调、token、授权头请先抹掉。
 
-## Security boundaries
+## 边界
 
-- Saved manager tokens are encrypted with Windows DPAPI.
-- The active Codex `auth.json` remains readable by Codex.
-- The official Cursor `state.vscdb` remains readable by Cursor.
-- DPAPI does not protect against code already running as the same Windows user
-  or against a machine administrator.
-- The application relies on upstream OpenAI, ChatGPT, Cursor, GitHub, Electron,
-  and Windows security properties.
-- Unsigned prerelease installers can trigger SmartScreen and must be verified
-  against the release checksum.
+- 管理器里保存的登录，用 Windows 加密
+- 官方 Codex 的 `auth.json` 必须能被 Codex 读到
+- 官方 Cursor 的 `state.vscdb` 必须能被 Cursor 读到
+- 同一 Windows 用户下的程序，或管理员，加密也挡不住
+- 上游 OpenAI、Cursor、GitHub、Electron、Windows 各自的安全，不在本项目控制里
+- 没签名的安装包可能被 SmartScreen 拦，请对 SHA-256
 
-See [docs/privacy.md](docs/privacy.md) for the complete local data and network
-behavior description.
+本机数据和出门访问见[隐私说明](docs/privacy.md)。

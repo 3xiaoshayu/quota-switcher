@@ -67,7 +67,7 @@
   </tr>
 </table>
 
-上面第一张是 Cursor 账号页。点叉是收到托盘，不是退出。
+顶上大图是 Cursor 账号页。点叉是收到托盘，不是退出。
 
 ## 安装
 
@@ -114,14 +114,15 @@ npm start
 
 ## 文档
 
-[架构](docs/architecture.md) ·
 [隐私](docs/privacy.md) ·
 [故障排查](docs/troubleshooting.md) ·
-[贡献](CONTRIBUTING.md) ·
+[支持](SUPPORT.md) ·
 [安全](SECURITY.md) ·
-[发布](docs/releasing.md) ·
-[版本记录](CHANGELOG.md) ·
-[支持](SUPPORT.md)
+[版本记录](CHANGELOG.md)
+
+给改代码的人：[架构](docs/architecture.md) ·
+[贡献](CONTRIBUTING.md) ·
+[发布](docs/releasing.md)
 
 ## 说明
 

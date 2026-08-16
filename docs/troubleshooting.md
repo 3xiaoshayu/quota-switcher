@@ -1,179 +1,135 @@
-# Troubleshooting
+# 故障排查
 
-## Windows shows an unknown publisher
+[English](troubleshooting.en.md)
 
-Current prerelease installers are not code-signed, so Microsoft Defender
-SmartScreen may display an unknown-publisher warning.
+## Windows 说未知发布者
 
-1. Download only from this repository's Releases page.
-2. Compare the installer SHA-256 with `SHA256SUMS.txt`.
-3. Do not run a build received through chat, email, or an unrelated mirror.
+现在的安装包还没签名，SmartScreen 可能拦一下。
 
-This warning can only be removed reliably by signing future releases with a
-trusted Windows code-signing certificate.
+1. 只从本仓库 Releases 下载
+2. 用 `SHA256SUMS.txt` 对一下 SHA-256
+3. 聊天、邮件或来路不明的包不要跑
 
-## Codex is reported as not installed
+以后签了名，这条提示才会稳定消失。
 
-The current Windows build supports the official Microsoft Store Codex package
-with AUMID:
+## 说没装 Codex
+
+目前只认微软商店里的官方 Codex：
 
 ```text
 OpenAI.Codex_2p2nqsd0c76g0!App
 ```
 
-Install or update Codex from the Microsoft Store, launch it once, then select
-**Re-detect** in Settings. Other package sources are not supported yet.
+商店里装好或更新，打开一次，再到设置里点「重新检测」。别的安装来源现在还不认。
 
-## Cursor is reported as not found
+## 说找不到 Cursor
 
-Cursor features need the official Cursor app on this PC. Install Cursor, launch
-it once, then select **Re-detect** in Settings. Portable copies that are not
-registered as `Cursor.exe` may not be detected.
+管 Cursor 需要本机装着官方 Cursor。装好后打开一次，再到设置里点「重新检测」。不是 `Cursor.exe` 的便携版，可能认不出来。
 
-## Adding a Codex account does not complete
+## Codex 加号加不进去
 
-The Codex OAuth callback listens on local port `1455`.
+Codex 网页授权会回到本机 `1455` 端口。
 
-- Keep the manager open while signing in.
-- Allow the browser to return to `http://localhost:1455`.
-- Close software already using port `1455`.
-- Check whether firewall or security software blocks local loopback traffic.
-- Retry **Add account** after the previous login attempt has ended.
-- If automatic return fails, paste the complete callback URL into the manual
-  callback field in the add-account dialog.
-- Pending OAuth authorization is restored after an app restart for up to five
-  minutes.
+- 登录时不要关管理器
+- 允许浏览器回到 `http://localhost:1455`
+- 先关掉也在用 `1455` 的软件
+- 防火墙不要拦本机回环
+- 上一次授权结束后，再点添加账号
+- 浏览器没自动回来，把完整回调地址贴进添加账号窗口
+- 没完成的授权，重启后大约还能接着等五分钟
 
-If the modal reports `Client network socket disconnected before secure TLS
-connection was established`, or an error starting with `授权已返回，但交换
-Token 失败`, the browser authorization step has already returned to the app,
-but the token exchange request could not reach the OpenAI authorization
-endpoint. Check whether your proxy, VPN, TUN mode, firewall, or security
-software applies to desktop applications as well as the browser. If the browser
-works but the app does not, switch the proxy from browser-only mode to system or
-TUN mode, then retry **Add account**.
+如果提示 `Client network socket disconnected before secure TLS connection was established`，或「授权已返回，但交换 Token 失败」，说明浏览器已经回来了，但换登录时出不去。看看代理、VPN、TUN、防火墙是不是只照顾了浏览器。浏览器能上、应用不能上时，把代理改成系统或 TUN，再试一次。
 
-Do not post the callback URL in an issue; it can contain sensitive authorization
-data.
+不要把回调地址发到 Issue 里。
 
-## Adding a Cursor account does not complete
+## Cursor 加号加不进去
 
-Cursor sign-in opens the official login page and waits for the browser flow to
-finish. There is no callback URL to paste.
+Cursor 会打开官方登录页，等你在浏览器里登完。没有回调地址可贴。
 
-- Keep the manager open while signing in.
-- Finish the Cursor login in the browser with the account you intend to add.
-- If Cursor is already open, close unsaved editor work first; a later switch
-  will restart official Cursor.
-- Retry **Add account** after the previous login attempt has ended.
+- 登录时不要关管理器
+- 用你要加的那个号登完
+- 官方 Cursor 正开着，先把没保存的编辑收好，后面切号会重启它
+- 上一次授权结束后，再点添加账号
 
-You can also import the Cursor login already on this PC instead of opening the
-browser flow.
+也可以直接导入本机已经登录的 Cursor，不用走网页。
 
-## Quota stays unknown
+## 额度一直是未知
 
-An unknown quota is different from zero quota. Exhausted Cursor usage is shown
-as **已用尽**, not as a missing window.
+未知不是 0。Cursor 用完了会写 **已用尽**，缺的那一档会写 **暂无此项**。
 
-- Wait for the background refresh or select **Refresh quota** on the card.
-- Confirm the account token is not expired or marked for reauthentication.
-- Confirm `chatgpt.com` (Codex) or `cursor.com` (Cursor) is reachable from the
-  current network.
-- If Windows system proxy is off but a local HTTP/SOCKS port is still live,
-  the app should follow that port. If quota hangs, check the proxy client.
-- Check another saved account to distinguish an account-specific response from
-  a network-wide failure.
+- 等后台刷，或在卡片上点刷新额度
+- 看这个号是不是要重新授权
+- Codex 要能访问 `chatgpt.com`，Cursor 要能访问 `cursor.com`
+- Windows 系统代理关了，但本机还有 HTTP / SOCKS 端口时，应用会跟着走。一直转圈，先看代理软件
+- 再看另一个号，分清是这一个号的事，还是整网的事
 
-Codex 5-hour and weekly windows are parsed independently. Some accounts or
-responses may not expose both windows; those rows say **暂无此项**. Cursor
-shows plan, Auto, and API independently.
+Codex 的 5 小时和周额度分开读。有的号只有其中一档。Cursor 的套餐、Auto、API 也是分开的。
 
-## Token refresh fails
+## 续登录失败
 
-If a refresh token has expired, been revoked, or already been rotated
-elsewhere, use **Reauthorize account** from the affected account card. If the
-new login belongs to a different identity, it is saved as a separate account
-instead of overwriting the original record.
+登录过期、被撤，或在别处已经换过，就在卡片上重新授权。新登进来的如果是另一个人，会存成新号，不会盖掉原来的。
 
-Never paste a refresh token, `auth.json`, Cursor `state.vscdb`, or account file
-into a GitHub issue.
+不要把刷新令牌、`auth.json`、Cursor 的 `state.vscdb` 或账号文件贴到 Issue 里。
 
-## Switching succeeds but Codex shows the previous account
+## 切过去了，Codex 还是上一个号
 
-1. Finish active Codex work.
-2. Close all remaining Codex windows.
-3. Switch again from the manager.
-4. Confirm the manager marks the selected card as current.
-5. Restart Windows if a stale Store app process cannot be terminated.
+1. 把手头的 Codex 任务做完
+2. 把还开着的 Codex 窗口都关掉
+3. 在管理器里再切一次
+4. 看卡片是不是已经标成当前
+5. 商店应用退不干净时，重启 Windows
 
-Switching intentionally restarts the Codex application. A session that was
-already running may be interrupted.
+切号本来就会重启 Codex，正在跑的会话会被打断。
 
-## Switching Cursor is refused or rolls back
+## Cursor 切不过去，或切完又退回来
 
-- Finish unsaved work in official Cursor first. The switch closes that app.
-- If the manager says the login database is still being written, wait a moment
-  and retry. It will not overwrite `state.vscdb` while a WAL write is pending.
-- If you are working inside official Cursor, finish or save that session
-  first. The switch will close it.
+- 先保存官方 Cursor 里的编辑，切号会关掉它
+- 提示登录库还在写，等一会儿再试，不会硬盖
+- 你正在这台官方 Cursor 里干活，就先收尾再切
 
-## Official Codex login changed
+## 官方 Codex 自己换了号
 
-The manager pauses authentication writes and automatic switching when the
-official Codex login differs from its managed current account. Choose
-**Adopt official account** to import and use the official login, or
-**Reapply managed account** to restore the manager-selected identity.
+官方登录和管理器对不上时，写入和自动切号会停。选「采用官方账号」，或把管理器选的号写回去。
 
-## The window closed but the app is still running
+## 窗口关了，程序还在
 
-The title-bar close button hides the main window to the tray. The auto-switch
-daemon keeps running. Left-click the tray icon, or choose **Open window**, to
-show the window again. To quit, right-click the tray icon and choose **Exit**.
+点叉是收到托盘，自动切号还在跑。左键托盘图标，或菜单里的「打开窗口」，就能回来。要退出，右键托盘，选「退出」。
 
-## The desktop quota lens does not appear
+## 桌面额度镜不出现
 
-Open it from the tray menu item **Open desktop quota**, or from
-**Settings > Desktop quota > Open**. If no accounts are saved yet, the lens
-shows an empty state until you add one. The lens follows the sidebar product:
-Codex shows nested 5-hour / weekly rings, Cursor shows Auto and API.
+托盘菜单里点「打开桌面额度」，或到 **系统设置 > 桌面额度 > 打开**。还没有账号时，小窗是空的。它跟着侧栏走：Codex 是 5 小时套周额度，Cursor 是 Auto 和 API。
 
-## Account files appear missing
+## 账号文件不见了
 
-Open **Settings > Logs** and inspect the latest diagnostic file. Malformed JSON
-is restored from `.bak` when possible. DPAPI decryption failures are left in
-place so the original encrypted account file is not destroyed.
+到 **系统设置 > 日志** 看最近的文件。坏掉的 JSON 会尽量从 `.bak` 找回。解不开的加密文件会留着，不会直接毁掉。
 
-## A custom API base URL disappeared
+## 自定义接口地址没了
 
-Account switching removes `api_base_url` and `openai_base_url` entries from
-`%USERPROFILE%\.codex\config.toml` so the selected account starts against the
-standard Codex service.
+切 Codex 会清掉 `%USERPROFILE%\.codex\config.toml` 里的 `api_base_url` 和 `openai_base_url`，好让这个号走官方服务。
 
-Back up advanced Codex configuration before switching if you depend on a
-custom endpoint.
+你靠自定义地址干活，切号前先自己备份。
 
-## Build downloads time out
+## 打包时下载超时
 
-Retry the release build with an electron-builder mirror:
+可以换 electron-builder 镜像再打：
 
 ```powershell
 $env:ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"
 npm run build:windows
 ```
 
-This environment variable affects only local build dependency downloads.
+这只影响本机打包时下依赖。
 
-## Preparing a bug report
+## 准备报问题
 
-Include:
+写上：
 
-- application version;
-- Windows version and architecture;
-- whether the issue is Codex, Cursor, or both;
-- Codex / Cursor install source;
-- exact steps and expected behavior;
-- whether the issue occurs for one account or all accounts;
-- a screenshot when useful.
+- 应用版本
+- Windows 版本
+- 是 Codex、Cursor，还是两个都有
+- 官方客户端从哪装的
+- 怎么点的、期望看到什么
+- 一个号有问题，还是所有号都有
+- 需要的话附一张截图
 
-Do not attach tokens, account files, callback URLs, or authorization headers.
-Emails in screenshots are fine. Use the repository's bug report form.
+不要附 token、账号文件、回调地址或带请求头的日志。截图可以带邮箱。用仓库里的缺陷反馈表。

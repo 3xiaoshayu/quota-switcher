@@ -1,131 +1,101 @@
-# Privacy
+# 隐私说明
 
-Codex Account Manager is local-first. It does not operate a project-owned
-backend, telemetry pipeline, advertising service, or cross-device account sync.
+[English](privacy.en.md)
 
-## Local data
+账号只存在这台电脑上。这个项目没有自己的服务器，不收集使用数据，也不做跨设备同步。
 
-| Path | Contents |
+## 本机存什么
+
+| 位置 | 里面是什么 |
 | --- | --- |
-| `%USERPROFILE%\.codex-switch\accounts.json` | Codex account index and current account ID |
-| `%USERPROFILE%\.codex-switch\cursor-accounts.json` | Cursor account index and current account ID |
-| `%USERPROFILE%\.codex-switch\auto-switch.json` | Thresholds, scope, and daemon settings |
-| `%USERPROFILE%\.codex-switch\accounts\*.json` | Codex account metadata and DPAPI-encrypted OAuth tokens |
-| `%USERPROFILE%\.codex-switch\cursor-accounts\*.json` | Cursor account metadata and DPAPI-encrypted OAuth tokens |
-| `%USERPROFILE%\.codex-switch\codex_oauth_pending.json` | DPAPI-encrypted temporary Codex OAuth state removed after completion, cancellation, or expiry |
-| `%USERPROFILE%\.codex-switch\cursor_oauth_pending.json` | DPAPI-encrypted temporary Cursor OAuth state removed after completion, cancellation, or expiry |
-| `%USERPROFILE%\.codex-switch\logs\app-YYYY-MM-DD.log` | Sanitized operational diagnostics retained for three days |
-| `%USERPROFILE%\.codex\auth.json` | Active authentication state consumed by official Codex |
-| `%USERPROFILE%\.codex\auth.json.bak` | Previous active Codex authentication state |
-| `%USERPROFILE%\.codex\codex_auth_projection.json` | Manager projection of the selected Codex account |
-| `%APPDATA%\Cursor\User\globalStorage\state.vscdb` | Official Cursor login database written during a Cursor switch |
+| `%USERPROFILE%\.codex-switch\accounts.json` | Codex 账号列表和当前号 |
+| `%USERPROFILE%\.codex-switch\cursor-accounts.json` | Cursor 账号列表和当前号 |
+| `%USERPROFILE%\.codex-switch\auto-switch.json` | 自动切号的线和范围 |
+| `%USERPROFILE%\.codex-switch\accounts\*.json` | Codex 账号资料，登录凭证用 Windows 加密 |
+| `%USERPROFILE%\.codex-switch\cursor-accounts\*.json` | Cursor 账号资料，登录凭证用 Windows 加密 |
+| `%USERPROFILE%\.codex-switch\codex_oauth_pending.json` | 正在进行的 Codex 网页授权，完成后会删 |
+| `%USERPROFILE%\.codex-switch\cursor_oauth_pending.json` | 正在进行的 Cursor 网页授权，完成后会删 |
+| `%USERPROFILE%\.codex-switch\logs\app-YYYY-MM-DD.log` | 三天内的运行日志，会抹掉凭证和邮箱 |
+| `%USERPROFILE%\.codex\auth.json` | 官方 Codex 正在用的登录 |
+| `%USERPROFILE%\.codex\auth.json.bak` | 上一次 Codex 登录的备份 |
+| `%USERPROFILE%\.codex\codex_auth_projection.json` | 管理器记下的当前 Codex |
+| `%APPDATA%\Cursor\User\globalStorage\state.vscdb` | 切 Cursor 时写入的官方登录库 |
 
-The installer and application do not include tokens, logs, or usage snapshots.
-Public README screenshots may show live account emails.
+安装包里不带账号和凭证。仓库首页截图里的邮箱是实机画面。
 
-## Token protection
+## 登录怎么保护
 
-Saved account tokens are encrypted through Electron `safeStorage`, backed by
-Windows DPAPI. The encrypted payload can normally be decrypted only by the
-same Windows user on the same installation.
+保存下来的登录，用 Windows 当前用户的加密。换一个 Windows 用户，或换一台电脑，一般解不开。
 
-This protects credentials at rest from casual file disclosure. It does not
-protect against:
+防不住这些情况：
 
-- malware running as the same Windows user;
-- an administrator controlling the machine;
-- screenshots, logs, or files that a user intentionally shares;
-- a compromised upstream account or Windows login.
+- 同一 Windows 用户下的木马
+- 能管这台电脑的管理员
+- 你自己发出去的截图、日志或文件
+- 上游账号或 Windows 登录已经被别人拿了
 
-The active Codex `auth.json` must remain readable by Codex. The official Cursor
-`state.vscdb` must remain readable by Cursor. Both should always be treated as
-sensitive.
+官方 Codex 的 `auth.json`、官方 Cursor 的 `state.vscdb` 必须能被官方软件读到，请当成敏感文件。
 
-Application logs mask OAuth tokens, callback codes, state values, bearer
-credentials, JWTs, and email addresses. Review diagnostic logs before sharing.
+日志会抹掉 token、回调、邮箱。发出去之前再看一眼。
 
-## Network requests
+## 会访问哪些网站
 
-The application makes requests only when required by a visible feature or
-background account maintenance:
+只有你点了功能，或后台在续登录、刷额度时才会出门。界面背景图打在安装包里，运行时不会去下图。
 
-Interface backgrounds are bundled with the application and do not trigger
-third-party image requests at runtime.
-
-| Destination | Purpose |
+| 去哪 | 做什么 |
 | --- | --- |
-| `auth.openai.com` | Codex OAuth authorization and token refresh |
-| `chatgpt.com` | Codex quota and account profile reads |
-| `cursor.com` | Cursor sign-in and usage reads |
-| `api2.cursor.sh` | Cursor token refresh, poll, and account metadata |
-| `github.com` and GitHub release endpoints | Release downloads and stable update checks |
+| `auth.openai.com` | Codex 登录和续登录 |
+| `chatgpt.com` | Codex 额度和账号资料 |
+| `cursor.com` | Cursor 登录和用量 |
+| `api2.cursor.sh` | Cursor 续登录和账号资料 |
+| `github.com` 及 Release 地址 | 下载更新 |
 
-No account list or token is sent to a server operated by this project.
-Standard upstream service logs and policies may still apply to requests sent
-to OpenAI, ChatGPT, Cursor, GitHub, or the user's network provider.
+账号列表和 token 不会发到本项目的服务器。OpenAI、Cursor、GitHub 和你的网络提供方仍可能按各自规则记日志。
 
-A local HTTP or SOCKS proxy may be discovered and reused so quota refresh can
-follow the same outbound path as the browser. Proxy credentials are redacted
-in logs.
+本机如果开着 HTTP / SOCKS 代理，额度刷新会跟着走。代理密码不会写进日志。
 
-## Background behavior
+## 后台会做什么
 
-The app can refresh stale quota data, refresh expiring tokens, and evaluate
-automatic-switching thresholds while it is running. These requests use the
-saved account's local OAuth credentials.
+开着的时候，它可能刷新过期额度、续一下快到期的登录，并按你设的线判断要不要换 Codex。用的都是存在本机的登录。
 
-Automatic switching is Codex-only and disabled unless enabled by the user. It
-does not create additional quota and cannot bypass upstream limits. Cursor
-accounts are not candidates for automatic switching.
+自动切号默认关着，而且只换 Codex。它不会给你加额度，也绕不过上游限制。
 
-## Process and file changes
+## 切号会动哪些文件
 
-Switching a Codex account:
+切 Codex：
 
-- requests a normal close for the official Codex process tree and force-closes
-  only matching processes that remain after a timeout;
-- creates or updates `auth.json.bak`;
-- removes `api_base_url` and `openai_base_url` overrides from Codex
-  `%USERPROFILE%\.codex\config.toml`;
-- writes the selected account to Codex `auth.json`;
-- restarts the official Microsoft Store Codex app.
+- 先让官方 Codex 正常退出，超时再结束还在的进程
+- 备份 `auth.json.bak`
+- 清掉 Codex `config.toml` 里的自定义接口地址
+- 把选中的号写进 `auth.json`
+- 再拉起微软商店版 Codex
 
-Switching a Cursor account:
+切 Cursor：
 
-- requests a normal close for official Cursor and force-closes only matching
-  processes that remain after a timeout;
-- refuses to overwrite `state.vscdb` while a WAL write is still pending;
-- writes the selected Cursor login into `state.vscdb`;
-- relaunches official Cursor.
+- 先让官方 Cursor 退出
+- 登录库还在写盘时，不会硬盖
+- 把选中的号写进 `state.vscdb`
+- 再打开官方 Cursor
 
-If official Codex authentication changes outside the manager, authentication
-writes and automatic switching pause until the user adopts the official login
-or reapplies the managed account.
+官方 Codex 在管理器外面换了号，写入和自动切号会停，等你选：用官方那个号，或写回管理器选的号。
 
-Finish active work before switching. Switching Cursor closes the official
-Cursor window, including unsaved editor work.
+切号前把手头的活做完。切 Cursor 会关掉官方 Cursor，没保存的编辑可能丢。
 
-## Uninstall and deletion
+## 卸载以后
 
-Uninstalling the application does not automatically delete account data.
-After uninstalling, remove `%USERPROFILE%\.codex-switch` manually if you no
-longer need the saved accounts.
+卸掉应用不会自动删账号。不要了，再自己删 `%USERPROFILE%\.codex-switch`。
 
-Deleting `%USERPROFILE%\.codex-switch` is irreversible. Do not delete
-`%USERPROFILE%\.codex` unless you also intend to remove Codex's own local
-state. Do not delete `%APPDATA%\Cursor` unless you also intend to remove
-Cursor's own local state.
+删了就回不来。不要顺便删 `%USERPROFILE%\.codex` 或 `%APPDATA%\Cursor`，那是官方软件自己的数据。
 
-## Reporting an issue
+## 来报问题时
 
-Never attach these files or directories to a GitHub issue:
+这些不要附在 Issue 里：
 
-- `.codex-switch`;
-- `.codex\auth.json` or its backup;
-- Cursor `state.vscdb` or its WAL/SHM files;
-- OAuth callback URLs;
-- full application or network logs containing headers.
+- `.codex-switch`
+- `.codex\auth.json` 和它的备份
+- Cursor 的 `state.vscdb` 以及旁边的 WAL / SHM
+- 授权回调地址
+- 带请求头的完整日志
 
-Emails in screenshots are fine. Do not attach tokens or account files. Report
-suspected credential exposure through
-[GitHub private vulnerability reporting](https://github.com/3xiaoshayu/codex-account-manager/security/advisories/new).
+截图可以带邮箱。不要附 token 或账号文件。凭据泄露请走
+[私下报告](https://github.com/3xiaoshayu/codex-account-manager/security/advisories/new)。
