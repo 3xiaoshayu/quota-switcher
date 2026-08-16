@@ -42,32 +42,32 @@
 
 <table>
   <tr>
+    <td align="center"><sub><b>Codex 账号</b></sub></td>
     <td align="center"><sub><b>Cursor 配额</b></sub></td>
-    <td align="center"><sub><b>Codex 自动切号</b></sub></td>
   </tr>
   <tr>
+    <td><img src="docs/images/codex-accounts.png" alt="Codex 账号" /></td>
     <td><img src="docs/images/quota-overview.png" alt="Cursor 配额总览" /></td>
-    <td><img src="docs/images/auto-switch.png" alt="Codex 自动切号" /></td>
   </tr>
   <tr>
+    <td align="center"><sub><b>Codex 自动切号</b></sub></td>
     <td align="center"><sub><b>系统设置</b></sub></td>
-    <td align="center"><sub><b>登录</b></sub></td>
   </tr>
   <tr>
+    <td><img src="docs/images/auto-switch.png" alt="Codex 自动切号" /></td>
     <td><img src="docs/images/settings.png" alt="系统设置" /></td>
-    <td><img src="docs/images/login.png" alt="登录" /></td>
   </tr>
   <tr>
+    <td align="center"><sub><b>登录</b></sub></td>
     <td align="center"><sub><b>桌面额度镜</b></sub></td>
-    <td align="center"><sub><b>托盘菜单</b></sub></td>
   </tr>
   <tr>
+    <td><img src="docs/images/login.png" alt="登录" /></td>
     <td><img src="docs/images/float-lens.png" alt="桌面额度镜" /></td>
-    <td><img src="docs/images/tray-menu.png" alt="托盘菜单" /></td>
   </tr>
 </table>
 
-截图里的邮箱已做遮盖。主图是 Cursor 账号页，侧栏可以切回 Codex。
+主图是 Cursor 账号页。点叉会收到托盘。
 
 ## 安装
 

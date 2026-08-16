@@ -7,56 +7,6 @@ const root = path.resolve(__dirname, "..");
 const outDir = path.join(root, "docs", "images");
 const cdpUrl = process.env.README_CDP_URL || "http://127.0.0.1:9222";
 
-function maskEmailsInText(text) {
-  return String(text || "").replace(
-    /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
-    (email) => {
-      const parts = email.split("@");
-      const user = parts[0] || "user";
-      const domain = parts.slice(1).join("@") || "example.com";
-      const visible = user.slice(0, 2);
-      const host = domain.split(".")[0] || "mail";
-      return `${visible}***@${host}.example`;
-    },
-  );
-}
-
-async function maskPage(page) {
-  await page.evaluate(() => {
-    const emailRe = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
-    const maskEmail = (text) => String(text || "").replace(emailRe, (email) => {
-      const user = email.split("@")[0] || "user";
-      const domain = email.split("@").slice(1).join("@") || "example.com";
-      return `${user.slice(0, 2)}***@${(domain.split(".")[0] || "mail")}.example`;
-    });
-    const source = document.body.innerText || "";
-    const locals = [...new Set((source.match(emailRe) || []).map((email) => email.split("@")[0]).filter((part) => part.length >= 4))];
-    const maskLocal = (text) => {
-      let next = maskEmail(text);
-      for (const local of locals) {
-        if (!local) continue;
-        next = next.split(local).join(`${local.slice(0, 2)}***`);
-      }
-      return next;
-    };
-    const walk = (node) => {
-      if (node.nodeType === 3) {
-        node.textContent = maskLocal(node.textContent);
-        return;
-      }
-      if (node.nodeType !== 1) return;
-      for (const attr of ["title", "aria-label", "placeholder"]) {
-        const value = node.getAttribute && node.getAttribute(attr);
-        if (value) node.setAttribute(attr, maskLocal(value));
-      }
-      for (const child of Array.from(node.childNodes)) walk(child);
-    };
-    walk(document.body);
-    const profile = document.querySelector("#header-user-profile-widget span");
-    if (profile && profile.textContent) profile.textContent = "demo-user";
-  });
-}
-
 async function save(page, name) {
   const target = path.join(outDir, name);
   await page.screenshot({ path: target, type: "png" });
@@ -88,23 +38,27 @@ async function captureDashboard(page) {
   await selectProduct(page, "cursor");
   await page.click("#sidebar-nav-accounts");
   await page.waitForTimeout(500);
-  await maskPage(page);
   await save(page, "account-dashboard.png");
 
   await page.click("#sidebar-nav-quotas");
   await page.waitForTimeout(500);
-  await maskPage(page);
   await save(page, "quota-overview.png");
 
   await selectProduct(page, "codex");
+  await page.click("#sidebar-nav-accounts");
+  await page.waitForTimeout(500);
+  await save(page, "codex-accounts.png");
+
   await page.click("#sidebar-nav-autoswitch");
   await page.waitForTimeout(500);
-  await maskPage(page);
+  await page.evaluate(() => {
+    const banner = document.querySelector("#autoswitch-log-banner");
+    if (banner) banner.style.display = "none";
+  });
   await save(page, "auto-switch.png");
 
   await page.click("#sidebar-nav-settings");
   await page.waitForTimeout(500);
-  await maskPage(page);
   await save(page, "settings.png");
 }
 
@@ -121,13 +75,11 @@ async function captureFloat(browser, page) {
     return;
   }
   await lens.bringToFront();
-  await maskPage(lens);
   const current = await lens.locator(".float-lens-shell").screenshot({ type: "png" });
   const nextBtn = lens.locator('button[title="下一个账号"]');
   if (await nextBtn.count()) {
     await nextBtn.click();
     await lens.waitForTimeout(250);
-    await maskPage(lens);
   }
   const preview = await lens.locator(".float-lens-shell").screenshot({ type: "png" });
   const currentPath = path.join(os.tmpdir(), "cam-float-current.png");
@@ -196,7 +148,6 @@ async function captureLogin(page) {
   const input = page.locator("#login-email-input");
   if (await input.count()) await input.fill("");
   await page.waitForTimeout(300);
-  await maskPage(page);
   await save(page, "login.png");
   await page.evaluate((auth) => {
     if (auth.status) localStorage.setItem("codex_auth_status", auth.status);
@@ -219,7 +170,6 @@ async function main() {
     await page.waitForTimeout(500);
     const onLogin = await page.locator("#login-card").count();
     if (onLogin) {
-      await maskPage(page);
       await save(page, "login.png");
       const input = page.locator("#login-email-input");
       if (await input.count()) {
@@ -234,6 +184,8 @@ async function main() {
     await captureFloat(browser, page);
     const previousUrl = await captureLogin(page);
     if (previousUrl) await restoreSession(page, previousUrl);
+    await selectProduct(page, "cursor");
+    await page.click("#sidebar-nav-accounts");
   } finally {
     // Keep the running desktop app open.
   }

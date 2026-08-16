@@ -57,33 +57,32 @@ work finish first.
 
 <table>
   <tr>
+    <td align="center"><sub><b>Codex accounts</b></sub></td>
     <td align="center"><sub><b>Cursor quotas</b></sub></td>
-    <td align="center"><sub><b>Codex auto-switch</b></sub></td>
   </tr>
   <tr>
+    <td><img src="docs/images/codex-accounts.png" alt="Codex accounts" /></td>
     <td><img src="docs/images/quota-overview.png" alt="Cursor quota overview" /></td>
-    <td><img src="docs/images/auto-switch.png" alt="Codex automatic switching" /></td>
   </tr>
   <tr>
+    <td align="center"><sub><b>Codex auto-switch</b></sub></td>
     <td align="center"><sub><b>Settings</b></sub></td>
-    <td align="center"><sub><b>Login</b></sub></td>
   </tr>
   <tr>
+    <td><img src="docs/images/auto-switch.png" alt="Codex automatic switching" /></td>
     <td><img src="docs/images/settings.png" alt="Settings" /></td>
-    <td><img src="docs/images/login.png" alt="Login" /></td>
   </tr>
   <tr>
+    <td align="center"><sub><b>Login</b></sub></td>
     <td align="center"><sub><b>Desktop quota lens</b></sub></td>
-    <td align="center"><sub><b>Tray menu</b></sub></td>
   </tr>
   <tr>
+    <td><img src="docs/images/login.png" alt="Login" /></td>
     <td><img src="docs/images/float-lens.png" alt="Desktop quota lens" /></td>
-    <td><img src="docs/images/tray-menu.png" alt="Tray menu" /></td>
   </tr>
 </table>
 
-Emails in the screenshots are masked. The hero is the Cursor account page; the
-sidebar switches back to Codex.
+The hero is the Cursor account page. Closing the window hides it to the tray.
 
 ## Install
 

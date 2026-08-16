@@ -13,7 +13,7 @@ do not imply affiliation with or endorsement by OpenAI.
 ## Screenshots
 
 The screenshots under `docs/images/` (including the GitHub social preview
-image) are product images from the live app, with email addresses masked.
+image) are product images from the live app.
 
 Third-party software and icon-library notices are listed in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

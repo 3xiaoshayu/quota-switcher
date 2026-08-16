@@ -20,8 +20,8 @@ backend, telemetry pipeline, advertising service, or cross-device account sync.
 | `%USERPROFILE%\.codex\codex_auth_projection.json` | Manager projection of the selected Codex account |
 | `%APPDATA%\Cursor\User\globalStorage\state.vscdb` | Official Cursor login database written during a Cursor switch |
 
-The installer and application do not include real accounts, tokens, logs, or
-usage snapshots. Repository screenshots mask live emails.
+The installer and application do not include tokens, logs, or usage snapshots.
+Public README screenshots may show live account emails.
 
 ## Token protection
 

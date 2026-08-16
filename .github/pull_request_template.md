@@ -16,7 +16,7 @@ npm run build:dir
 - [ ] No real account data, tokens, callback URLs, or private logs are included.
 - [ ] New network, storage, process, or IPC behavior is documented.
 - [ ] Destructive and failure paths were tested where applicable.
-- [ ] Screenshots use synthetic data.
+- [ ] Screenshots do not include tokens, callback URLs, or auth files.
 
 ## Scope
 

@@ -48,7 +48,7 @@ release metadata validation.
 - Preserve atomic writes and existing backups around credential state.
 - Do not log tokens, authorization headers, OAuth callbacks, or complete
   account objects.
-- Keep screenshots and fixtures synthetic or email-masked.
+- Keep fixtures free of tokens. Live screenshots may show account emails.
 - Treat missing quota windows as unknown, not zero.
 - Keep Codex and Cursor storage, OAuth, and switch paths separate. Do not scan
   one product's files as the other.
@@ -83,7 +83,7 @@ Include:
 - a concise description of the behavior change;
 - the reason for the change;
 - commands and manual scenarios used for verification;
-- synthetic or email-masked screenshots for visible UI changes;
+- screenshots for visible UI changes;
 - migration or rollback notes when local data changes.
 
 By contributing, you agree that your contribution is licensed under the
