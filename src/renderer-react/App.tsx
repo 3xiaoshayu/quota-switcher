@@ -28,6 +28,7 @@ import {
   formatLogTime,
   hasDesktopBridge,
   canJoinAutoSwitch,
+  canRefreshQuota,
   needsHandling,
   needsQuotaAutoSync,
   isCursorAccount,
@@ -149,6 +150,7 @@ function DashboardApp() {
   const [accountsFilterTab, setAccountsFilterTab] = useState<'all' | 'current' | 'warning'>('all');
   const didPickLandingTab = useRef(false);
   const didAutoShowFloat = useRef(false);
+  const didCursorOpenSync = useRef(false);
   const [product, setProduct] = useState<ProductKind>(() => readStoredProduct());
   const [codexAccounts, setCodexAccounts] = useState<AccountQuota[]>(desktopBridgeAvailable ? [] : INITIAL_ACCOUNTS);
   const [cursorAccounts, setCursorAccounts] = useState<AccountQuota[]>(desktopBridgeAvailable ? [] : INITIAL_CURSOR_ACCOUNTS);
@@ -176,6 +178,7 @@ function DashboardApp() {
   const lastQuotaAutoSyncAt = useRef(0);
   const accountsRef = useRef<AccountQuota[]>(accounts);
   const codexAccountsRef = useRef<AccountQuota[]>(codexAccounts);
+  const cursorAccountsRef = useRef<AccountQuota[]>(cursorAccounts);
   const productRef = useRef(product);
   const cursorOAuthStatusRef = useRef<DesktopOAuthStatus | null>(cursorOAuthStatus);
   const accountOperationIds = useRef<Set<string>>(new Set());
@@ -197,6 +200,10 @@ function DashboardApp() {
   useEffect(() => {
     codexAccountsRef.current = codexAccounts;
   }, [codexAccounts]);
+
+  useEffect(() => {
+    cursorAccountsRef.current = cursorAccounts;
+  }, [cursorAccounts]);
 
   useEffect(() => {
     cursorOAuthStatusRef.current = cursorOAuthStatus;
@@ -458,26 +465,28 @@ function DashboardApp() {
 
   const queueQuotaAutoSync = useCallback((candidateAccounts: AccountQuota[]) => {
     if (!desktopBridgeAvailable || quotaAutoSyncPromise.current) return;
-    if (authStateRef.current.requiresResolution) return;
     if (Date.now() - lastQuotaAutoSyncAt.current < QUOTA_AUTO_SYNC_MIN_GAP_MS) return;
-    const staleAccounts = candidateAccounts.filter((account) => (
-      !String(account.id).startsWith('cursor_')
-      && !accountOperationIds.current.has(account.id)
-      && needsQuotaAutoSync(
+    const authBlocked = authStateRef.current.requiresResolution;
+    const staleAccounts = candidateAccounts.filter((account) => {
+      if (accountOperationIds.current.has(account.id)) return false;
+      if (authBlocked && !isCursorAccount(account)) return false;
+      return needsQuotaAutoSync(
         account,
         quotaAutoSyncStaleMs(account, autoSwitchConfigRef.current.sync_interval_minutes),
-      )
-    ));
+      );
+    });
     if (!staleAccounts.length) return;
 
     lastQuotaAutoSyncAt.current = Date.now();
     quotaAutoSyncPromise.current = (async () => {
       for (const account of staleAccounts) {
+        const kind = isCursorAccount(account) ? 'cursor' : 'codex';
         try {
-          await desktopApi.refreshQuota(account.id, false);
+          if (kind === 'cursor') await desktopApi.refreshCursorQuota(account.id, false);
+          else await desktopApi.refreshQuota(account.id, false);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          addLogEntry(`${account.email}: ${message}`, 'info', 'codex');
+          addLogEntry(`${account.email}: ${message}`, 'info', kind);
         }
       }
       await loadDashboardState(false);
@@ -556,15 +565,39 @@ function DashboardApp() {
     if (!isAuthenticated || !desktopBridgeAvailable) return;
     let disposed = false;
 
-    loadDashboardState(true).then((snapshot) => {
-      if (!disposed && snapshot) queueQuotaAutoSync(snapshot.accounts);
+    loadDashboardState(true).then(async (snapshot) => {
+      if (disposed || !snapshot) return;
+      if (!didCursorOpenSync.current) {
+        didCursorOpenSync.current = true;
+        const cursorAccounts = snapshot.cursorAccounts || [];
+        if (cursorAccounts.some((account) => canRefreshQuota(account))) {
+          try {
+            await desktopApi.refreshAllCursorQuotas();
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            addLogEntry(message, 'info', 'cursor');
+          }
+          if (!disposed) await loadDashboardState(false);
+        }
+      }
+      if (!disposed) {
+        queueQuotaAutoSync([
+          ...snapshot.accounts,
+          ...(snapshot.cursorAccounts || []),
+        ]);
+      }
     });
     const authRetryTimer = window.setTimeout(() => {
       if (!disposed) loadDashboardState(false);
     }, 5000);
 
     const syncTimer = window.setInterval(() => {
-      if (!disposed) queueQuotaAutoSync(codexAccountsRef.current);
+      if (!disposed) {
+        queueQuotaAutoSync([
+          ...codexAccountsRef.current,
+          ...cursorAccountsRef.current,
+        ]);
+      }
     }, QUOTA_AUTO_SYNC_MIN_GAP_MS);
 
     const unsubscribe = desktopApi.subscribe({

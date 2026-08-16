@@ -7,6 +7,13 @@ release is published.
 
 ## Unreleased
 
+## [0.1.0-beta.26] - 2026-08-17
+
+- Give the desktop quota lens a real drop shadow instead of a second blurred
+  card, and drop the empty-state key icon from the Codex ring.
+- Refresh Cursor quotas on first open so the account page and float lens do
+  not stay on 这次没查清 until a manual refresh.
+- Keep Cursor float rings as Auto/API even when a refresh fails.
 - Align public docs and community files with the Chinese UI labels, and keep
   English pages as `*.en.md` siblings.
 

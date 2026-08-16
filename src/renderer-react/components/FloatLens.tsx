@@ -1,5 +1,5 @@
 import { CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeftRight, Ban, ChevronLeft, ChevronRight, ExternalLink, KeyRound, Pin, RefreshCw, X } from 'lucide-react';
+import { ArrowLeftRight, ChevronLeft, ChevronRight, ExternalLink, Pin, RefreshCw, X } from 'lucide-react';
 import { AccountQuota, ProductKind } from '../types';
 import {
   desktopApi,
@@ -175,14 +175,9 @@ function QuotaDial({
       <div className={`float-lens-sweep${spinning ? ' is-on' : ''}`} />
       <div className="float-lens-readout">
         {heroPercent == null ? (
-          <>
-            {emptyKind === 'banned' ? (
-              <Ban className="float-lens-readout-icon" size={isPair ? 18 : 26} strokeWidth={1.6} />
-            ) : (
-              <KeyRound className="float-lens-readout-icon" size={isPair ? 18 : 26} strokeWidth={1.6} />
-            )}
+          isPair ? (
             <div className="float-lens-readout-label is-empty">{heroLabel}</div>
-          </>
+          ) : null
         ) : (
           <>
             <div className={`float-lens-readout-value${rest ? ' is-rest' : ''}${heroPercent === 0 ? ' is-empty-text' : ''}`}>
@@ -211,6 +206,7 @@ export default function FloatLens() {
   const [switching, setSwitching] = useState(false);
   const [confirmSwitch, setConfirmSwitch] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
+  const lensRef = useRef<HTMLDivElement | null>(null);
   const shellRef = useRef<HTMLDivElement | null>(null);
   const productRef = useRef(product);
   productRef.current = product;
@@ -310,7 +306,7 @@ export default function FloatLens() {
   const resetLine = hero.key === 'fiveHour' ? innerReset : (outerReset || innerReset);
   const tokenLine = product === 'cursor' && !hideQuota && !hideFailedQuota ? tokenRemainLine(viewed?.tokenValidity) : '';
   const caption = tokenLine || (!hideQuota && !hideFailedQuota ? resetLine : '');
-  const showPair = product === 'cursor' && !hideQuota && !hideFailedQuota && (showOuter || showInner);
+  const showPair = product === 'cursor' && !hideQuota;
   const planBadge = viewed ? planBadgeText(viewed) : '';
   const statusBadge = viewed ? statusBadgeText(viewed) : null;
   const emptyKind = hideQuota
@@ -381,6 +377,15 @@ export default function FloatLens() {
     }
   }, [loadAccounts, refreshing, switching, viewed]);
 
+  const openedRefreshKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!viewed || !hasDesktopBridge()) return;
+    const key = `${productRef.current}:${viewed.id}`;
+    if (openedRefreshKeyRef.current === key) return;
+    openedRefreshKeyRef.current = key;
+    void refreshViewed(true);
+  }, [refreshViewed, viewed]);
+
   useEffect(() => {
     if (!viewed) return undefined;
     const timer = window.setInterval(() => {
@@ -390,11 +395,12 @@ export default function FloatLens() {
   }, [refreshViewed, viewed]);
 
   useEffect(() => {
+    const lens = lensRef.current;
     const shell = shellRef.current;
-    if (!shell || !hasDesktopBridge()) return undefined;
+    if (!lens || !shell || !hasDesktopBridge()) return undefined;
     let frame = 0;
     const apply = () => {
-      const nextHeight = Math.ceil(shell.getBoundingClientRect().height) + 20;
+      const nextHeight = Math.ceil(lens.getBoundingClientRect().height);
       void desktopApi.setFloatHeight(nextHeight).catch(() => {});
     };
     const observer = new ResizeObserver(() => {
@@ -442,7 +448,7 @@ export default function FloatLens() {
   }, [alwaysOnTop]);
 
   return (
-    <div className="float-lens">
+    <div className="float-lens" ref={lensRef}>
       <div className="float-lens-shell app-drag" ref={shellRef}>
         <div className="float-lens-chrome">
           <div
@@ -476,30 +482,26 @@ export default function FloatLens() {
             <>
               {showPair ? (
                 <div className="float-lens-pair" id="float-lens-pair">
-                  {showOuter ? (
-                    <QuotaDial
-                      size="pair"
-                      weekly={outerValue}
-                      fiveHour={null}
-                      heroPercent={outerValue}
-                      heroLabel={windows.outerLabel}
-                      emptyKind={null}
-                      preview={!isCurrent}
-                      spinning={refreshing}
-                    />
-                  ) : null}
-                  {showInner ? (
-                    <QuotaDial
-                      size="pair"
-                      weekly={innerValue}
-                      fiveHour={null}
-                      heroPercent={innerValue}
-                      heroLabel={windows.innerLabel}
-                      emptyKind={null}
-                      preview={!isCurrent}
-                      spinning={refreshing}
-                    />
-                  ) : null}
+                  <QuotaDial
+                    size="pair"
+                    weekly={outerValue}
+                    fiveHour={null}
+                    heroPercent={outerValue}
+                    heroLabel={windows.outerLabel}
+                    emptyKind={null}
+                    preview={!isCurrent}
+                    spinning={refreshing}
+                  />
+                  <QuotaDial
+                    size="pair"
+                    weekly={innerValue}
+                    fiveHour={null}
+                    heroPercent={innerValue}
+                    heroLabel={windows.innerLabel}
+                    emptyKind={null}
+                    preview={!isCurrent}
+                    spinning={refreshing}
+                  />
                 </div>
               ) : (
                 <QuotaDial

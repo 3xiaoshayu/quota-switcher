@@ -9,10 +9,11 @@ body.float-lens-root,
 }
 
 .float-lens {
+  position: relative;
   box-sizing: border-box;
   width: 100%;
   height: auto;
-  padding: 10px;
+  padding: 16px 24px 56px;
   color: var(--color-label);
   user-select: none;
 }
@@ -28,7 +29,10 @@ body.float-lens-root,
   background:
     linear-gradient(180deg, rgba(36, 36, 38, 0.96), rgba(19, 19, 21, 0.94));
   box-shadow:
-    0 18px 40px rgba(0, 0, 0, 0.38),
+    0 2px 4px rgba(0, 0, 0, 0.35),
+    0 8px 16px rgba(0, 0, 0, 0.26),
+    0 16px 28px rgba(0, 0, 0, 0.2),
+    0 22px 36px rgba(0, 0, 0, 0.14),
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
@@ -196,15 +200,17 @@ body.float-lens-root,
   letter-spacing: 0;
 }
 
+.float-lens-readout-value.is-empty-text.is-long {
+  max-width: 104px;
+  font-size: 16px;
+  line-height: 1.25;
+  text-align: center;
+}
+
 .float-lens-readout-unit {
   margin-left: 1px;
   color: rgba(235, 235, 245, 0.62);
   font-size: 0.42em;
-}
-
-.float-lens-readout-icon {
-  margin-bottom: 8px;
-  color: var(--color-label-3);
 }
 
 .float-lens-readout-label {

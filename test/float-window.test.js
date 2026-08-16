@@ -418,6 +418,11 @@ test("dashboard product changes sync the float product and auto-open once", () =
   assert.match(source, /nextOAuth\.pending && !wasOAuthPendingRef\.current && productRef\.current === 'codex'/);
   assert.match(source, /localOAuth\?\.pending && !incomingOAuth\.pending && incomingOAuth\.status === 'idle'/);
   assert.match(source, /if \(productRef\.current !== kind\) return;/);
+  assert.match(source, /refreshCursorQuota\(account\.id, false\)/);
+  assert.match(source, /didCursorOpenSync/);
+  assert.match(source, /refreshAllCursorQuotas\(\)/);
+  assert.match(source, /\.\.\.\(snapshot\.cursorAccounts \|\| \[\]\)/);
+  assert.doesNotMatch(source, /!String\(account\.id\)\.startsWith\('cursor_'\)/);
 });
 
 test("float lens footer does not crash while accounts are loading", () => {
@@ -434,8 +439,19 @@ test("float lens footer does not crash while accounts are loading", () => {
   assert.match(source, /next\?\.status === 'SYNC_FAILED'/);
   assert.match(source, /会关掉正在运行的官方 Cursor/);
   assert.match(source, /float-lens-mark/);
+  assert.doesNotMatch(source, /KeyRound/);
+  assert.doesNotMatch(source, /float-lens-readout-icon/);
+  assert.match(source, /heroPercent == null \? \(\s*isPair \? \(/);
+  assert.doesNotMatch(css, /\.float-lens-readout-icon/);
+  assert.match(source, /const showPair = product === 'cursor' && !hideQuota;/);
+  assert.match(source, /openedRefreshKeyRef\.current === key/);
+  assert.doesNotMatch(source, /showPair = product === 'cursor' && !hideQuota && !hideFailedQuota/);
   assert.doesNotMatch(source, /请回主窗口重新授权/);
   assert.doesNotMatch(source, /title=\{viewed\.status/);
+  assert.doesNotMatch(source, /float-lens-cast/);
+  assert.doesNotMatch(css, /\.float-lens-cast/);
+  assert.match(css, /padding:\s*16px 24px 56px/);
+  assert.match(css, /0 22px 36px rgba\(0, 0, 0, 0\.14\)/);
   assert.match(css, /\.float-lens-icon:disabled/);
   assert.match(css, /\.float-lens-confirm/);
   assert.match(css, /-webkit-line-clamp:\s*2/);

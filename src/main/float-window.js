@@ -1,7 +1,7 @@
 const path = require("path");
 const fs = require("fs");
 
-const FLOAT_WIDTH = 288;
+const FLOAT_WIDTH = 316;
 const FLOAT_HEIGHT = 512;
 const FLOAT_MARGIN = 20;
 const FLOAT_HASH = "float";
