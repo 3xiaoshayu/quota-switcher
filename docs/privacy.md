@@ -124,9 +124,8 @@ Never attach these files or directories to a GitHub issue:
 - `.codex\auth.json` or its backup;
 - Cursor `state.vscdb` or its WAL/SHM files;
 - OAuth callback URLs;
-- full application or network logs containing headers;
-- screenshots with real email addresses or account identifiers.
+- full application or network logs containing headers.
 
-Replace personal data with synthetic values. Report suspected credential
-exposure or security vulnerabilities through
+Emails in screenshots are fine. Do not attach tokens or account files. Report
+suspected credential exposure through
 [GitHub private vulnerability reporting](https://github.com/3xiaoshayu/codex-account-manager/security/advisories/new).

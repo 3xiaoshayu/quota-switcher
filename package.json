@@ -2,7 +2,7 @@
   "name": "codex-account-manager",
   "version": "0.1.0-beta.25",
   "private": true,
-  "description": "Local-first Windows desktop manager for Codex and Cursor accounts, quotas, tokens, and automatic switching",
+  "description": "Several Codex and Cursor accounts, one Windows window. Quotas and switching stay on this PC.",
   "main": "src/main/main.js",
   "scripts": {
     "start": "npm run renderer:build && electron .",

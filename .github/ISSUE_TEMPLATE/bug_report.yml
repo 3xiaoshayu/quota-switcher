@@ -1,37 +1,37 @@
-name: Bug report
-description: Report a reproducible problem in Codex Account Manager.
-title: "[Bug]: "
+name: 缺陷反馈
+description: 报告一个能复现的问题。
+title: "[缺陷]: "
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        Do not include tokens, auth files, OAuth callback URLs, real account identifiers, or unredacted screenshots.
-        For security vulnerabilities, use private vulnerability reporting instead of this form.
+        不要附带 token、账号文件或授权回调地址。截图可以带邮箱。
+        安全问题请走私下报告，不要开公开 Issue。
 
   - type: textarea
     id: summary
     attributes:
-      label: Summary
-      description: What happened, and what did you expect instead?
+      label: 发生了什么
+      description: 实际看到了什么，你本来期望什么。
     validations:
       required: true
 
   - type: textarea
     id: steps
     attributes:
-      label: Steps to reproduce
+      label: 怎么复现
       placeholder: |
-        1. Open ...
-        2. Select ...
-        3. Observe ...
+        1. 打开 …
+        2. 点 …
+        3. 看到 …
     validations:
       required: true
 
   - type: input
     id: version
     attributes:
-      label: App version
+      label: 应用版本
       placeholder: 0.1.0-beta.25
     validations:
       required: true
@@ -39,69 +39,69 @@ body:
   - type: dropdown
     id: windows
     attributes:
-      label: Windows version
+      label: Windows 版本
       options:
         - Windows 11 x64
         - Windows 10 x64
-        - Other or unknown
+        - 其他或不清楚
     validations:
       required: true
 
   - type: dropdown
     id: product
     attributes:
-      label: Product
+      label: 出问题的产品
       options:
         - Codex
         - Cursor
-        - Both
-        - Not sure
+        - 两个都有
+        - 不清楚
     validations:
       required: true
 
   - type: dropdown
     id: codex
     attributes:
-      label: Official client
+      label: 本机官方客户端
       options:
-        - Microsoft Store official Codex
-        - Official Cursor
-        - Both installed
-        - Other
-        - Not sure
+        - 微软商店官方 Codex
+        - 官方 Cursor
+        - 两个都装着
+        - 其他
+        - 不清楚
     validations:
       required: true
 
   - type: dropdown
     id: scope
     attributes:
-      label: Affected accounts
+      label: 影响范围
       options:
-        - One saved account
-        - All saved accounts
-        - No account required
-        - Not sure
+        - 某一个已保存的账号
+        - 所有已保存的账号
+        - 和账号无关
+        - 不清楚
     validations:
       required: true
 
   - type: textarea
     id: diagnostics
     attributes:
-      label: Redacted diagnostics
-      description: Add a redacted screenshot or short error message if useful. Never attach account or auth files.
+      label: 补充
+      description: 可以放截图或一两句报错。不要附账号文件、auth.json 或 token。
 
   - type: checkboxes
     id: privacy
     attributes:
-      label: Privacy confirmation
+      label: 确认
       options:
-        - label: I removed tokens, callback URLs, email addresses, account IDs, and authorization headers.
+        - label: 我没有附带 token、回调地址或账号文件。
           required: true
 
   - type: checkboxes
     id: existing
     attributes:
-      label: Existing reports
+      label: 已查过
       options:
-        - label: I searched existing issues and reviewed the troubleshooting guide.
+        - label: 我看过故障排查，也搜过已有 Issue。
           required: true

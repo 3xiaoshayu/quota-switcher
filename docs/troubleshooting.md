@@ -173,7 +173,7 @@ Include:
 - Codex / Cursor install source;
 - exact steps and expected behavior;
 - whether the issue occurs for one account or all accounts;
-- a redacted screenshot when useful.
+- a screenshot when useful.
 
-Exclude all tokens, account files, callback URLs, real email addresses, and
-authorization headers. Use the repository's bug report form.
+Do not attach tokens, account files, callback URLs, or authorization headers.
+Emails in screenshots are fine. Use the repository's bug report form.

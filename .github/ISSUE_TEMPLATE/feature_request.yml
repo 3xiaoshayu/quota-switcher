@@ -1,45 +1,45 @@
-name: Feature request
-description: Propose a focused improvement to an existing workflow.
-title: "[Feature]: "
+name: 功能建议
+description: 提一个具体、能落地的改进。
+title: "[建议]: "
 labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
       value: |
-        Keep proposals local-first and specific to Codex or Cursor account, quota, token, or switching workflows.
+        请说清楚是 Codex、Cursor，还是两个都要用。只谈本机账号、额度、登录和切号，不谈加额度或自建云。
 
   - type: textarea
     id: problem
     attributes:
-      label: Problem
-      description: What workflow is difficult today, and who experiences it?
+      label: 现在哪里别扭
+      description: 谁在用，卡在哪一步。
     validations:
       required: true
 
   - type: textarea
     id: proposal
     attributes:
-      label: Proposed behavior
-      description: Describe the smallest useful version and its expected result.
+      label: 希望变成什么样
+      description: 最小能用的一版，以及用完之后应该看到什么。
     validations:
       required: true
 
   - type: textarea
     id: alternatives
     attributes:
-      label: Alternatives considered
-      description: How do you handle this workflow today?
+      label: 现在怎么凑合
+      description: 没有这个功能时，你是怎么处理的。
 
   - type: textarea
     id: safety
     attributes:
-      label: Privacy and safety impact
-      description: Does this add storage, network access, background behavior, or destructive actions?
+      label: 会动到什么
+      description: 会不会多存文件、多联网、后台多做事，或关掉官方客户端。
 
   - type: checkboxes
     id: existing
     attributes:
-      label: Existing requests
+      label: 已查过
       options:
-        - label: I searched existing issues and did not find the same request.
+        - label: 我搜过已有 Issue，没有同一条建议。
           required: true

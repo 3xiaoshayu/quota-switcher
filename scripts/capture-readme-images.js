@@ -210,7 +210,7 @@ async function captureSocialPreview(browser) {
     <div class="copy">
       <img class="icon" src="${iconUri}" alt="">
       <h1>Codex Account Manager</h1>
-      <p>Windows 上的 Codex / Cursor 多账号管理：额度、一键切号、关窗进托盘、桌面额度镜。数据只存在本机。</p>
+      <p>多个 Codex 和 Cursor 账号，一个窗口里照看。</p>
       <div class="meta">LOCAL-FIRST  ·  WINDOWS</div>
     </div>
     <div class="preview"><img src="${dashUri}" alt=""></div>

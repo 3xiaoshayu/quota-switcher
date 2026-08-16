@@ -40,9 +40,8 @@ requested and appropriate.
 - `%USERPROFILE%\.codex\auth.json.bak` may contain the previous credential state.
 - `%APPDATA%\Cursor\User\globalStorage\state.vscdb` contains the official Cursor login.
 
-Never attach these files or directories to an issue. Remove email addresses,
-account identifiers, callback URLs, and authorization headers from screenshots
-and logs.
+Never attach these files or directories to an issue. Emails in screenshots
+are fine. Strip callback URLs, tokens, and authorization headers from logs.
 
 ## Security boundaries
 
