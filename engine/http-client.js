@@ -4,7 +4,22 @@ const { ProxyAgent } = require("proxy-agent");
 const { REFRESH_TIMEOUT } = require("./config");
 const { resolveLiveProxy, invalidateLiveProxy, hostLooksPoisoned, applySignatureToRuntime } = require("./proxy-resolve");
 
+const MAX_JSON_BODY_BYTES = 1024 * 1024;
+
 let sharedProxyAgent = null;
+
+function tooLargeError() {
+  const error = new Error("响应过大");
+  error.code = "response_too_large";
+  return error;
+}
+
+function concatUtf8Capped(chunks, maxBytes = MAX_JSON_BODY_BYTES) {
+  let total = 0;
+  for (const chunk of chunks) total += chunk.length;
+  if (total > maxBytes) throw tooLargeError();
+  return Buffer.concat(chunks).toString("utf8");
+}
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -83,6 +98,36 @@ function getProxyAgent() {
   return sharedProxyAgent;
 }
 
+async function readResponseUtf8Capped(response, maxBytes = MAX_JSON_BODY_BYTES) {
+  const declared = Number(response.headers?.get?.("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    if (typeof response.body?.cancel === "function") {
+      try { await response.body.cancel(); } catch { /* already closed */ }
+    }
+    throw tooLargeError();
+  }
+  if (response.body && typeof response.body.getReader === "function") {
+    const reader = response.body.getReader();
+    const chunks = [];
+    let total = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const size = value ? value.byteLength : 0;
+      total += size;
+      if (total > maxBytes) {
+        try { await reader.cancel(); } catch { /* already closed */ }
+        throw tooLargeError();
+      }
+      if (value) chunks.push(Buffer.from(value));
+    }
+    return concatUtf8Capped(chunks, maxBytes);
+  }
+  const text = await response.text();
+  if (Buffer.byteLength(text, "utf8") > maxBytes) throw tooLargeError();
+  return text;
+}
+
 async function electronHttpJson(url, opts, headers, timeout) {
   let fetchFn = null;
   try {
@@ -102,7 +147,7 @@ async function electronHttpJson(url, opts, headers, timeout) {
       body: opts.body ? (typeof opts.body === "string" ? opts.body : JSON.stringify(opts.body)) : undefined,
       signal: controller.signal,
     });
-    const body = await response.text();
+    const body = await readResponseUtf8Capped(response);
     return {
       status: response.status,
       headers: toHeaderObject(response.headers),
@@ -121,16 +166,34 @@ function nodeHttpJson(url, opts, headers, timeout) {
     const u = new URL(url);
     const mod = u.protocol === "https:" ? https : http;
     const agent = getProxyAgent();
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      fn(value);
+    };
     const req = mod.request(url, { method: opts.method || "GET", headers, timeout, agent }, (res) => {
       const chunks = [];
-      res.on("data", (c) => chunks.push(c));
+      let total = 0;
+      res.on("data", (chunk) => {
+        total += chunk.length;
+        if (total > MAX_JSON_BODY_BYTES) {
+          req.destroy();
+          finish(reject, tooLargeError());
+          return;
+        }
+        chunks.push(chunk);
+      });
       res.on("end", () => {
-        const body = Buffer.concat(chunks).toString("utf8");
-        resolve({ status: res.statusCode, headers: res.headers, body });
+        try {
+          finish(resolve, { status: res.statusCode, headers: res.headers, body: concatUtf8Capped(chunks) });
+        } catch (error) {
+          finish(reject, error);
+        }
       });
     });
-    req.on("timeout", () => { req.destroy(); reject(new Error("请求超时")); });
-    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(); finish(reject, new Error("请求超时")); });
+    req.on("error", (error) => finish(reject, error));
     if (opts.body) req.write(typeof opts.body === "string" ? opts.body : JSON.stringify(opts.body));
     req.end();
   });
@@ -151,15 +214,20 @@ async function httpJson(url, opts = {}) {
   }
 
   const attempts = [];
-  try {
-    const runElectron = () => electronHttpJson(url, opts, headers, timeout);
-    const electronResult = (idempotent && !signature.proxyUrl)
-      ? await withOneRetry("Electron network", runElectron)
-      : await runElectron();
-    if (electronResult) return electronResult;
-  } catch (error) {
-    attempts.push({ label: "Electron", error });
-    if (!idempotent) throw buildNetworkFailure(url, attempts);
+  // Chromium net.fetch shares the UI session. When a local proxy is already
+  // selected, Node + ProxyAgent is enough and avoids reading a huge hijack
+  // page on the same network stack as the main window.
+  if (!signature.proxyUrl) {
+    try {
+      const runElectron = () => electronHttpJson(url, opts, headers, timeout);
+      const electronResult = idempotent
+        ? await withOneRetry("Electron network", runElectron)
+        : await runElectron();
+      if (electronResult) return electronResult;
+    } catch (error) {
+      attempts.push({ label: "Electron", error });
+      if (!idempotent) throw buildNetworkFailure(url, attempts);
+    }
   }
 
   try {
@@ -206,4 +274,11 @@ function extractErrorCode(body) {
   } catch { return null; }
 }
 
-module.exports = { httpJson, buildCodexHeaders, extractErrorCode };
+module.exports = {
+  httpJson,
+  buildCodexHeaders,
+  extractErrorCode,
+  MAX_JSON_BODY_BYTES,
+  concatUtf8Capped,
+  nodeHttpJson,
+};

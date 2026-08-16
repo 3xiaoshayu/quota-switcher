@@ -7,6 +7,13 @@ release is published.
 
 ## Unreleased
 
+## [0.1.0-beta.27] - 2026-08-17
+
+- Stop quota refresh from reading a huge Chromium response on the UI
+  session, which froze the main window as 未响应 and left 这次没查清.
+- When a local proxy is already selected, use Node plus that proxy and
+  cap JSON bodies at 1MB.
+
 ## [0.1.0-beta.26] - 2026-08-17
 
 - Give the desktop quota lens a real drop shadow instead of a second blurred

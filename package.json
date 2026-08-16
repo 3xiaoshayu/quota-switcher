@@ -1,6 +1,6 @@
 {
   "name": "codex-account-manager",
-  "version": "0.1.0-beta.26",
+  "version": "0.1.0-beta.27",
   "private": true,
   "description": "Several Codex and Cursor accounts, one Windows window. Quotas and switching stay on this PC.",
   "main": "src/main/main.js",

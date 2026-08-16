@@ -1034,6 +1034,8 @@ test("user-facing messages stay in Chinese", () => {
     toUserMessage("网络请求失败 (chatgpt.com)。本机 DNS 异常且没有可用的本地代理。"),
     "额度暂时没刷到，登录还在。请稍后再试。",
   );
+  assert.equal(toUserMessage("Invalid string length"), "额度暂时没刷到，登录还在。请稍后再试。");
+  assert.equal(toUserMessage("响应过大"), "额度暂时没刷到，登录还在。请稍后再试。");
   assert.equal(toUserMessage("Read authentication state timed out"), "正在确认官方登录，稍后会自动刷新");
   assert.equal(
     toUserMessage("Switch to another account before deleting the current account."),

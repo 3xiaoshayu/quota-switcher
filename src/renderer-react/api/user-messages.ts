@@ -78,6 +78,7 @@ function isQuotaNetworkFailure(text: string): boolean {
   return /网络请求失败/.test(text)
     || /ERR_CONNECTION|ETIMEDOUT|ECONNRESET|ENOTFOUND|net::ERR_/i.test(text)
     || /Electron network failed|Node network failed/i.test(text)
+    || /Invalid string length|response_too_large|响应过大/i.test(text)
 }
 
 export function toUserMessage(raw: unknown): string {
