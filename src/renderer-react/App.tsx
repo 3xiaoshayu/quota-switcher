@@ -24,6 +24,7 @@ import {
   formatDateTime,
   hasDesktopBridge,
   canJoinAutoSwitch,
+  needsHandling,
   needsQuotaAutoSync,
   pruneAutoSwitchAccountIds,
   quotaAutoSyncStaleMs,
@@ -130,7 +131,12 @@ function DashboardApp() {
   });
 
   // Main UI States
-  const [activeTab, setActiveTab] = useState<'accounts' | 'quotas' | 'autoswitch' | 'settings'>('quotas');
+  const [activeTab, setActiveTab] = useState<'accounts' | 'quotas' | 'autoswitch' | 'settings'>(() => {
+    if (desktopBridgeAvailable) return 'quotas';
+    return INITIAL_ACCOUNTS.some(needsHandling) ? 'accounts' : 'quotas';
+  });
+  const [accountsFilterTab, setAccountsFilterTab] = useState<'all' | 'current' | 'warning'>('all');
+  const didPickLandingTab = useRef(false);
   const [accounts, setAccounts] = useState<AccountQuota[]>(desktopBridgeAvailable ? [] : INITIAL_ACCOUNTS);
   const [daemonState, setDaemonState] = useState<DaemonState>(
     desktopBridgeAvailable ? { status: 'Stopped', syncInterval: 1, lastChecked: '' } : INITIAL_DAEMON_STATE,
@@ -193,12 +199,21 @@ function DashboardApp() {
   // Custom Toast notifications array
   const [toasts, setToasts] = useState<{ id: string; msg: string; type: 'success' | 'info' | 'warning' | 'error' }[]>([]);
 
+  const toastTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const dismissToast = useCallback((id: string) => {
+    const timer = toastTimers.current.get(id);
+    if (timer) clearTimeout(timer);
+    toastTimers.current.delete(id);
+    setToasts(prev => prev.filter(t => t.id !== id));
+  }, []);
   const addToast = useCallback((msg: string, type: 'success' | 'info' | 'warning' | 'error' = 'info') => {
     const id = `toast_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
     setToasts(prev => [...prev, { id, msg: toUserMessage(msg), type }]);
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      toastTimers.current.delete(id);
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 4000);
+    toastTimers.current.set(id, timer);
   }, []);
 
   const addLogEntry = useCallback((message: string, type: LogEntry['type']) => {
@@ -306,6 +321,12 @@ function DashboardApp() {
       if (seq !== dashboardLoadSeqRef.current) return null;
       applyDashboardState(snapshot);
       hasLoadedDashboard.current = true;
+      if (!didPickLandingTab.current) {
+        didPickLandingTab.current = true;
+        if (snapshot.accounts.some(needsHandling)) {
+          setActiveTab('accounts');
+        }
+      }
       setDashboardLoadState('ready');
       setDashboardLoadError(null);
       return snapshot;
@@ -1196,7 +1217,7 @@ function DashboardApp() {
       </div>
       {/* Absolute overlay elements */}
       {/* Toast notification Tray */}
-      <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 w-80 pointer-events-none" id="toast-tray">
+      <div className="fixed top-[60px] right-4 z-50 flex flex-col gap-2 w-80 pointer-events-none" id="toast-tray">
         <AnimatePresence>
           {toasts.map((t) => (
             <motion.div
@@ -1210,7 +1231,16 @@ function DashboardApp() {
               {t.type === 'error' && <AlertCircle className="w-5 h-5 text-danger shrink-0" />}
               {t.type === 'warning' && <ShieldAlert className="w-5 h-5 text-warn shrink-0" />}
               {t.type === 'info' && <Info className="w-5 h-5 text-accent shrink-0" />}
-              <span className="text-xs font-semibold text-label">{t.msg}</span>
+              <span className="text-xs font-semibold text-label flex-1">{t.msg}</span>
+              <button
+                type="button"
+                onClick={() => dismissToast(t.id)}
+                className="p-1 rounded-md text-label-3 hover:text-label hover:bg-fill cursor-pointer"
+                aria-label="关闭提示"
+                id={`toast-dismiss-${t.id}`}
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
             </motion.div>
           ))}
         </AnimatePresence>
@@ -1221,6 +1251,7 @@ function DashboardApp() {
         activeTab={activeTab} 
         setActiveTab={setActiveTab} 
         daemonState={daemonState}
+        handlingCount={accounts.filter(needsHandling).length}
         onShowSupport={() => setShowSupport(true)}
         onShowUpdates={() => setShowUpdates(true)}
       />
@@ -1229,10 +1260,18 @@ function DashboardApp() {
       <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden" id="dashboard-right-wrapper">
         {/* Navigation Utilities Header */}
         <Header 
-          currentUserEmail={userEmail}
+          currentUserEmail={accounts.find((account) => account.isCurrent)?.email || ''}
           onLogout={desktopBridgeAvailable && !wantsDesktopLoginPreview() ? undefined : handleLogout}
           unreadNotificationsCount={showNotifications ? 0 : countUnreadAlertLogs(logs, lastReadLogId)}
           onToggleNotifications={() => setShowNotifications(!showNotifications)}
+          onCopyCurrentEmail={() => {
+            const email = accounts.find((account) => account.isCurrent)?.email;
+            if (!email) return;
+            void navigator.clipboard.writeText(email).then(
+              () => addToast('已复制当前邮箱', 'success'),
+              () => addToast('复制失败，请手动选择邮箱。', 'error'),
+            );
+          }}
         />
 
         {showAuthBanner && (
@@ -1313,6 +1352,11 @@ function DashboardApp() {
                   onRefreshToken={desktopBridgeAvailable ? handleRefreshToken : undefined}
                   onRefreshAll={handleRefreshAll}
                   isRefreshingAll={isRefreshingAll}
+                  onOpenAccounts={(filter) => {
+                    setAccountsFilterTab(filter);
+                    setActiveTab('accounts');
+                  }}
+                  onReauthorizeAccount={desktopBridgeAvailable ? handleReauthorizeAccount : undefined}
                 />
               )}
 
@@ -1338,6 +1382,8 @@ function DashboardApp() {
               {activeTab === 'accounts' && (
                 <AccountsView 
                   accounts={accounts}
+                  filterTab={accountsFilterTab}
+                  onFilterTabChange={setAccountsFilterTab}
                   onAddAccount={handleAddAccount}
                   onDeleteAccount={handleDeleteAccount}
                   onSwitchCurrentAccount={handleSwitchCurrentAccount}
@@ -1388,22 +1434,18 @@ function DashboardApp() {
 
         {/* Global Footer bar matching image */}
         <footer 
-          className="h-10 border-t border-sep flex items-center justify-between px-8 text-[11px] text-label-2 font-medium select-none shrink-0"
+          className="h-9 border-t border-sep flex items-center justify-end px-8 text-[11px] text-label-2 font-medium select-none shrink-0"
           id="dashboard-footer"
         >
-          <div className="flex items-center gap-1.5" id="footer-left">
-            <span>Codex Account Manager {settings.version.startsWith('v') ? settings.version : `v${settings.version}`}</span>
-          </div>
-          <div className="flex items-center gap-4" id="footer-right">
-            <button 
-              onClick={() => {
-                void handleOpenExternal(`${appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}/blob/main/docs/privacy.md`);
-              }}
-              className="hover:text-label cursor-pointer"
-            >
-              隐私政策
-            </button>
-          </div>
+          <button 
+            onClick={() => {
+              void handleOpenExternal(`${appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}/blob/main/docs/privacy.md`);
+            }}
+            className="hover:text-label cursor-pointer"
+            id="footer-privacy"
+          >
+            隐私政策
+          </button>
         </footer>
       </div>
 
@@ -1460,7 +1502,7 @@ function DashboardApp() {
           <>
             <motion.div 
               key="notifications-backdrop"
-              className="fixed inset-0 bg-black/40 z-35" 
+              className="fixed inset-0 bg-black/40 z-40" 
               onClick={() => setShowNotifications(false)} 
               initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -1479,7 +1521,7 @@ function DashboardApp() {
               <div className="flex items-center justify-between pb-4 border-b border-sep mb-6">
                 <div className="flex items-center gap-2">
                   <Bell className="w-4 h-4 text-accent" />
-                  <h3 className="font-bold text-sm tracking-wide font-sans">系统动态日志</h3>
+                  <h3 className="font-bold text-sm tracking-wide font-sans">运行日志</h3>
                 </div>
                 <button
                   onClick={() => setShowNotifications(false)}
@@ -1493,7 +1535,7 @@ function DashboardApp() {
               <div className="flex-1 overflow-y-auto space-y-4 pr-1 scrollbar-thin">
                 {logs.length === 0 && (
                   <p className="px-1 pt-8 text-center text-xs text-label-3" id="notification-empty-state">
-                    暂无动态
+                    暂无日志
                   </p>
                 )}
                 {logs.map((log) => {

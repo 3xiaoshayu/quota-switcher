@@ -178,10 +178,74 @@ export default function AutoSwitchView({
     </span>
   );
 
+  const eligibleAccounts = scopeAccounts.filter(canJoinAutoSwitch);
+  const blockedAccounts = scopeAccounts.filter((account) => !canJoinAutoSwitch(account));
+
+  const renderScopeAccount = (account: AccountQuota) => {
+              const eligible = canJoinAutoSwitch(account);
+              const isChecked = eligible && selectedAccountIds.includes(account.id);
+              const caption = quotaScopeCaption(account);
+              const canToggle = eligible && scopeMode === 'selected';
+              return (
+                <motion.div
+                  key={account.id}
+                  onClick={() => {
+                    if (!canToggle) return;
+                    onToggleAccountSelection(account.id);
+                  }}
+                  whileTap={canToggle ? { scale: 0.99 } : undefined}
+                  transition={{ type: 'spring', stiffness: 450, damping: 24 }}
+                  className={`row-sep flex items-start justify-between gap-4 py-4 group ${
+                    !eligible ? 'cursor-not-allowed' : (scopeMode === 'selected' ? 'cursor-pointer' : 'cursor-default')
+                  } ${
+                    !eligible ? 'opacity-40' : (isChecked ? '' : 'opacity-55 hover:opacity-80')
+                  }`}
+                  title={!eligible
+                    ? (account.status === 'BANNED' ? '账号已封号，无法加入自动切号' : '该账号需要重新授权后才能加入自动切号')
+                    : undefined}
+                  id={`scope-acc-card-${account.id}`}
+                >
+                  <div className="flex items-start gap-3.5 min-w-0" id={`scope-acc-left-${account.id}`}>
+                    <div 
+                      className={`mt-0.5 w-5 h-5 rounded-md border flex items-center justify-center transition-all shrink-0 ${
+                        isChecked 
+                          ? 'bg-accent border-accent text-white' 
+                          : 'border-white/20 group-hover:border-white/30'
+                      }`}
+                      id={`scope-checkbox-${account.id}`}
+                    >
+                      {isChecked && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                    </div>
+
+                    <div className="flex flex-col text-left min-w-0" id={`scope-titles-${account.id}`}>
+                      <span className="font-semibold text-label text-[13px] font-sans truncate select-text" title={account.email}>{account.email}</span>
+                      {caption.shared ? (
+                        <span className="text-[12px] text-label-3 mt-1 leading-5">{caption.shared}</span>
+                      ) : (
+                        <div className="mt-1.5 space-y-1">
+                          {caption.rows.map((row) => (
+                            <div key={row.label} className="flex items-baseline gap-3 text-[12px] leading-5">
+                              <span className="w-12 shrink-0 text-label-3">{row.label}</span>
+                              <span className="text-label-2 tabular-nums">{row.text}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col items-end text-right gap-1.5 shrink-0 pt-0.5" id={`scope-acc-right-${account.id}`}>
+                    {getScopeStatusBadge(account.status)}
+                    <span className="text-[11px] text-label-3">{planLabel(account.plan)}</span>
+                  </div>
+                </motion.div>
+              );
+  };
+
   return (
     <div className="flex-1 p-8 overflow-y-auto select-none" id="autoswitch-view-container">
       {/* Page Title & Check Now Header Bar */}
-      <div className="flex items-center justify-between mb-8" id="autoswitch-title-row">
+      <div className="flex items-center justify-between mb-6" id="autoswitch-title-row">
         <div className="flex flex-col" id="autoswitch-title-group">
           <h2 className="text-[28px] font-bold tracking-tight text-label font-sans">
             自动切号
@@ -211,10 +275,11 @@ export default function AutoSwitchView({
           <motion.button
             onClick={handleCheckNow}
             disabled={isCheckingNow}
+            title="会按阈值检查，额度不够就会切换账号"
             whileHover={{ scale: 1.04 }}
             whileTap={{ scale: 0.96 }}
             transition={{ type: 'spring', stiffness: 400, damping: 20 }}
-            className="flex items-center gap-2 px-4 py-2 rounded-[10px] bg-accent/15 hover:bg-accent/25 disabled:opacity-50 text-accent text-[13px] font-medium transition-colors"
+            className="flex items-center gap-2 px-4 py-2 rounded-[10px] bg-fill-2 hover:bg-fill-3 disabled:opacity-50 text-label text-[13px] font-medium transition-colors cursor-pointer"
             id="autoswitch-btn-checknow"
           >
             <Zap className={`w-3.5 h-3.5 ${isCheckingNow ? 'animate-pulse text-accent' : ''}`} />
@@ -275,7 +340,7 @@ export default function AutoSwitchView({
                   onPointerUp={(e) => onUpdateThreshold('5h', Number(e.currentTarget.value))}
                   onKeyUp={(e) => onUpdateThreshold('5h', Number(e.currentTarget.value))}
                   onBlur={(e) => onUpdateThreshold('5h', Number(e.currentTarget.value))}
-                  className="w-full h-1 bg-fill-2 rounded-lg appearance-none cursor-pointer accent-accent outline-none"
+                  className="range-slider"
                   id="threshold-5h-slider"
                 />
               </div>
@@ -295,7 +360,7 @@ export default function AutoSwitchView({
                   onPointerUp={(e) => onUpdateThreshold('weekly', Number(e.currentTarget.value))}
                   onKeyUp={(e) => onUpdateThreshold('weekly', Number(e.currentTarget.value))}
                   onBlur={(e) => onUpdateThreshold('weekly', Number(e.currentTarget.value))}
-                  className="w-full h-1 bg-fill-2 rounded-lg appearance-none cursor-pointer accent-accent outline-none"
+                  className="range-slider"
                   id="threshold-weekly-slider"
                 />
               </div>
@@ -404,66 +469,15 @@ export default function AutoSwitchView({
                 还没选账号，自动切号不会换号。
               </p>
             )}
-            {scopeAccounts.map((account) => {
-              const eligible = canJoinAutoSwitch(account);
-              const isChecked = eligible && selectedAccountIds.includes(account.id);
-              const caption = quotaScopeCaption(account);
-              const canToggle = eligible && scopeMode === 'selected';
-              return (
-                <motion.div
-                  key={account.id}
-                  onClick={() => {
-                    if (!canToggle) return;
-                    onToggleAccountSelection(account.id);
-                  }}
-                  whileTap={canToggle ? { scale: 0.99 } : undefined}
-                  transition={{ type: 'spring', stiffness: 450, damping: 24 }}
-                  className={`row-sep flex items-start justify-between gap-4 py-4 group ${
-                    !eligible ? 'cursor-not-allowed' : (scopeMode === 'selected' ? 'cursor-pointer' : 'cursor-default')
-                  } ${
-                    !eligible ? 'opacity-40' : (isChecked ? '' : 'opacity-55 hover:opacity-80')
-                  }`}
-                  title={!eligible
-                    ? (account.status === 'BANNED' ? '账号已封号，无法加入自动切号' : '该账号需要重新授权后才能加入自动切号')
-                    : undefined}
-                  id={`scope-acc-card-${account.id}`}
-                >
-                  <div className="flex items-start gap-3.5 min-w-0" id={`scope-acc-left-${account.id}`}>
-                    <div 
-                      className={`mt-0.5 w-5 h-5 rounded-md border flex items-center justify-center transition-all shrink-0 ${
-                        isChecked 
-                          ? 'bg-accent border-accent text-white' 
-                          : 'border-white/20 group-hover:border-white/30'
-                      }`}
-                      id={`scope-checkbox-${account.id}`}
-                    >
-                      {isChecked && <Check className="w-3.5 h-3.5 stroke-[3]" />}
-                    </div>
-
-                    <div className="flex flex-col text-left min-w-0" id={`scope-titles-${account.id}`}>
-                      <span className="font-semibold text-label text-[13px] font-sans truncate" title={account.email}>{account.email}</span>
-                      {caption.shared ? (
-                        <span className="text-[12px] text-label-3 mt-1 leading-5">{caption.shared}</span>
-                      ) : (
-                        <div className="mt-1.5 space-y-1">
-                          {caption.rows.map((row) => (
-                            <div key={row.label} className="flex items-baseline gap-3 text-[12px] leading-5">
-                              <span className="w-12 shrink-0 text-label-3">{row.label}</span>
-                              <span className="text-label-2 tabular-nums">{row.text}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col items-end text-right gap-1.5 shrink-0 pt-0.5" id={`scope-acc-right-${account.id}`}>
-                    {getScopeStatusBadge(account.status)}
-                    <span className="text-[11px] text-label-3">{planLabel(account.plan)}</span>
-                  </div>
-                </motion.div>
-              );
-            })}
+            {eligibleAccounts.map(renderScopeAccount)}
+            {blockedAccounts.length > 0 ? (
+              <>
+                <p className="text-[12px] text-label-3 px-1 pt-4 pb-1" id="scope-blocked-hint">
+                  需重新授权后才能加入
+                </p>
+                {blockedAccounts.map(renderScopeAccount)}
+              </>
+            ) : null}
           </div>
         </div>
       </div>

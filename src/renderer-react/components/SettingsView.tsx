@@ -154,12 +154,12 @@ export default function SettingsView({
   return (
     <div className="flex-1 p-8 overflow-y-auto select-none" id="settings-view-container">
       {/* Page Title block */}
-      <div className="flex flex-col mb-8 select-none" id="settings-title-group">
+      <div className="flex flex-col mb-6 select-none" id="settings-title-group">
         <h2 className="text-[28px] font-bold tracking-tight text-label font-sans">
-          设置
+          系统设置
         </h2>
         <p className="text-[13px] text-label-2 mt-1.5 font-sans">
-          管理 Codex 系统运行参数及账户同步配置
+          同步间隔、后台服务、软件更新
         </p>
       </div>
 
@@ -245,7 +245,7 @@ export default function SettingsView({
                   onPointerUp={(e) => onUpdateSyncInterval(Number(e.currentTarget.value))}
                   onKeyUp={(e) => onUpdateSyncInterval(Number(e.currentTarget.value))}
                   onBlur={(e) => onUpdateSyncInterval(Number(e.currentTarget.value))}
-                  className="w-full h-1 bg-fill-2 rounded-lg appearance-none cursor-pointer accent-accent outline-none"
+                  className="range-slider"
                   id="sync-interval-slider"
                 />
                 <p className="text-[11px] text-label-3">不影响界面额度刷新</p>
@@ -336,6 +336,7 @@ export default function SettingsView({
                 <span className="text-[12px] text-label-3 font-medium mt-1">已管理账号</span>
               </div>
 
+              <div className="flex flex-col gap-2">
               <motion.button
                 onClick={handleBatchVerify}
                 disabled={isVerifyingTokens}
@@ -348,6 +349,8 @@ export default function SettingsView({
                 <ShieldCheck className="w-3.5 h-3.5 text-accent" />
                 {isVerifyingTokens ? '检查中...' : '检查令牌'}
               </motion.button>
+              <p className="text-[11px] text-label-3 leading-5">会实际刷新登录令牌，不是刷新额度。查额度请用账号卡上的「刷新」。</p>
+              </div>
             </div>
           </div>
 

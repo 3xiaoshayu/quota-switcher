@@ -81,8 +81,8 @@ body.float-lens-root,
 
 .float-lens-icon {
   display: inline-flex;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   align-items: center;
   justify-content: center;
   border: 0;
@@ -198,6 +198,8 @@ body.float-lens-root,
   letter-spacing: -0.02em;
   text-overflow: ellipsis;
   white-space: nowrap;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .float-lens-plan {
@@ -333,6 +335,7 @@ body.float-lens-root,
   font-size: 12px;
   font-weight: 650;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .float-lens-switch:hover:not(:disabled) {

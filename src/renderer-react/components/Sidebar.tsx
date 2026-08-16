@@ -7,6 +7,7 @@ interface SidebarProps {
   activeTab: 'accounts' | 'quotas' | 'autoswitch' | 'settings';
   setActiveTab: (tab: 'accounts' | 'quotas' | 'autoswitch' | 'settings') => void;
   daemonState: DaemonState;
+  handlingCount?: number;
   onShowSupport: () => void;
   onShowUpdates: () => void;
 }
@@ -15,6 +16,7 @@ export default function Sidebar({
   activeTab,
   setActiveTab,
   daemonState,
+  handlingCount = 0,
   onShowSupport,
   onShowUpdates,
 }: SidebarProps) {
@@ -77,6 +79,11 @@ export default function Sidebar({
               <span className="text-[13px] font-medium">
                 {item.label}
               </span>
+              {item.id === 'accounts' && handlingCount > 0 ? (
+                <span className="ml-auto px-1.5 py-0.5 bg-danger text-white rounded-full text-[9px] font-bold min-w-4 text-center">
+                  {handlingCount}
+                </span>
+              ) : null}
             </motion.button>
           );
         })}

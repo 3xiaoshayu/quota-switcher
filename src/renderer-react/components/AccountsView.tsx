@@ -13,7 +13,8 @@ import {
   Mail,
   KeyRound,
   Link,
-  RefreshCw
+  RefreshCw,
+  MoreHorizontal
 } from 'lucide-react';
 import { AccountQuota, DesktopAuthState, DesktopOAuthStatus } from '../types';
 import { avatarGradient, needsHandling, planLabel, quotaBarColor, quotaSummaryPercent, quotaWindowSummary, STATUS_DOT, STATUS_TEXT, canRefreshQuota, canSwitchAccount } from '../api/desktop';
@@ -33,6 +34,8 @@ interface AccountsProps {
   oauthStatus?: DesktopOAuthStatus | null;
   authState?: DesktopAuthState | null;
   onOpenModal?: () => void;
+  filterTab?: 'all' | 'current' | 'warning';
+  onFilterTabChange?: (tab: 'all' | 'current' | 'warning') => void;
 }
 
 export default function AccountsView({
@@ -49,9 +52,16 @@ export default function AccountsView({
   oauthStatus = null,
   authState = null,
   onOpenModal,
+  filterTab: filterTabProp,
+  onFilterTabChange,
 }: AccountsProps) {
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterTab, setFilterTab] = useState<'all' | 'current' | 'warning'>('all');
+  const [localFilterTab, setLocalFilterTab] = useState<'all' | 'current' | 'warning'>('all');
+  const filterTab = filterTabProp ?? localFilterTab;
+  const setFilterTab = (tab: 'all' | 'current' | 'warning') => {
+    if (onFilterTabChange) onFilterTabChange(tab);
+    else setLocalFilterTab(tab);
+  };
   const [showAddModal, setShowAddModal] = useState(false);
   const [refreshingIds, setRefreshingIds] = useState<Set<string>>(new Set());
   const [isAdding, setIsAdding] = useState(false);
@@ -59,6 +69,7 @@ export default function AccountsView({
   const [manualCallbackUrl, setManualCallbackUrl] = useState('');
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [moreMenuId, setMoreMenuId] = useState<string | null>(null);
   const [isRecoveredOAuth, setIsRecoveredOAuth] = useState(false);
   const [isSubmittingCallback, setIsSubmittingCallback] = useState(false);
   const [isCancellingOAuth, setIsCancellingOAuth] = useState(false);
@@ -97,6 +108,13 @@ export default function AccountsView({
   useEffect(() => {
     if (showAddModal) onOpenModal?.();
   }, [showAddModal, onOpenModal]);
+
+  useEffect(() => {
+    if (!moreMenuId) return;
+    const close = () => setMoreMenuId(null);
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [moreMenuId]);
 
   // Escape 关闭添加弹窗；授权进行中则取消授权，而不是把窗口卡死。
   const cancelPendingOAuth = async () => {
@@ -249,13 +267,13 @@ export default function AccountsView({
   return (
     <div className="flex-1 p-8 overflow-y-auto select-none" id="accounts-view-container">
       {/* Title block with stats & action triggers */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8" id="accounts-header-row">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6" id="accounts-header-row">
         <div className="flex flex-col" id="accounts-title-block">
           <h2 className="text-[28px] font-bold tracking-tight text-label font-sans">
             账号管理
           </h2>
           <p className="mt-1.5 text-[13px] text-label-2 font-sans" id="accounts-meta-labels">
-            {accounts.length} 个账号 · 当前套餐 {currentPlanText}
+            {accounts.length} 个账号 · {handlingCount > 0 ? `${handlingCount} 个需要处理` : `当前套餐 ${currentPlanText}`}
           </p>
         </div>
 
@@ -349,7 +367,7 @@ export default function AccountsView({
             )}
             需要处理
             {handlingCount > 0 && (
-              <span className="px-1.5 py-0.5 bg-rose-500 text-white rounded-full text-[9px] font-bold">
+              <span className="px-1.5 py-0.5 bg-danger text-white rounded-full text-[9px] font-bold">
                 {handlingCount}
               </span>
             )}
@@ -400,6 +418,7 @@ export default function AccountsView({
               : null);
           const switchBlocked = !canSwitchAccount(account);
           const refreshBlocked = !canRefreshQuota(account);
+          const needsReauth = account.status === 'SUSPENDED' && !!onReauthorizeAccount;
           const officialAligned = !oauthMode || (
             authState?.status === 'aligned' &&
             authState.currentAccountId === account.id
@@ -431,7 +450,7 @@ export default function AccountsView({
 
                   <div className="flex flex-col text-left select-all" id={`account-m-titles-${account.id}`}>
                     <div className="flex items-center gap-2">
-                      <span className="font-bold text-label text-sm tracking-wide font-sans truncate max-w-[140px] sm:max-w-none">
+                      <span className="font-bold text-label text-sm tracking-wide font-sans truncate max-w-[140px] sm:max-w-none select-text">
                         {account.email}
                       </span>
                       {account.isCurrent && (
@@ -484,9 +503,11 @@ export default function AccountsView({
                     <span className={`block mt-1.5 tracking-tight ${
                       fiveHourPct === null ? 'text-[13px] leading-5 font-medium text-label-3' : 'text-[22px] font-semibold tabular-nums text-label'
                     }`}>{fiveHourPct !== null ? `${fiveHourPct}%` : fiveHourSummary.text}</span>
-                    <div className="h-1 bg-fill rounded-full overflow-hidden mt-3">
-                      <div className={`h-full rounded-full ${color5h}`} style={{ width: `${fiveHourPct ?? 0}%` }} />
+                    {fiveHourPct !== null ? (
+                    <div className="h-1 bg-[#3a3a3c] rounded-full overflow-hidden mt-3">
+                      <div className={`h-full rounded-full ${color5h}`} style={{ width: `${fiveHourPct}%` }} />
                     </div>
+                    ) : null}
                     <span className="text-[10px] text-label-3 mt-2 block font-medium">
                       {fiveHourPct !== null ? `重置: ${account.resetInFiveHour}` : ''}
                     </span>
@@ -500,9 +521,11 @@ export default function AccountsView({
                     }`}>
                       {weeklyPct !== null ? `${weeklyPct}%` : weeklySummary.text}
                     </span>
-                    <div className="h-1 bg-fill rounded-full overflow-hidden mt-3">
-                      <div className={`h-full rounded-full ${colorWeekly}`} style={{ width: `${weeklyPct ?? 0}%` }} />
+                    {weeklyPct !== null ? (
+                    <div className="h-1 bg-[#3a3a3c] rounded-full overflow-hidden mt-3">
+                      <div className={`h-full rounded-full ${colorWeekly}`} style={{ width: `${weeklyPct}%` }} />
                     </div>
+                    ) : null}
                     <span className="text-[10px] text-label-3 mt-2 block font-medium">
                       {weeklyPct !== null ? `重置: ${account.resetInWeekly}` : ''}
                     </span>
@@ -512,24 +535,7 @@ export default function AccountsView({
 
               {/* Action buttons footer */}
               <div className="flex items-center justify-between gap-2.5 mt-6 pt-4 border-t border-sep" id={`account-actions-${account.id}`}>
-                {/* 1. Refresh */}
-                <motion.button
-                  onClick={() => handleSingleRefresh(account.id, account.name)}
-                  disabled={isCardRefreshing || refreshBlocked}
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.95 }}
-                  transition={{ type: 'spring', stiffness: 450, damping: 20 }}
-                  className="flex-1 py-3 px-2 bg-fill hover:bg-fill-2 rounded-[10px] text-label-2 hover:text-label transition-all text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
-                  title={refreshBlocked
-                    ? (account.status === 'BANNED' ? '账号已封号，无法刷新额度' : '该账号需要重新授权后才能刷新额度')
-                    : '刷新此账号'}
-                  id={`action-refresh-${account.id}`}
-                >
-            <RefreshCw className={`w-3.5 h-3.5 ${isCardRefreshing ? 'animate-spin text-accent' : ''}`} />
-                  {isCardRefreshing ? '刷新中...' : '刷新'}
-                </motion.button>
-
-                {account.status === 'SUSPENDED' && onReauthorizeAccount && (
+                {needsReauth ? (
                   <motion.button
                     onClick={() => startReauthorize(account.id)}
                     disabled={!!oauthStatus?.pending}
@@ -542,10 +548,40 @@ export default function AccountsView({
                     <KeyRound className="w-3.5 h-3.5" />
                     重新授权
                   </motion.button>
+                ) : (
+                  <motion.button
+                    onClick={() => handleSingleRefresh(account.id, account.name)}
+                    disabled={isCardRefreshing || refreshBlocked}
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.95 }}
+                    transition={{ type: 'spring', stiffness: 450, damping: 20 }}
+                    className="flex-1 py-3 px-2 bg-fill hover:bg-fill-2 rounded-[10px] text-label-2 hover:text-label transition-all text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                    title={refreshBlocked
+                      ? (account.status === 'BANNED' ? '账号已封号，无法刷新额度' : '该账号需要重新授权后才能刷新额度')
+                      : '刷新此账号'}
+                    id={`action-refresh-${account.id}`}
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isCardRefreshing ? 'animate-spin text-accent' : ''}`} />
+                    {isCardRefreshing ? '刷新中...' : '刷新'}
+                  </motion.button>
                 )}
 
-                {/* 2. Switch/Check (Star/Switch) */}
-                {account.isCurrent ? (
+                {needsReauth ? (
+                  <motion.button
+                    onClick={() => handleSingleRefresh(account.id, account.name)}
+                    disabled={isCardRefreshing || refreshBlocked}
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.95 }}
+                    transition={{ type: 'spring', stiffness: 450, damping: 20 }}
+                    className="py-3 px-3 bg-fill hover:bg-fill-2 rounded-[10px] text-label-2 hover:text-label transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                    title={refreshBlocked
+                      ? (account.status === 'BANNED' ? '账号已封号，无法刷新额度' : '该账号需要重新授权后才能刷新额度')
+                      : '刷新此账号'}
+                    id={`action-refresh-${account.id}`}
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isCardRefreshing ? 'animate-spin text-accent' : ''}`} />
+                  </motion.button>
+                ) : account.isCurrent ? (
                   <motion.button
                     onClick={() => {
                       if (officialAligned) return
@@ -606,30 +642,78 @@ export default function AccountsView({
                   </motion.button>
                 )}
 
-                {/* 3. Delete / Check */}
-                <motion.button
-                  onClick={() => {
-                    if (account.isCurrent) {
-                      onAddLog('无法删除当前正在使用的账号。', 'error');
-                      return;
-                    }
-                    void handleDeleteAccount(account.id);
-                  }}
-                  disabled={account.isCurrent || deletingId !== null || switchingId !== null}
-                  aria-busy={deletingId === account.id}
-                  whileHover={account.isCurrent ? {} : { scale: 1.05, backgroundColor: 'rgba(239, 68, 68, 0.1)' }}
-                  whileTap={account.isCurrent ? {} : { scale: 0.95 }}
-                  transition={{ type: 'spring', stiffness: 450, damping: 15 }}
-                  className={`py-3 px-4 rounded-xl transition-all text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer ${
-                    account.isCurrent 
-                      ? 'bg-fill text-label-3 cursor-not-allowed' 
-                      : 'bg-fill text-label-2 hover:text-danger'
-                  }`}
-                  title="删除此账号"
-                  id={`action-delete-${account.id}`}
-                >
-                  <Trash2 className={`w-3.5 h-3.5 ${deletingId === account.id ? 'animate-pulse' : ''}`} />
-                </motion.button>
+                {!account.isCurrent ? (
+                <div className="relative" id={`account-more-wrapper-${account.id}`}>
+                  <motion.button
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setMoreMenuId(moreMenuId === account.id ? null : account.id);
+                    }}
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    transition={{ type: 'spring', stiffness: 450, damping: 15 }}
+                    className="py-3 px-3 bg-fill hover:bg-fill-2 rounded-[10px] text-label-2 hover:text-label transition-all cursor-pointer"
+                    title="更多操作"
+                    id={`action-more-${account.id}`}
+                  >
+                    <MoreHorizontal className="w-4 h-4" />
+                  </motion.button>
+
+                  <AnimatePresence>
+                    {moreMenuId === account.id && (
+                      <motion.div
+                        onClick={(event) => event.stopPropagation()}
+                        initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                        className="absolute right-0 bottom-full mb-2 w-44 bg-surface-2 border border-sep rounded-xl p-2 shadow-xl z-20 select-none text-label-2"
+                        id={`account-more-dropdown-${account.id}`}
+                      >
+                        {needsReauth ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (account.isCurrent && officialAligned) return;
+                              setMoreMenuId(null);
+                              void handleSwitchAccount(account.id);
+                            }}
+                            disabled={officialAligned || switchBlocked || switchingId !== null || deletingId === account.id || !!oauthStatus?.pending}
+                            title={
+                              oauthStatus?.pending
+                                ? '已有授权正在进行，请先完成或取消'
+                                : account.status === 'BANNED'
+                                  ? '账号已封号，无法切换'
+                                  : '该账号需要重新授权后才能切换'
+                            }
+                            className="w-full px-3 py-2 hover:bg-fill rounded-xl text-left text-xs flex items-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                            id={`account-menu-switch-${account.id}`}
+                          >
+                            {account.isCurrent ? <Star className="w-3.5 h-3.5" /> : <ArrowLeftRight className="w-3.5 h-3.5" />}
+                            {account.isCurrent ? (officialAligned ? '当前' : '重新登录 Codex') : '切换'}
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (account.isCurrent) {
+                              onAddLog('无法删除当前正在使用的账号。', 'error');
+                              return;
+                            }
+                            setMoreMenuId(null);
+                            void handleDeleteAccount(account.id);
+                          }}
+                          disabled={account.isCurrent || deletingId !== null || switchingId !== null}
+                          className="w-full px-3 py-2 hover:bg-fill rounded-xl text-left text-xs text-danger hover:text-danger flex items-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                          id={`action-delete-${account.id}`}
+                        >
+                          <Trash2 className={`w-3.5 h-3.5 ${deletingId === account.id ? 'animate-pulse' : ''}`} />
+                          {account.isCurrent ? '当前账号不可删除' : '删除账号'}
+                        </button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+                ) : null}
               </div>
             </motion.div>
           );
@@ -673,7 +757,7 @@ export default function AccountsView({
               </button>
 
               <h3 className="text-xl font-bold tracking-tight mb-2 font-sans">
-                {reauthorizeId ? '重新授权账号' : '添加配置账号'}
+                {reauthorizeId ? '重新授权账号' : '添加账号'}
               </h3>
               <p className="text-xs text-label-2 mb-6 font-sans">
                 {oauthMode
@@ -824,7 +908,7 @@ export default function AccountsView({
                     disabled={isAdding}
                     className="flex-1 py-3 bg-accent/12 hover:bg-accent/20 border border-accent/20 text-accent hover:text-accent-hi rounded-xl text-xs font-bold transition-all cursor-pointer"
                   >
-                    {isAdding ? '等待浏览器授权...' : oauthMode ? '打开登录授权' : '添加配置'}
+                    {isAdding ? '等待浏览器授权...' : oauthMode ? '打开登录授权' : '添加账号'}
                   </button>
                 </div>
               </form>

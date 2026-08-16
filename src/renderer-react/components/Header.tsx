@@ -6,6 +6,7 @@ interface HeaderProps {
   onLogout?: () => void;
   unreadNotificationsCount: number;
   onToggleNotifications: () => void;
+  onCopyCurrentEmail?: () => void;
 }
 
 const windowControlsAvailable = hasDesktopBridge();
@@ -15,6 +16,7 @@ export default function Header({
   onLogout,
   unreadNotificationsCount,
   onToggleNotifications,
+  onCopyCurrentEmail,
 }: HeaderProps) {
   return (
     <header
@@ -27,7 +29,7 @@ export default function Header({
         <button
           onClick={onToggleNotifications}
           className="p-2 hover:bg-fill-2 rounded-lg text-label-2 hover:text-label transition-colors cursor-pointer relative"
-          title="系统通知"
+          title="运行日志"
           id="header-btn-notifications"
         >
           <Bell className="w-4 h-4" />
@@ -39,17 +41,26 @@ export default function Header({
         <div className="h-5 w-px bg-sep mx-1" id="header-divider" />
 
         <div className="flex items-center gap-2.5" id="header-user-profile-widget">
-          <div
-            className="flex items-center gap-2 max-w-40"
-            title={`已登录账号：${currentUserEmail}`}
+          <button
+            type="button"
+            onClick={() => {
+              if (!currentUserEmail || !onCopyCurrentEmail) return;
+              onCopyCurrentEmail();
+            }}
+            disabled={!currentUserEmail || !onCopyCurrentEmail}
+            className={`flex items-center gap-2 max-w-[280px] bg-transparent border-0 p-0 text-left ${
+              currentUserEmail && onCopyCurrentEmail ? 'cursor-pointer' : 'cursor-default'
+            }`}
+            title={currentUserEmail ? `当前账号：${currentUserEmail}（点击复制）` : '未指定当前账号'}
+            id="header-current-email"
           >
-            <div className={`w-7 h-7 rounded-full ${avatarGradient(currentUserEmail)} flex items-center justify-center font-semibold text-xs`}>
+            <div className={`w-7 h-7 rounded-full ${avatarGradient(currentUserEmail || 'none')} flex items-center justify-center font-semibold text-xs shrink-0`}>
               {(currentUserEmail.charAt(0) || '?').toUpperCase()}
             </div>
-            <span className="text-[13px] font-medium text-label-2 truncate hidden sm:inline max-w-[110px]">
-              {currentUserEmail.split('@')[0]}
+            <span className="text-[13px] font-medium text-label-2 truncate hidden sm:inline min-w-0">
+              {currentUserEmail || '未指定当前账号'}
             </span>
-          </div>
+          </button>
 
           {onLogout ? (
           <button

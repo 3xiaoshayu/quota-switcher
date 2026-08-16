@@ -4,9 +4,11 @@ import {
   AtSign, 
   Bell, 
   BarChart3, 
+  ChevronRight,
   MoreHorizontal, 
   RefreshCw, 
-  Activity
+  Activity,
+  KeyRound
 } from 'lucide-react';
 import { AccountQuota } from '../types';
 import { avatarGradient, canRefreshQuota, formatDateTime, hideStaleQuota, needsHandling, quotaBarColor, quotaSummaryPercent, quotaWindowSummary, STATUS_DOT, STATUS_TEXT } from '../api/desktop';
@@ -17,6 +19,8 @@ interface QuotasProps {
   onRefreshToken?: (id: string) => void | Promise<void>;
   onRefreshAll: () => void | Promise<void>;
   isRefreshingAll: boolean;
+  onOpenAccounts?: (filter: 'all' | 'warning') => void;
+  onReauthorizeAccount?: (id: string) => void | Promise<void>;
 }
 
 function toEpochMs(value: string | number | null | undefined): number | null {
@@ -33,6 +37,8 @@ export default function QuotasView({
   onRefreshToken,
   onRefreshAll,
   isRefreshingAll,
+  onOpenAccounts,
+  onReauthorizeAccount,
 }: QuotasProps) {
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
 
@@ -119,7 +125,7 @@ export default function QuotasView({
   return (
     <div className="flex-1 p-8 overflow-y-auto" id="quotas-view-container">
       {/* Title Header with Subtitle & Refresh All button */}
-      <div className="flex items-center justify-between mb-8 select-none" id="quotas-view-title-row">
+      <div className="flex items-center justify-between mb-6 select-none" id="quotas-view-title-row">
         <div className="flex flex-col" id="quotas-title-group">
           <h2 className="text-[28px] font-bold tracking-tight text-label font-sans">
             配额总览
@@ -146,32 +152,40 @@ export default function QuotasView({
       {/* Top 3 Metric Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8 select-none" id="quotas-metrics-grid">
         {/* Total Accounts */}
-        <div 
-          className="glass-card rounded-2xl p-5 flex items-center gap-4 group"
+        <button
+          type="button"
+          onClick={() => onOpenAccounts?.('all')}
+          className="glass-card w-full rounded-2xl p-5 flex items-center gap-4 group text-left cursor-pointer hover:bg-white/[0.03]"
           id="quota-stat-card-total"
+          title="查看全部账号"
         >
           <div className="w-11 h-11 rounded-[10px] bg-fill-2 flex items-center justify-center text-label-2">
             <AtSign className="w-5 h-5" />
           </div>
-          <div className="flex flex-col">
+          <div className="flex flex-col min-w-0">
             <span className="text-[12px] font-medium text-label-3">账号总数</span>
             <span className="text-[22px] font-semibold text-label mt-0.5 tracking-tight tabular-nums">{totalAccounts}</span>
           </div>
-        </div>
+          <ChevronRight className="w-4 h-4 text-label-2 ml-auto opacity-80" />
+        </button>
 
         {/* Action Required */}
-        <div 
-          className="glass-card rounded-2xl p-5 flex items-center gap-4 group"
+        <button
+          type="button"
+          onClick={() => onOpenAccounts?.('warning')}
+          className="glass-card w-full rounded-2xl p-5 flex items-center gap-4 group text-left cursor-pointer hover:bg-white/[0.03]"
           id="quota-stat-card-action"
+          title="查看需要处理的账号"
         >
           <div className="w-11 h-11 rounded-[10px] bg-danger/15 flex items-center justify-center text-danger">
             <Bell className="w-5 h-5" />
           </div>
-          <div className="flex flex-col">
+          <div className="flex flex-col min-w-0">
             <span className="text-[12px] font-medium text-label-3">需要处理</span>
             <span className="text-[22px] font-semibold text-label mt-0.5 tracking-tight tabular-nums">{actionRequiredCount}</span>
           </div>
-        </div>
+          <ChevronRight className="w-4 h-4 text-label-2 ml-auto opacity-80" />
+        </button>
 
         {/* Avg Remaining */}
         <div 
@@ -213,6 +227,7 @@ export default function QuotasView({
           const tokenRefreshUnavailable = account.status === 'SUSPENDED' || account.status === 'BANNED' || account.tokenRefreshAvailable === false;
           const accountBanned = account.status === 'BANNED';
           const refreshBlocked = !canRefreshQuota(account);
+          const needsReauth = account.status === 'SUSPENDED' && !!onReauthorizeAccount;
 
           const barColor5h = quotaBarColor(fiveHourBar);
           const barColorWeekly = quotaBarColor(weeklyBar);
@@ -237,7 +252,7 @@ export default function QuotasView({
                   {getAccountIcon(account)}
                   <div className="flex flex-col select-all" id={`quota-card-titles-${account.id}`}>
                     <h3 className="font-bold text-label tracking-wide text-sm font-sans">{account.name}</h3>
-                    <span className="text-xs text-label-2 mt-0.5">{account.email}</span>
+                    <span className="text-xs text-label-2 mt-0.5 select-text">{account.email}</span>
                   </div>
                 </div>
                 {getStatusBadge(account.status)}
@@ -259,14 +274,16 @@ export default function QuotasView({
                       {fiveHourSummary.text === '已用尽' ? '已用尽' : fiveHourPercentage === null ? fiveHourSummary.text : `剩余 ${fiveHourPercentage}%`}
                     </span>
                   </div>
-                  <div className="h-1 bg-fill rounded-full overflow-hidden relative" id={`quota-5h-bar-bg-${account.id}`}>
+                  {fiveHourBar !== null ? (
+                  <div className="h-1 bg-fill-2 rounded-full overflow-hidden relative" id={`quota-5h-bar-bg-${account.id}`}>
                     <motion.div 
                       initial={{ width: 0 }}
-                      animate={{ width: `${fiveHourBar ?? 0}%` }}
+                      animate={{ width: `${fiveHourBar}%` }}
                       transition={{ duration: 0.8, ease: 'easeOut' }}
                       className={`h-full rounded-full ${barColor5h}`} 
                     />
                   </div>
+                  ) : null}
                 </div>
 
                 {/* Weekly Quota */}
@@ -277,19 +294,34 @@ export default function QuotasView({
                       {weeklySummary.text === '已用尽' ? '已用尽' : weeklyPercentage === null ? weeklySummary.text : `剩余 ${weeklyPercentage}%`}
                     </span>
                   </div>
-                  <div className="h-1 bg-fill rounded-full overflow-hidden relative" id={`quota-weekly-bar-bg-${account.id}`}>
+                  {weeklyBar !== null ? (
+                  <div className="h-1 bg-fill-2 rounded-full overflow-hidden relative" id={`quota-weekly-bar-bg-${account.id}`}>
                     <motion.div 
                       initial={{ width: 0 }}
-                      animate={{ width: `${weeklyBar ?? 0}%` }}
+                      animate={{ width: `${weeklyBar}%` }}
                       transition={{ duration: 0.8, ease: 'easeOut' }}
                       className={`h-full rounded-full ${barColorWeekly}`} 
                     />
                   </div>
+                  ) : null}
                 </div>
               </div>
 
               {/* Action Buttons Row */}
               <div className="flex items-center gap-3 mt-6 pt-4 border-t border-sep" id={`quota-actions-row-${account.id}`}>
+                {needsReauth ? (
+                <motion.button
+                  onClick={() => void onReauthorizeAccount?.(account.id)}
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.96 }}
+                  transition={{ type: 'spring', stiffness: 400, damping: 20 }}
+                  className="flex-1 py-3 bg-warn/12 hover:bg-warn/20 text-warn text-xs font-bold rounded-xl flex items-center justify-center gap-2 cursor-pointer transition-all"
+                  id={`quota-btn-reauthorize-${account.id}`}
+                >
+                  <KeyRound className="w-3.5 h-3.5" />
+                  重新授权
+                </motion.button>
+                ) : (
                 <motion.button
                   onClick={() => handleCardRefresh(account.id)}
                   disabled={isCardRefreshing || refreshBlocked}
@@ -303,10 +335,11 @@ export default function QuotasView({
                   id={`quota-btn-refresh-${account.id}`}
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${isCardRefreshing ? 'animate-spin' : ''}`} />
-                  {isCardRefreshing ? '刷新中...' : '快速刷新'}
+                  {isCardRefreshing ? '刷新中...' : '刷新'}
                 </motion.button>
+                )}
 
-                {/* More Action Popover Toggle */}
+                {!tokenRefreshUnavailable ? (
                 <div className="relative" id={`quota-more-wrapper-${account.id}`}>
                   <motion.button
                     onClick={(event) => {
@@ -338,10 +371,10 @@ export default function QuotasView({
                               setActiveMenuId(null);
                               void handleTokenRefresh(account.id);
                             }}
-                            disabled={!onRefreshToken || refreshingTokenId !== null || tokenRefreshUnavailable}
+                            disabled={!onRefreshToken || refreshingTokenId !== null}
                             aria-busy={refreshingTokenId === account.id}
                             id={`quota-menu-refresh-token-${account.id}`}
-                            title={accountBanned ? '账号已封号，不再刷新令牌' : (tokenRefreshUnavailable ? '该账号需要重新授权后才能刷新 Token' : '刷新 Token')}
+                            title="刷新 Token"
                             className="w-full px-3 py-2 hover:bg-fill rounded-xl text-left text-xs text-danger hover:text-danger flex items-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           >
                             <Activity className={`w-3.5 h-3.5 ${refreshingTokenId === account.id ? 'animate-spin' : ''}`} />
@@ -352,6 +385,7 @@ export default function QuotasView({
                     )}
                   </AnimatePresence>
                 </div>
+                ) : null}
               </div>
             </motion.div>
           );

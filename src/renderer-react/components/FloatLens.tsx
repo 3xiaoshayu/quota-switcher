@@ -222,6 +222,22 @@ export default function FloatLens() {
     setErrorText(null);
   }, [accounts, viewedIndex]);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        moveAccount(-1);
+        return;
+      }
+      if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        moveAccount(1);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [moveAccount]);
+
   const refreshViewed = useCallback(async (silent = false) => {
     if (!viewed || refreshing || switching) return;
     if (!canRefreshQuota(viewed)) {
@@ -323,7 +339,7 @@ export default function FloatLens() {
               title={alwaysOnTop ? '取消置顶' : '置顶'}
               onClick={() => void handlePin()}
             >
-              <Pin size={14} />
+              <Pin size={16} />
             </button>
             <button
               className="float-lens-icon"
@@ -331,7 +347,7 @@ export default function FloatLens() {
               title="关闭"
               onClick={() => void desktopApi.hideFloatWindow()}
             >
-              <X size={14} />
+              <X size={16} />
             </button>
           </div>
         </div>
@@ -390,7 +406,7 @@ export default function FloatLens() {
                     disabled={accounts.length <= 1}
                     onClick={() => moveAccount(-1)}
                   >
-                    <ChevronLeft size={15} />
+                    <ChevronLeft size={16} />
                   </button>
                   <div className="float-lens-count">
                     {String(Math.max(1, viewedIndex + 1)).padStart(2, '0')} / {String(Math.max(accounts.length, 1)).padStart(2, '0')}
@@ -402,7 +418,7 @@ export default function FloatLens() {
                     disabled={accounts.length <= 1}
                     onClick={() => moveAccount(1)}
                   >
-                    <ChevronRight size={15} />
+                    <ChevronRight size={16} />
                   </button>
                 </div>
                 <div className={`float-lens-state${isCurrent ? ' is-live' : ''}`}>
@@ -421,7 +437,11 @@ export default function FloatLens() {
                     onClick={() => void handleSwitch()}
                   >
                     {switching ? <RefreshCw size={13} className="animate-spin" /> : <ArrowLeftRight size={13} />}
-                    切到此账号
+                    {switching
+                      ? '切换中...'
+                      : !canSwitchAccount(viewed)
+                        ? (viewed.status === 'BANNED' ? '账号已封号，无法切换' : '需授权后才能切换')
+                        : '切到此账号'}
                   </button>
                 </div>
               ) : null}
@@ -444,7 +464,7 @@ export default function FloatLens() {
               disabled={!viewed || refreshing || switching || !canRefreshQuota(viewed)}
               onClick={() => void refreshViewed(false)}
             >
-              <RefreshCw size={14} className={refreshing ? 'animate-spin' : undefined} />
+              <RefreshCw size={16} className={refreshing ? 'animate-spin' : undefined} />
             </button>
             <button
               className="float-lens-icon"
@@ -452,7 +472,7 @@ export default function FloatLens() {
               title="打开主窗口"
               onClick={() => void desktopApi.showMainWindow()}
             >
-              <ExternalLink size={14} />
+              <ExternalLink size={16} />
             </button>
           </div>
         </div>
