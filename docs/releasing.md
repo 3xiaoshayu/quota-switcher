@@ -25,9 +25,10 @@ npm run build:windows
 ```
 
 5. Install the generated Setup executable on a clean Windows user profile.
-6. Verify launch, Codex detection, read-only account display, navigation, and
-   uninstall behavior.
+6. Verify launch, Codex and Cursor detection, read-only account display,
+   sidebar product switching, navigation, and uninstall behavior.
 7. Do not use real destructive account actions during release smoke testing.
+   Do not complete OAuth or switch a live official client.
 
 ## Publish
 

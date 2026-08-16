@@ -5,4 +5,4 @@ contact_links:
     about: Report credential exposure or security issues privately.
   - name: Troubleshooting guide
     url: https://github.com/3xiaoshayu/codex-account-manager/blob/main/docs/troubleshooting.md
-    about: Review common installation, quota, token, and switching problems.
+    about: Review common installation, quota, token, Codex, and Cursor switching problems.

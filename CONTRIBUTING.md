@@ -8,7 +8,8 @@ safe around authentication data.
 - Search existing issues and pull requests.
 - Keep changes narrow and explain the user workflow they improve.
 - Open an issue first for storage migrations, OAuth changes, switching
-  behavior, new network destinations, or large UI restructuring.
+  behavior, new network destinations, a new product tab, or large UI
+  restructuring.
 - Never include real accounts, tokens, callback URLs, logs, or screenshots
   containing personal information.
 
@@ -22,7 +23,8 @@ Requirements:
 
 - Windows 10 or 11 x64;
 - Node.js 22 or newer;
-- the official Microsoft Store Codex app for integration checks.
+- the official Microsoft Store Codex app for Codex integration checks;
+- official Cursor for Cursor integration checks.
 
 ```powershell
 git clone https://github.com/3xiaoshayu/codex-account-manager.git
@@ -46,8 +48,12 @@ release metadata validation.
 - Preserve atomic writes and existing backups around credential state.
 - Do not log tokens, authorization headers, OAuth callbacks, or complete
   account objects.
-- Keep screenshots and fixtures synthetic.
+- Keep screenshots and fixtures synthetic or email-masked.
 - Treat missing quota windows as unknown, not zero.
+- Keep Codex and Cursor storage, OAuth, and switch paths separate. Do not scan
+  one product's files as the other.
+- Cursor must not use Codex ban status. Auto-switch stays Codex-only unless a
+  change is explicitly designed and documented.
 - Keep new dependencies limited and explain why they are required.
 
 ## Verification
@@ -64,6 +70,7 @@ For UI changes, also verify:
 - desktop and narrow window sizes;
 - keyboard focus, hover, pressed, disabled, busy, success, and failure states;
 - current, attention, expired-token, and missing-quota accounts;
+- both the Codex and Cursor sidebar products;
 - no horizontal overflow or clipped action controls.
 
 Actions that switch a real account or delete data should be tested only with
@@ -76,7 +83,7 @@ Include:
 - a concise description of the behavior change;
 - the reason for the change;
 - commands and manual scenarios used for verification;
-- synthetic screenshots for visible UI changes;
+- synthetic or email-masked screenshots for visible UI changes;
 - migration or rollback notes when local data changes.
 
 By contributing, you agree that your contribution is licensed under the

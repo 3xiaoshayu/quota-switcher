@@ -1,4 +1,5 @@
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { chromium } = require("playwright-core");
 
@@ -75,22 +76,40 @@ async function floatPage(browser) {
   return pages.find((item) => item.url().includes("#float")) || null;
 }
 
-async function captureDashboard(page) {
-  const shots = [
-    ["accounts", "account-dashboard.png"],
-    ["quotas", "quota-overview.png"],
-    ["autoswitch", "auto-switch.png"],
-    ["settings", "settings.png"],
-  ];
-  for (const [tab, file] of shots) {
-    await page.click(`#sidebar-nav-${tab}`);
-    await page.waitForTimeout(400);
-    await maskPage(page);
-    await save(page, file);
+async function selectProduct(page, id) {
+  const button = page.locator(`#sidebar-product-${id}`);
+  if (await button.count()) {
+    await button.click();
+    await page.waitForTimeout(700);
   }
 }
 
+async function captureDashboard(page) {
+  await selectProduct(page, "cursor");
+  await page.click("#sidebar-nav-accounts");
+  await page.waitForTimeout(500);
+  await maskPage(page);
+  await save(page, "account-dashboard.png");
+
+  await page.click("#sidebar-nav-quotas");
+  await page.waitForTimeout(500);
+  await maskPage(page);
+  await save(page, "quota-overview.png");
+
+  await selectProduct(page, "codex");
+  await page.click("#sidebar-nav-autoswitch");
+  await page.waitForTimeout(500);
+  await maskPage(page);
+  await save(page, "auto-switch.png");
+
+  await page.click("#sidebar-nav-settings");
+  await page.waitForTimeout(500);
+  await maskPage(page);
+  await save(page, "settings.png");
+}
+
 async function captureFloat(browser, page) {
+  await selectProduct(page, "cursor");
   const openBtn = page.locator("#btn-show-float-lens");
   if (await openBtn.count()) {
     await openBtn.click();
@@ -111,8 +130,8 @@ async function captureFloat(browser, page) {
     await maskPage(lens);
   }
   const preview = await lens.locator(".float-lens-shell").screenshot({ type: "png" });
-  const currentPath = path.join(outDir, "_float-current.png");
-  const previewPath = path.join(outDir, "_float-preview.png");
+  const currentPath = path.join(os.tmpdir(), "cam-float-current.png");
+  const previewPath = path.join(os.tmpdir(), "cam-float-preview.png");
   fs.writeFileSync(currentPath, current);
   fs.writeFileSync(previewPath, preview);
   await stitchFloat(currentPath, previewPath, path.join(outDir, "float-lens.png"));
@@ -150,29 +169,45 @@ $g.Dispose(); $bmp.Dispose(); $left.Dispose(); $right.Dispose()
   }
 }
 
+function withSearchParam(url, key, value) {
+  const parsed = new URL(url);
+  parsed.searchParams.set(key, value);
+  return parsed.toString();
+}
+
+function withoutSearchParam(url, key) {
+  const parsed = new URL(url);
+  parsed.searchParams.delete(key);
+  return parsed.toString();
+}
+
 async function captureLogin(page) {
-  const logout = page.locator("#header-btn-logout");
-  if (!(await logout.count())) {
-    console.log("skip login: already on login or no logout button");
-    return null;
-  }
-  const title = await page.locator('#header-user-profile-widget [title^="已登录账号"]').getAttribute("title").catch(() => "");
-  const email = String(title || "").replace(/^已登录账号：/, "").trim();
-  await logout.click();
+  const current = page.url();
+  const saved = await page.evaluate(() => ({
+    status: localStorage.getItem("codex_auth_status"),
+    email: localStorage.getItem("codex_auth_email"),
+  }));
+  await page.evaluate(() => {
+    localStorage.removeItem("codex_auth_status");
+    localStorage.removeItem("codex_auth_email");
+  });
+  await page.goto(withSearchParam(current, "desktopLogin", "1"), { waitUntil: "domcontentloaded" });
   await page.waitForSelector("#login-card", { timeout: 8000 });
   const input = page.locator("#login-email-input");
   if (await input.count()) await input.fill("");
   await page.waitForTimeout(300);
   await maskPage(page);
   await save(page, "login.png");
-  return email || null;
+  await page.evaluate((auth) => {
+    if (auth.status) localStorage.setItem("codex_auth_status", auth.status);
+    if (auth.email) localStorage.setItem("codex_auth_email", auth.email);
+  }, saved);
+  return current;
 }
 
-async function restoreSession(page, email) {
-  const input = page.locator("#login-email-input");
-  if (!(await input.count()) || !email) return;
-  await input.fill(email);
-  await page.click("#login-submit-button");
+async function restoreSession(page, previousUrl) {
+  if (!previousUrl) return;
+  await page.goto(withoutSearchParam(previousUrl, "desktopLogin"), { waitUntil: "domcontentloaded" });
   await page.waitForSelector("#dashboard-main-container", { timeout: 8000 }).catch(() => {});
 }
 
@@ -197,14 +232,14 @@ async function main() {
     }
     await captureDashboard(page);
     await captureFloat(browser, page);
-    const restoreHint = await captureLogin(page);
-    if (restoreHint) await restoreSession(page, restoreHint);
+    const previousUrl = await captureLogin(page);
+    if (previousUrl) await restoreSession(page, previousUrl);
   } finally {
     // Keep the running desktop app open.
   }
 }
 
-main().catch((error) => {
+main().then(() => process.exit(0)).catch((error) => {
   console.error(error);
   process.exit(1);
 });

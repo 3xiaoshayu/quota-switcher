@@ -24,9 +24,15 @@ OpenAI.Codex_2p2nqsd0c76g0!App
 Install or update Codex from the Microsoft Store, launch it once, then select
 **Re-detect** in Settings. Other package sources are not supported yet.
 
-## Adding an account does not complete
+## Cursor is reported as not found
 
-The OAuth callback listens on local port `1455`.
+Cursor features need the official Cursor app on this PC. Install Cursor, launch
+it once, then select **Re-detect** in Settings. Portable copies that are not
+registered as `Cursor.exe` may not be detected.
+
+## Adding a Codex account does not complete
+
+The Codex OAuth callback listens on local port `1455`.
 
 - Keep the manager open while signing in.
 - Allow the browser to return to `http://localhost:1455`.
@@ -50,18 +56,37 @@ TUN mode, then retry **Add account**.
 Do not post the callback URL in an issue; it can contain sensitive authorization
 data.
 
+## Adding a Cursor account does not complete
+
+Cursor sign-in opens the official login page and waits for the browser flow to
+finish. There is no callback URL to paste.
+
+- Keep the manager open while signing in.
+- Finish the Cursor login in the browser with the account you intend to add.
+- If Cursor is already open, close unsaved editor work first; a later switch
+  will restart official Cursor.
+- Retry **Add account** after the previous login attempt has ended.
+
+You can also import the Cursor login already on this PC instead of opening the
+browser flow.
+
 ## Quota stays unknown
 
-An unknown quota is different from zero quota.
+An unknown quota is different from zero quota. Exhausted Cursor usage is shown
+as **已用尽**, not as a missing window.
 
 - Wait for the background refresh or select **Refresh quota** on the card.
 - Confirm the account token is not expired or marked for reauthentication.
-- Confirm `chatgpt.com` is reachable from the current network.
+- Confirm `chatgpt.com` (Codex) or `cursor.com` (Cursor) is reachable from the
+  current network.
+- If Windows system proxy is off but a local HTTP/SOCKS port is still live,
+  the app should follow that port. If quota hangs, check the proxy client.
 - Check another saved account to distinguish an account-specific response from
   a network-wide failure.
 
-The 5-hour and weekly windows are parsed independently. Some accounts or
-responses may not expose both windows.
+Codex 5-hour and weekly windows are parsed independently. Some accounts or
+responses may not expose both windows; those rows say **暂无此项**. Cursor
+shows plan, Auto, and API independently.
 
 ## Token refresh fails
 
@@ -70,7 +95,8 @@ elsewhere, use **Reauthorize account** from the affected account card. If the
 new login belongs to a different identity, it is saved as a separate account
 instead of overwriting the original record.
 
-Never paste a refresh token, `auth.json`, or account file into a GitHub issue.
+Never paste a refresh token, `auth.json`, Cursor `state.vscdb`, or account file
+into a GitHub issue.
 
 ## Switching succeeds but Codex shows the previous account
 
@@ -82,6 +108,14 @@ Never paste a refresh token, `auth.json`, or account file into a GitHub issue.
 
 Switching intentionally restarts the Codex application. A session that was
 already running may be interrupted.
+
+## Switching Cursor is refused or rolls back
+
+- Finish unsaved work in official Cursor first. The switch closes that app.
+- If the manager says the login database is still being written, wait a moment
+  and retry. It will not overwrite `state.vscdb` while a WAL write is pending.
+- If you are working inside official Cursor, finish or save that session
+  first. The switch will close it.
 
 ## Official Codex login changed
 
@@ -100,7 +134,8 @@ show the window again. To quit, right-click the tray icon and choose **Exit**.
 
 Open it from the tray menu item **Open desktop quota**, or from
 **Settings > Desktop quota > Open**. If no accounts are saved yet, the lens
-shows an empty state until you add one.
+shows an empty state until you add one. The lens follows the sidebar product:
+Codex shows nested 5-hour / weekly rings, Cursor shows Auto and API.
 
 ## Account files appear missing
 
@@ -134,7 +169,8 @@ Include:
 
 - application version;
 - Windows version and architecture;
-- Codex install source;
+- whether the issue is Codex, Cursor, or both;
+- Codex / Cursor install source;
 - exact steps and expected behavior;
 - whether the issue occurs for one account or all accounts;
 - a redacted screenshot when useful.

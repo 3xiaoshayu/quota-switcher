@@ -48,11 +48,25 @@ body:
       required: true
 
   - type: dropdown
+    id: product
+    attributes:
+      label: Product
+      options:
+        - Codex
+        - Cursor
+        - Both
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
     id: codex
     attributes:
-      label: Codex install source
+      label: Official client
       options:
         - Microsoft Store official Codex
+        - Official Cursor
+        - Both installed
         - Other
         - Not sure
     validations:

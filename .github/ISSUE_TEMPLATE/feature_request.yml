@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Keep proposals local-first and specific to Codex account, quota, token, or switching workflows.
+        Keep proposals local-first and specific to Codex or Cursor account, quota, token, or switching workflows.
 
   - type: textarea
     id: problem

@@ -1,7 +1,7 @@
 # Security Policy
 
 Codex Account Manager handles OAuth credentials and modifies the local Codex
-authentication state. Security reports are treated as a priority.
+and Cursor authentication state. Security reports are treated as a priority.
 
 ## Supported versions
 
@@ -38,6 +38,7 @@ requested and appropriate.
 - `%USERPROFILE%\.codex-switch` contains encrypted account credentials and configuration.
 - `%USERPROFILE%\.codex\auth.json` contains the active Codex credential state.
 - `%USERPROFILE%\.codex\auth.json.bak` may contain the previous credential state.
+- `%APPDATA%\Cursor\User\globalStorage\state.vscdb` contains the official Cursor login.
 
 Never attach these files or directories to an issue. Remove email addresses,
 account identifiers, callback URLs, and authorization headers from screenshots
@@ -47,10 +48,11 @@ and logs.
 
 - Saved manager tokens are encrypted with Windows DPAPI.
 - The active Codex `auth.json` remains readable by Codex.
+- The official Cursor `state.vscdb` remains readable by Cursor.
 - DPAPI does not protect against code already running as the same Windows user
   or against a machine administrator.
-- The application relies on upstream OpenAI, ChatGPT, GitHub, Electron, and
-  Windows security properties.
+- The application relies on upstream OpenAI, ChatGPT, Cursor, GitHub, Electron,
+  and Windows security properties.
 - Unsigned prerelease installers can trigger SmartScreen and must be verified
   against the release checksum.
 

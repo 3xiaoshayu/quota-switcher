@@ -12,8 +12,10 @@ Before opening an issue:
 
 1. update to the newest release;
 2. read [Troubleshooting](docs/troubleshooting.md);
-3. confirm the issue occurs with the official Microsoft Store Codex app;
-4. remove all personal and authentication data from the report.
+3. say whether the issue is Codex, Cursor, or both;
+4. confirm the matching official client is installed when the issue depends on
+   switching or local import;
+5. remove all personal and authentication data from the report.
 
 This community project is maintained on a best-effort basis and does not
 provide guaranteed response times.
@@ -30,6 +32,7 @@ Never upload:
 
 - `%USERPROFILE%\.codex-switch`;
 - `%USERPROFILE%\.codex\auth.json` or `auth.json.bak`;
+- `%APPDATA%\Cursor\User\globalStorage\state.vscdb` or its WAL/SHM files;
 - OAuth callback URLs;
 - access, ID, or refresh tokens;
 - unredacted screenshots with emails or account identifiers;
