@@ -1,25 +1,25 @@
-## Summary
+## 改了什么
 
-Describe the user-visible behavior and why this change is needed.
+用户能看见什么，为什么要改。
 
-## Verification
+## 怎么验的
 
-List commands and manual scenarios that were completed.
+列出跑过的命令，以及点过的界面。
 
 ```text
 npm test
 npm run build:dir
 ```
 
-## Safety and privacy
+## 安全和隐私
 
-- [ ] No real account data, tokens, callback URLs, or private logs are included.
-- [ ] New network, storage, process, or IPC behavior is documented.
-- [ ] Destructive and failure paths were tested where applicable.
-- [ ] Screenshots do not include tokens, callback URLs, or auth files.
+- [ ] 没有附带 token、回调地址、账号文件或私人日志
+- [ ] 新的联网、存盘、进程或 IPC，已经写进文档
+- [ ] 会删东西、会失败的路径，该测的测过了
+- [ ] 截图里没有 token、回调地址或账号文件
 
-## Scope
+## 范围
 
-- [ ] The change is focused and does not include unrelated refactoring.
-- [ ] Documentation and changelog entries are updated when user behavior changes.
-- [ ] New dependencies are necessary and their licenses are compatible.
+- [ ] 改动收在这一件事里，没有顺手大重构
+- [ ] 用户能感觉到的变化，文档和版本记录也改了
+- [ ] 新依赖有必要，许可也兼容

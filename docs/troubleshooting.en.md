@@ -24,12 +24,12 @@ OpenAI.Codex_2p2nqsd0c76g0!App
 ```
 
 Install or update Codex from the Microsoft Store, launch it once, then select
-**Re-detect** in Settings. Other package sources are not supported yet.
+**重新检测** in Settings. Other package sources are not supported yet.
 
 ## Cursor is reported as not found
 
 Cursor features need the official Cursor app on this PC. Install Cursor, launch
-it once, then select **Re-detect** in Settings. Portable copies that are not
+it once, then select **重新检测** in Settings. Portable copies that are not
 registered as `Cursor.exe` may not be detected.
 
 ## Adding a Codex account does not complete
@@ -40,9 +40,9 @@ The Codex OAuth callback listens on local port `1455`.
 - Allow the browser to return to `http://localhost:1455`.
 - Close software already using port `1455`.
 - Check whether firewall or security software blocks local loopback traffic.
-- Retry **Add account** after the previous login attempt has ended.
-- If automatic return fails, paste the complete callback URL into the manual
-  callback field in the add-account dialog.
+- Retry **添加账号** after the previous login attempt has ended.
+- If automatic return fails, paste the complete callback URL into the
+  **添加账号** dialog.
 - Pending OAuth authorization is restored after an app restart for up to five
   minutes.
 
@@ -53,7 +53,7 @@ but the token exchange request could not reach the OpenAI authorization
 endpoint. Check whether your proxy, VPN, TUN mode, firewall, or security
 software applies to desktop applications as well as the browser. If the browser
 works but the app does not, switch the proxy from browser-only mode to system or
-TUN mode, then retry **Add account**.
+TUN mode, then retry **添加账号**.
 
 Do not post the callback URL in an issue; it can contain sensitive authorization
 data.
@@ -67,17 +67,17 @@ finish. There is no callback URL to paste.
 - Finish the Cursor login in the browser with the account you intend to add.
 - If Cursor is already open, close unsaved editor work first; a later switch
   will restart official Cursor.
-- Retry **Add account** after the previous login attempt has ended.
+- Retry **添加账号** after the previous login attempt has ended.
 
-You can also import the Cursor login already on this PC instead of opening the
-browser flow.
+You can also use **导入本机已登录的 Cursor** instead of opening the browser
+flow.
 
 ## Quota stays unknown
 
 An unknown quota is different from zero quota. Exhausted Cursor usage is shown
 as **已用尽**, not as a missing window.
 
-- Wait for the background refresh or select **Refresh quota** on the card.
+- Wait for the background refresh or select **刷新额度** on the card.
 - Confirm the account token is not expired or marked for reauthentication.
 - Confirm `chatgpt.com` (Codex) or `cursor.com` (Cursor) is reachable from the
   current network.
@@ -93,7 +93,7 @@ shows plan, Auto, and API independently.
 ## Token refresh fails
 
 If a refresh token has expired, been revoked, or already been rotated
-elsewhere, use **Reauthorize account** from the affected account card. If the
+elsewhere, use **重新授权** from the affected account card. If the
 new login belongs to a different identity, it is saved as a separate account
 instead of overwriting the original record.
 
@@ -123,25 +123,25 @@ already running may be interrupted.
 
 The manager pauses authentication writes and automatic switching when the
 official Codex login differs from its managed current account. Choose
-**Adopt official account** to import and use the official login, or
-**Reapply managed account** to restore the manager-selected identity.
+**采用官方账号** to import and use the official login, or
+**写回管理账号** to restore the manager-selected identity.
 
 ## The window closed but the app is still running
 
 The title-bar close button hides the main window to the tray. The auto-switch
-daemon keeps running. Left-click the tray icon, or choose **Open window**, to
-show the window again. To quit, right-click the tray icon and choose **Exit**.
+daemon keeps running. Left-click the tray icon, or choose **打开窗口**, to
+show the window again. To quit, right-click the tray icon and choose **退出**.
 
 ## The desktop quota lens does not appear
 
-Open it from the tray menu item **Open desktop quota**, or from
-**Settings > Desktop quota > Open**. If no accounts are saved yet, the lens
+Open it from the tray menu item **打开桌面额度**, or from
+**系统设置 > 桌面额度 > 打开**. If no accounts are saved yet, the lens
 shows an empty state until you add one. The lens follows the sidebar product:
 Codex shows nested 5-hour / weekly rings, Cursor shows Auto and API.
 
 ## Account files appear missing
 
-Open **Settings > Logs** and inspect the latest diagnostic file. Malformed JSON
+Open **系统设置 > 日志** and inspect the latest diagnostic file. Malformed JSON
 is restored from `.bak` when possible. DPAPI decryption failures are left in
 place so the original encrypted account file is not destroyed.
 

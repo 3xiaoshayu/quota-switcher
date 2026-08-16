@@ -1,29 +1,28 @@
-# Contributing
+# 参与贡献
 
-Contributions are welcome when they keep the project focused, local-first, and
-safe around authentication data.
+[English](CONTRIBUTING.en.md)
 
-## Before opening a pull request
+欢迎改。请保持本机优先，也别把登录数据弄乱。
 
-- Search existing issues and pull requests.
-- Keep changes narrow and explain the user workflow they improve.
-- Open an issue first for storage migrations, OAuth changes, switching
-  behavior, new network destinations, a new product tab, or large UI
-  restructuring.
-- Never include tokens, callback URLs, account files, or raw logs.
+## 开 PR 之前
 
-Security vulnerabilities must be reported through
-[private vulnerability reporting](https://github.com/3xiaoshayu/codex-account-manager/security/advisories/new),
-not a public issue.
+- 先搜过 Issue 和 PR
+- 改动收窄，说清改善了哪一步
+- 存储格式、登录、切号、新的联网地址、新的产品页、大改界面，先开 Issue
+- 不要附 token、回调地址、账号文件或原始日志
 
-## Development setup
+安全问题走
+[私下报告](https://github.com/3xiaoshayu/codex-account-manager/security/advisories/new)，
+不要开公开 Issue。
 
-Requirements:
+## 本地怎么跑
 
-- Windows 10 or 11 x64;
-- Node.js 22 or newer;
-- the official Microsoft Store Codex app for Codex integration checks;
-- official Cursor for Cursor integration checks.
+需要：
+
+- Windows 10 或 11 x64
+- Node.js 22 或更高
+- 测 Codex 时，本机有微软商店官方 Codex
+- 测 Cursor 时，本机有官方 Cursor
 
 ```powershell
 git clone https://github.com/3xiaoshayu/codex-account-manager.git
@@ -33,58 +32,47 @@ npm test
 npm start
 ```
 
-`npm test` runs the engine behavior suite, TypeScript checks, JavaScript syntax
-checks, renderer/preload/IPC contract validation, documentation checks, and
-release metadata validation.
+`npm test` 会跑引擎行为、TypeScript、语法、界面契约、文档链接和发布元数据。
 
-## Project conventions
+## 约定
 
-- Follow the existing CommonJS and plain JavaScript style.
-- Keep the renderer isolated from Node.js and privileged filesystem access.
-- Add IPC operations through the renderer, preload, and main handler contract.
-- Use structured JSON APIs instead of editing authentication data with string
-  replacement.
-- Preserve atomic writes and existing backups around credential state.
-- Do not log tokens, authorization headers, OAuth callbacks, or complete
-  account objects.
-- Keep fixtures free of tokens. Live screenshots may show account emails.
-- Treat missing quota windows as unknown, not zero.
-- Keep Codex and Cursor storage, OAuth, and switch paths separate. Do not scan
-  one product's files as the other.
-- Cursor must not use Codex ban status. Auto-switch stays Codex-only unless a
-  change is explicitly designed and documented.
-- Keep new dependencies limited and explain why they are required.
+- 顺着现有的 CommonJS 和普通 JavaScript 写
+- 渲染进程不要直接碰 Node 和本机文件
+- 新操作要同时改界面、preload 和主进程，三者对上
+- 改登录数据用结构化接口，不要拿字符串去补
+- 写文件保持原子替换和备份
+- 日志里不要出现 token、授权头、回调或完整账号
+- 测试夹具不要带 token；公开截图可以带邮箱
+- 读不到的额度写成未知，不要写成 0
+- Codex 和 Cursor 的存储、登录、切号分开，不要互相扫
+- Cursor 不要用 Codex 的封号状态。自动切号只做 Codex，除非专门设计并写进文档
+- 少加依赖，加上就要说为什么
 
-## Verification
-
-Run before submitting:
+## 提交前
 
 ```powershell
 npm test
 npm run build:dir
 ```
 
-For UI changes, also verify:
+改了界面，再看一眼：
 
-- desktop and narrow window sizes;
-- keyboard focus, hover, pressed, disabled, busy, success, and failure states;
-- current, attention, expired-token, and missing-quota accounts;
-- both the Codex and Cursor sidebar products;
-- no horizontal overflow or clipped action controls.
+- 宽窗口和窄窗口
+- 焦点、悬停、按下、禁用、忙碌、成功、失败
+- 当前号、要处理的号、登录失效、额度未知
+- 侧栏的 Codex 和 Cursor
+- 没有横着溢出，按钮没被裁掉
 
-Actions that switch a real account or delete data should be tested only with
-dedicated test accounts.
+真切号、真删号，只用专门的测试账号。
 
-## Pull requests
+## Pull request
 
-Include:
+写上：
 
-- a concise description of the behavior change;
-- the reason for the change;
-- commands and manual scenarios used for verification;
-- screenshots for visible UI changes;
-- migration or rollback notes when local data changes.
+- 用户能看见什么变化
+- 为什么要改
+- 跑过哪些命令、点过哪些地方
+- 看得见的界面变化附截图
+- 动了本机数据时，怎么迁、怎么退
 
-By contributing, you agree that your contribution is licensed under the
-project's MIT License. Do not submit assets or code that you do not have the
-right to redistribute.
+提交即同意按本项目的 MIT 许可分发。没有再分发权利的代码和素材，请不要送来。

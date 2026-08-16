@@ -1,31 +1,23 @@
-# Code of Conduct
+# 行为约定
 
-## Our standard
+[English](CODE_OF_CONDUCT.en.md)
 
-Project spaces should be useful, respectful, and safe for people with different
-backgrounds and levels of experience.
+这里讨论问题和代码。对不同背景、不同程度的人，都把话说清楚，别伤人。
 
-Expected behavior includes:
+希望看到：
 
-- discussing ideas and code without personal attacks;
-- giving specific, constructive technical feedback;
-- respecting privacy and never asking contributors to publish credentials;
-- crediting prior work and honoring software and asset licenses;
-- accepting maintainer decisions about scope, safety, and release readiness.
+- 讨论想法和代码，不攻击人
+- 技术意见说具体
+- 尊重隐私，不要求别人把登录发出来
+- 尊重已有工作和许可
+- 范围、安全和能不能发版，听维护者的
 
-Unacceptable behavior includes harassment, threats, discriminatory language,
-deliberate disruption, impersonation, doxxing, or publishing another person's
-private information.
+不能接受：骚扰、威胁、歧视、故意搅局、冒充、人肉，或公开别人的私人信息。
 
-## Enforcement
+## 怎么处理
 
-Maintainers may edit or remove comments, close issues, reject contributions, or
-temporarily or permanently restrict participation when behavior conflicts with
-this standard.
+维护者可以改评、关 Issue、拒贡献，或暂时、永久限制参与。
 
-Report conduct concerns privately through the maintainer contact options
-available on the repository owner's GitHub profile. Do not include unrelated
-credentials or account data in a conduct report.
+行为问题请私下联系仓库所有者的 GitHub 资料里的联系方式。报告里不要夹带无关的登录或账号文件。
 
-Maintainers should handle reports in good faith, minimize disclosure, and avoid
-conflicts of interest where practical.
+处理时尽量少扩散，有利害关系就回避。

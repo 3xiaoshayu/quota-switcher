@@ -48,4 +48,4 @@
 - 上游 OpenAI、Cursor、GitHub、Electron、Windows 各自的安全，不在本项目控制里
 - 没签名的安装包可能被 SmartScreen 拦，请对 SHA-256
 
-本机数据和出门访问见[隐私说明](docs/privacy.md)。
+本机数据和联网访问见[隐私说明](docs/privacy.md)。

@@ -30,11 +30,11 @@
 
 ## 能做什么
 
-**Codex** — 看 5 小时和周额度。可以导入本机已登录的号，也可以打开网页授权。换号会写进微软商店版 Codex。额度不够时，后台按你设的线换号；关掉窗口也不会停。
+**Codex** — 看 5 小时和周额度。可以「导入本机已登录的 Codex」，也可以「打开网页授权」。换号会写进微软商店版 Codex。额度不够时，后台按你设的线换号；关掉窗口也不会停。
 
-**Cursor** — 看套餐、Auto 和 API。同样可以导入本机登录或打开网页授权，写进官方 Cursor。本机当前登录的那个号，会标成当前账号。
+**Cursor** — 看套餐、Auto 和 API。可以「导入本机已登录的 Cursor」，或「打开网页授权」，写进官方 Cursor。本机当前登录的那个号，会标成当前账号。
 
-**都有** — 关窗口进托盘，桌面上放一个小额度环，也能检查登录还剩多久。没有遥测，没有我们的云。
+**都有** — 关窗口进托盘，桌面上放额度镜，也能检查登录还剩多久。没有遥测，没有我们的云。
 
 换号会先关掉对应的官方软件。手头的活先做完再切。
 
@@ -43,7 +43,7 @@
 <table>
   <tr>
     <td align="center"><sub><b>Codex 账号</b></sub></td>
-    <td align="center"><sub><b>Cursor 配额</b></sub></td>
+    <td align="center"><sub><b>配额总览</b></sub></td>
   </tr>
   <tr>
     <td><img src="docs/images/codex-accounts.png" alt="Codex 账号" /></td>
@@ -75,7 +75,7 @@ Windows 10 / 11（x64）。管 Codex 需要微软商店里的官方 Codex，管 
 
 1. 打开 [Releases](https://github.com/3xiaoshayu/codex-account-manager/releases)，下载 `Codex-Account-Manager-Setup-<版本>-x64.exe`
 2. 安装并打开
-3. 侧栏选 Codex 或 Cursor，导入本机已登录的号，或打开网页授权
+3. 侧栏选 Codex 或 Cursor，点「导入本机已登录的 Codex」或「导入本机已登录的 Cursor」，也可以「打开网页授权」
 4. 回来就能看到卡片和额度
 
 ZIP 解压也能用，数据还是写在用户目录。Beta 请自己更新。
@@ -94,9 +94,9 @@ Get-FileHash ".\Codex-Account-Manager-Setup-<版本>-x64.exe" -Algorithm SHA256
 | `%USERPROFILE%\.codex\auth.json` | 切 Codex 时写入，先备份成 `auth.json.bak` |
 | `%APPDATA%\Cursor\User\globalStorage\state.vscdb` | 切 Cursor 时写入官方登录库 |
 
-出门只找 OpenAI / ChatGPT、Cursor 和 GitHub。别人已经能操作你这台电脑时，Windows 加密也帮不上忙，细节在[隐私说明](docs/privacy.md)。
+只会访问 OpenAI / ChatGPT、Cursor 和 GitHub。别人已经能操作你这台电脑时，Windows 加密也帮不上忙，细节在[隐私说明](docs/privacy.md)。
 
-官方 Codex 登录和管理器对不上时，窗口里会问你：用官方那个号，还是写回管理器选的号。
+官方 Codex 登录和管理器对不上时，窗口里是「采用官方账号」或「写回管理账号」。
 
 ## 从源码运行
 
@@ -118,6 +118,7 @@ npm start
 [故障排查](docs/troubleshooting.md) ·
 [支持](SUPPORT.md) ·
 [安全](SECURITY.md) ·
+[行为约定](CODE_OF_CONDUCT.md) ·
 [版本记录](CHANGELOG.md)
 
 给改代码的人：[架构](docs/architecture.md) ·

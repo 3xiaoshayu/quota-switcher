@@ -45,7 +45,7 @@ set. Closing the window does not stop it.
 the browser, then write official Cursor. The official current login is marked
 as current.
 
-**Both** — close to the tray, a small desktop quota ring, and a check for how
+**Both** — close to the tray, a desktop quota lens, and a check for how
 long the login still lasts. No telemetry and no cloud of ours.
 
 A switch closes the matching official app first. Finish the work in front of
@@ -56,7 +56,7 @@ you before you switch.
 <table>
   <tr>
     <td align="center"><sub><b>Codex accounts</b></sub></td>
-    <td align="center"><sub><b>Cursor quotas</b></sub></td>
+    <td align="center"><sub><b>Quota overview</b></sub></td>
   </tr>
   <tr>
     <td><img src="docs/images/codex-accounts.png" alt="Codex accounts" /></td>
@@ -90,7 +90,7 @@ Cursor needs official Cursor. You can use either one on its own.
 
 1. Open [Releases](https://github.com/3xiaoshayu/codex-account-manager/releases) and download `Codex-Account-Manager-Setup-<version>-x64.exe`
 2. Install and open it
-3. Pick Codex or Cursor in the sidebar, then import the login already on this PC or finish sign-in in the browser
+3. Pick Codex or Cursor in the sidebar, then use **导入本机已登录的 Codex** / **导入本机已登录的 Cursor**, or **打开网页授权**
 4. The cards and quotas should be there when you come back
 
 The ZIP also runs; data still lives in your user profile. Update betas by
@@ -114,8 +114,8 @@ Outbound calls go to OpenAI / ChatGPT, Cursor, and GitHub. Windows encryption
 will not help if someone already controls this PC. Details are in
 [Privacy](docs/privacy.en.md).
 
-If official Codex and the manager disagree, the window asks whether to adopt
-the official login or write the managed one back.
+If official Codex and the manager disagree, the window offers **采用官方账号**
+(use the official login) or **写回管理账号** (write the managed one back).
 
 ## Running from source
 
@@ -137,10 +137,11 @@ Package with `npm run build:dir` or `npm run build:windows`.
 [Troubleshooting](docs/troubleshooting.en.md) ·
 [Support](SUPPORT.en.md) ·
 [Security](SECURITY.en.md) ·
+[Code of Conduct](CODE_OF_CONDUCT.en.md) ·
 [Changelog](CHANGELOG.md)
 
 For contributors: [Architecture](docs/architecture.md) ·
-[Contributing](CONTRIBUTING.md) ·
+[Contributing](CONTRIBUTING.en.md) ·
 [Releasing](docs/releasing.md)
 
 ## Notes

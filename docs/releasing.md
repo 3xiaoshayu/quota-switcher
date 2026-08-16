@@ -1,5 +1,7 @@
 # Release Process
 
+User-facing copy is in Chinese. This page is for people cutting a release.
+
 Releases are built by GitHub Actions on `windows-latest`. Do not upload a
 locally built installer as an official release asset.
 

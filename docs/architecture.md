@@ -1,5 +1,7 @@
 # Architecture
 
+User-facing copy is in Chinese. This page is for people changing the code.
+
 Codex Account Manager is a Windows-only Electron application with a small,
 explicit boundary between the renderer and privileged local operations.
 

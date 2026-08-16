@@ -7,6 +7,9 @@ release is published.
 
 ## Unreleased
 
+- Align public docs and community files with the Chinese UI labels, and keep
+  English pages as `*.en.md` siblings.
+
 ## [0.1.0-beta.25] - 2026-08-16
 
 - Add a parallel Cursor pipeline: import the official login, switch into

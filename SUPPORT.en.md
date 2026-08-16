@@ -21,7 +21,8 @@ Before opening an issue:
    screenshots are fine.
 
 This community project is maintained on a best-effort basis and does not
-provide guaranteed response times.
+provide guaranteed response times. See the
+[Code of Conduct](CODE_OF_CONDUCT.en.md).
 
 ## Security
 

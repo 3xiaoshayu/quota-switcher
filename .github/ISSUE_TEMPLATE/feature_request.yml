@@ -27,7 +27,7 @@ body:
   - type: textarea
     id: alternatives
     attributes:
-      label: 现在怎么凑合
+      label: 现在怎么处理
       description: 没有这个功能时，你是怎么处理的。
 
   - type: textarea

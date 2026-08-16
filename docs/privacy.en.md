@@ -101,8 +101,8 @@ Switching a Cursor account:
 - relaunches official Cursor.
 
 If official Codex authentication changes outside the manager, authentication
-writes and automatic switching pause until the user adopts the official login
-or reapplies the managed account.
+writes and automatic switching pause until the user chooses **采用官方账号**
+or **写回管理账号**.
 
 Finish active work before switching. Switching Cursor closes the official
 Cursor window, including unsaved editor work.
