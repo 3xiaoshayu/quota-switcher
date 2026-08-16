@@ -37,7 +37,7 @@ accounts you saved.
 
 ## What you can do
 
-- **Account cards** — 5-hour quota, weekly quota, reset times, and token lifetime on each card. Search, filter, add, refresh, switch, reauthorize, or delete.
+- **Account cards** — 5-hour quota, weekly quota, reset times, and token lifetime on each card. Search, filter, add, refresh, switch, reauthorize, or delete. The header shows the current mailbox; click it to copy.
 - **Quota overview** — every account on one page. A failed read shows as unknown, never as zero.
 - **Automatic switching** — a local daemon moves to the next usable account at the threshold you set. Closing the main window does not stop it.
 - **Close to tray** — the close button hides the window. Click the tray icon to bring it back; choose **Exit** on the tray menu to quit.

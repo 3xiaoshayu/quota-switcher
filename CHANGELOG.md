@@ -5,6 +5,14 @@ All notable changes to Codex Account Manager are documented here.
 The project follows [Semantic Versioning](https://semver.org/) once a stable
 release is published.
 
+## [0.1.0-beta.24] - 2026-08-16
+
+- Make pending-account actions obvious: reauthorize on quota cards, hide empty
+  menus, and show a handling count on the sidebar and account page.
+- Show the current Codex mailbox in the header and copy it on click.
+- Demote auto-switch “check now” so it is harder to trigger a real switch by
+  accident, and refresh the public screenshots to match the current UI.
+
 ## [0.1.0-beta.23] - 2026-08-16
 
 - Tell banned, reauthorization, usage-limited, and unclear quota states

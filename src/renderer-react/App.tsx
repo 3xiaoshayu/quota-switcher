@@ -1653,17 +1653,17 @@ function DashboardApp() {
                 <div>
                   <h4 className="font-bold text-white mb-1">本轮打磨</h4>
                   <ul className="list-disc pl-4 space-y-1 text-label-2 text-[11px]">
-                    <li>额度检查能区分已封号、需重新授权、额度限流和同步失败。</li>
-                    <li>刷新额度失败时不再提示成功；授权中途卡住可以取消或重试。</li>
-                    <li>配额页和账号页的「需要处理」口径一致；时长和套餐副标题改为中文。</li>
-                    <li>切号前检测官方 Codex 不再卡住界面；悬浮窗高度会记住。</li>
+                    <li>需要处理的账号会在侧栏和账号页标出来；配额卡上也能直接重新授权。</li>
+                    <li>顶栏显示当前 Codex 邮箱，点击即可复制。</li>
+                    <li>空的「更多」菜单已去掉；「立即检查」改成次按钮，避免误切号。</li>
+                    <li>额度检查仍能区分已封号、需重新授权、额度限流和这次没查清。</li>
                   </ul>
                 </div>
                 <div>
                   <h4 className="font-bold text-white mb-1">已验证修复</h4>
                   <ul className="list-disc pl-4 space-y-1 text-label-2 text-[11px]">
+                    <li>刷新额度失败时不再提示成功；授权中途卡住可以取消或重试。</li>
                     <li>添加账号弹窗不再显示误导性的套餐和优先级下拉框。</li>
-                    <li>套餐与轮转优先级继续由 OAuth 授权后的账号状态自动识别。</li>
                     <li>网络失败会显示短中文说明，而不是 Electron 报错原文。</li>
                   </ul>
                 </div>
