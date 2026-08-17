@@ -175,7 +175,7 @@ async function refreshCursorQuota(account, options = {}) {
     account.banned = false;
     saveCursorAcct(account);
     upsertCursorIndex(account);
-    logWarn(`Cursor quota refresh failed for ${account.email}: ${error.message}`);
+    logWarn(`Cursor quota refresh failed for ${account.email}: ${error.message}${error.stack ? `\n${error.stack}` : ""}`);
     if (force) throw error;
     return account.quota;
   }

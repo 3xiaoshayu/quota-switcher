@@ -7,6 +7,11 @@ release is published.
 
 ## Unreleased
 
+## [0.1.0-beta.28] - 2026-08-17
+
+- Keep quota HTTP on Node only, and do not retune the UI session proxy
+  while refreshing, so the main window stays responsive.
+
 ## [0.1.0-beta.27] - 2026-08-17
 
 - Stop quota refresh from reading a huge Chromium response on the UI

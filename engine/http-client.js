@@ -208,28 +208,14 @@ async function httpJson(url, opts = {}) {
   const idempotent = opts.idempotent !== false;
   const host = (() => { try { return new URL(url).host; } catch { return "unknown"; } })();
   const signature = await resolveLiveProxy(url);
-  await applySignatureToRuntime(signature);
+  await applySignatureToRuntime(signature, { touchSession: false });
   if (!signature.proxyUrl && await hostLooksPoisoned(host)) {
     throw new Error(`网络请求失败 (${host})。本机 DNS 异常且没有可用的本地代理。`);
   }
 
+  // Never use Chromium net.fetch here. It shares the UI session and a bad
+  // Content-Length / hijack page freezes the main window as 未响应.
   const attempts = [];
-  // Chromium net.fetch shares the UI session. When a local proxy is already
-  // selected, Node + ProxyAgent is enough and avoids reading a huge hijack
-  // page on the same network stack as the main window.
-  if (!signature.proxyUrl) {
-    try {
-      const runElectron = () => electronHttpJson(url, opts, headers, timeout);
-      const electronResult = idempotent
-        ? await withOneRetry("Electron network", runElectron)
-        : await runElectron();
-      if (electronResult) return electronResult;
-    } catch (error) {
-      attempts.push({ label: "Electron", error });
-      if (!idempotent) throw buildNetworkFailure(url, attempts);
-    }
-  }
-
   try {
     const runNode = () => nodeHttpJson(url, opts, headers, timeout);
     return idempotent
@@ -240,7 +226,7 @@ async function httpJson(url, opts = {}) {
     invalidateLiveProxy();
     const retrySignature = await resolveLiveProxy(url);
     if (idempotent && retrySignature.proxyUrl && retrySignature.proxyUrl !== signature.proxyUrl) {
-      await applySignatureToRuntime(retrySignature);
+      await applySignatureToRuntime(retrySignature, { touchSession: false });
       try {
         return await withOneRetry("Node network", () => nodeHttpJson(url, opts, headers, timeout));
       } catch (retryError) {

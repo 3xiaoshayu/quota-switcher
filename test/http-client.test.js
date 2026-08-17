@@ -28,9 +28,10 @@ test("capped UTF-8 concat rejects a body that would freeze the UI", () => {
   });
 });
 
-test("quota HTTP skips Chromium fetch when a local proxy is already selected", () => {
+test("quota HTTP never uses Chromium fetch on the UI session", () => {
   const source = fs.readFileSync(path.join(__dirname, "../engine/http-client.js"), "utf8");
-  assert.match(source, /if \(!signature\.proxyUrl\) \{/);
-  assert.match(source, /Chromium net\.fetch shares the UI session/);
+  assert.match(source, /Never use Chromium net\.fetch here/);
+  assert.match(source, /touchSession: false/);
   assert.match(source, /MAX_JSON_BODY_BYTES = 1024 \* 1024/);
+  assert.doesNotMatch(source, /if \(!signature\.proxyUrl\) \{/);
 });

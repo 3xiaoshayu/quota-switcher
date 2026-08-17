@@ -345,7 +345,7 @@ async function refreshQuota(acct, options = {}) {
       timestamp: ts(),
     };
     saveAcct(acct);
-    logWarn(`Quota refresh failed and was scheduled for retry: ${err?.message || err}`);
+    logWarn(`Quota refresh failed and was scheduled for retry: ${err?.message || err}${err?.stack ? `\n${err.stack}` : ""}`);
     throw err;
   }
 }

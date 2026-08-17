@@ -413,7 +413,8 @@ async function discoverProxyForUrl(url) {
   return signature.proxyUrl || "";
 }
 
-async function applySignatureToRuntime(signature) {
+async function applySignatureToRuntime(signature, options = {}) {
+  const touchSession = options.touchSession !== false;
   const nextUrl = signature.proxyUrl || "";
   if (appliedProxyUrl === nextUrl) {
     syncProxyEnv(nextUrl);
@@ -422,6 +423,9 @@ async function applySignatureToRuntime(signature) {
   appliedProxyUrl = nextUrl;
   syncProxyEnv(signature.proxyUrl);
   logProxySignature(signature);
+  if (!touchSession) {
+    return { ...signature, mode: nextUrl ? "explicit" : "system" };
+  }
 
   let session = null;
   try {
