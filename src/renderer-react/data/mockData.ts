@@ -229,7 +229,7 @@ export const INITIAL_SETTINGS: SystemSettings = {
   clientDetected: true,
   cursorDetected: true,
   updateChannel: 'Beta Channel',
-  version: '0.1.0-beta.28',
+  version: '0.1.0-beta.29',
   latestStatus: 'Up to date',
 };
 

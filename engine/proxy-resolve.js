@@ -340,23 +340,34 @@ async function readPacRule(url) {
   }
 }
 
+function composeNoProxy() {
+  const seen = new Set();
+  const parts = [];
+  for (const raw of [inheritedProxyEnv.no_proxy, inheritedProxyEnv.NO_PROXY, LOCAL_NO_PROXY]) {
+    if (!raw) continue;
+    for (const item of String(raw).split(",")) {
+      const host = item.trim();
+      if (!host || seen.has(host)) continue;
+      seen.add(host);
+      parts.push(host);
+    }
+  }
+  return parts.join(",");
+}
+
 function syncProxyEnv(proxyUrl) {
   if (!proxyUrl) {
     for (const key of PROXY_ENV_KEYS) {
       if (inheritedProxyEnv[key] == null) delete process.env[key];
       else process.env[key] = inheritedProxyEnv[key];
     }
-    const noProxy = [inheritedProxyEnv.no_proxy, inheritedProxyEnv.NO_PROXY, LOCAL_NO_PROXY]
-      .filter(Boolean)
-      .join(",");
+    const noProxy = composeNoProxy();
     for (const key of NO_PROXY_KEYS) process.env[key] = noProxy;
     return;
   }
 
   for (const key of PROXY_ENV_KEYS) process.env[key] = proxyUrl;
-  const noProxy = [process.env.no_proxy, process.env.NO_PROXY, LOCAL_NO_PROXY]
-    .filter(Boolean)
-    .join(",");
+  const noProxy = composeNoProxy();
   for (const key of NO_PROXY_KEYS) process.env[key] = noProxy;
 }
 

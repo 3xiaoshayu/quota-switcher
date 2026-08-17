@@ -9,6 +9,7 @@ const {
   lastGoodSource,
   redactProxyUrl,
   socksFallbackUrl,
+  syncProxyEnv,
 } = require("../engine/proxy-resolve");
 
 test("PAC SOCKS rules use remote DNS", () => {
@@ -110,4 +111,29 @@ test("lastGood remembers the original discovery source", () => {
 test("proxy URLs redact credentials in logs", () => {
   assert.match(redactProxyUrl("http://user:secret@127.0.0.1:10808"), /redacted/);
   assert.doesNotMatch(redactProxyUrl("http://user:secret@127.0.0.1:10808"), /secret/);
+});
+
+test("syncProxyEnv does not grow NO_PROXY on repeated quota refreshes", () => {
+  const saved = {
+    no_proxy: process.env.no_proxy,
+    NO_PROXY: process.env.NO_PROXY,
+    http_proxy: process.env.http_proxy,
+    HTTP_PROXY: process.env.HTTP_PROXY,
+    https_proxy: process.env.https_proxy,
+    HTTPS_PROXY: process.env.HTTPS_PROXY,
+  };
+  try {
+    syncProxyEnv("http://127.0.0.1:10808");
+    const first = process.env.NO_PROXY;
+    assert.match(first, /127\.0\.0\.1/);
+    assert.ok(first.length < 256);
+    for (let i = 0; i < 80; i += 1) syncProxyEnv("http://127.0.0.1:10808");
+    assert.equal(process.env.NO_PROXY, first);
+    assert.equal(process.env.no_proxy, first);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });

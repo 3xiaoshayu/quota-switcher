@@ -7,6 +7,11 @@ release is published.
 
 ## Unreleased
 
+## [0.1.0-beta.29] - 2026-08-17
+
+- Stop quota refresh from appending NO_PROXY to itself on every call,
+  which grew until Invalid string length froze the main window.
+
 ## [0.1.0-beta.28] - 2026-08-17
 
 - Keep quota HTTP on Node only, and do not retune the UI session proxy
