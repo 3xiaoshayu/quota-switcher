@@ -7,6 +7,8 @@ release is published.
 
 ## Unreleased
 
+## [0.1.0-beta.32] - 2026-08-18
+
 - Write Cursor and Antigravity logins as in-place SQLite updates, so a large
   `state.vscdb` no longer blocks switching.
 - After closing the official app, wait until the login database accepts a
