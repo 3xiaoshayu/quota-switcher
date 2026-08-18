@@ -7,6 +7,20 @@ release is published.
 
 ## Unreleased
 
+## [0.1.0-beta.30] - 2026-08-18
+
+- Add Antigravity IDE: import the local login, Google browser sign-in,
+  switch, plan/model remaining, and the float lens. Different mailboxes
+  stay two cards. Failed quota reads stay 这次没查清, not Codex 已封号.
+- Fold accounts by email, and keep the previous quota_error when a
+  refresh returns no new usage windows.
+- Open a dark window first (#131315), copy official state.vscdb off the
+  main thread, sync list and current once per short TTL, and defer proxy
+  probe plus Codex decrypt until the first screen is clickable so the
+  title bar does not freeze as 未响应 or flash white.
+- Document Antigravity in the README, architecture, privacy, and
+  troubleshooting pages.
+
 ## [0.1.0-beta.29] - 2026-08-17
 
 - Stop quota refresh from appending NO_PROXY to itself on every call,
