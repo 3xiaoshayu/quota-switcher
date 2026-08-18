@@ -7,6 +7,15 @@ release is published.
 
 ## Unreleased
 
+## [0.1.0-beta.31] - 2026-08-18
+
+- Let the Windows taskbar minimize and restore the main window and the
+  desktop quota float, without grouping them as one button.
+- Keep the float as rounded glass, not a black rectangle, with pin and
+  close only.
+- Open the main window at 1440x900, centered, after a full quit. Resize
+  still works until quit; close still hides to the tray.
+
 ## [0.1.0-beta.30] - 2026-08-18
 
 - Add Antigravity IDE: import the local login, Google browser sign-in,
