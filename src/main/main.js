@@ -7,12 +7,13 @@ const { createAppTray } = require("./tray");
 const { resolveAppIcon } = require("./app-icon");
 const { createFloatWindowController } = require("./float-window");
 const { writeJsonAtomic } = require(path.resolve(__dirname, "..", "..", "engine", "atomic-file"));
-const { applyAppProxy } = require(path.resolve(__dirname, "..", "..", "engine", "proxy-resolve"));
+const { applyAppProxy, applyStartupProxyHint } = require(path.resolve(__dirname, "..", "..", "engine", "proxy-resolve"));
 
 let mainWindow = null;
 let appTray = null;
 let floatWindow = null;
 let isQuitting = false;
+let startupHousekeepingStarted = false;
 const trustedSenderIds = new Set();
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -91,6 +92,22 @@ function quitApplication() {
     app.quit();
 }
 
+function startStartupHousekeeping() {
+    if (startupHousekeepingStarted) return;
+    startupHousekeepingStarted = true;
+    const eng = require("../../engine");
+    setImmediate(() => {
+        try { eng.listAccts(); } catch (error) {
+            console.error("Startup account scan failed:", error);
+        }
+    });
+    setTimeout(() => {
+        applyAppProxy().catch((error) => {
+            console.error("Background proxy probe failed:", error);
+        });
+    }, 2000);
+}
+
 function startApplication() {
     const eng = require("../../engine");
     if (!safeStorage.isEncryptionAvailable()) {
@@ -110,14 +127,24 @@ function startApplication() {
     if (typeof eng.setCursorOpenUrlHandler === "function") {
       eng.setCursorOpenUrlHandler((url) => shell.openExternal(url));
     }
+    if (typeof eng.setAntigravityOpenUrlHandler === "function") {
+      eng.setAntigravityOpenUrlHandler((url) => shell.openExternal(url));
+    }
     eng.initLogger();
     const restoredCodexOAuth = eng.restorePendingOAuth();
     if (restoredCodexOAuth) {
       if (typeof eng.discardPendingCursorOAuth === "function") {
         eng.discardPendingCursorOAuth("authorization is already in progress");
       }
-    } else if (typeof eng.restorePendingCursorOAuth === "function") {
-      eng.restorePendingCursorOAuth();
+      if (typeof eng.discardPendingAntigravityOAuth === "function") {
+        eng.discardPendingAntigravityOAuth("authorization is already in progress");
+      }
+    } else if (typeof eng.restorePendingCursorOAuth === "function" && eng.restorePendingCursorOAuth()) {
+      if (typeof eng.discardPendingAntigravityOAuth === "function") {
+        eng.discardPendingAntigravityOAuth("authorization is already in progress");
+      }
+    } else if (typeof eng.restorePendingAntigravityOAuth === "function") {
+      eng.restorePendingAntigravityOAuth();
     }
 
     const updateService = createUpdateService({ app, BrowserWindow });
@@ -133,7 +160,7 @@ function startApplication() {
         frame: false,
         autoHideMenuBar: true,
         title: "Codex Account Manager",
-        backgroundColor: "#0f172a",
+        backgroundColor: "#131315",
         show: false,
         icon: appIcon,
         webPreferences: {
@@ -178,6 +205,7 @@ function startApplication() {
         trustedSenderIds,
         floatWindow,
         showMainWindow: focusMainWindow,
+        onUiReady: startStartupHousekeeping,
     });
     trustWebContents(win.webContents);
 
@@ -200,13 +228,7 @@ function startApplication() {
     win.once("ready-to-show", () => {
         win.show();
         updateService.startAutoCheck();
-        // Startup housekeeping (legacy migration, index sync) reads and
-        // decrypts every account file; run it after the window is visible.
-        setImmediate(() => {
-            try { eng.listAccts(); } catch (error) {
-                console.error("Startup account scan failed:", error);
-            }
-        });
+        setTimeout(startStartupHousekeeping, 5000);
     });
     win.loadFile(path.join(__dirname, "..", "renderer-dist", "index.html"))
         .catch((error) => console.error("Failed to load renderer:", error));
@@ -251,7 +273,7 @@ if (!hasSingleInstanceLock) {
     });
     app.whenReady().then(async () => {
         try {
-            await applyAppProxy();
+            await applyStartupProxyHint();
             startApplication();
         } catch (error) {
             reportStartupFailure(error);

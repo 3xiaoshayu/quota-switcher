@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type SetStateAction } from 'r
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   INITIAL_ACCOUNTS,
+  INITIAL_ANTIGRAVITY_ACCOUNTS,
   INITIAL_CURSOR_ACCOUNTS,
   INITIAL_DAEMON_STATE, 
   INITIAL_LOGS, 
@@ -12,6 +13,7 @@ import {
   DesktopAppInfo,
   DesktopAutoSwitchConfig,
   DesktopAuthState,
+  DesktopAntigravityStatus,
   DesktopCodexStatus,
   DesktopCursorStatus,
   DesktopOAuthStatus,
@@ -28,10 +30,11 @@ import {
   formatLogTime,
   hasDesktopBridge,
   canJoinAutoSwitch,
+  accountHasVisibleQuota,
   canRefreshQuota,
   needsHandling,
   needsQuotaAutoSync,
-  isCursorAccount,
+  isManagedProductAccount,
   pickStartupFloatProduct,
   pruneAutoSwitchAccountIds,
   quotaAutoSyncStaleMs,
@@ -40,7 +43,19 @@ import {
   formatTokenCheckMessage,
   QUOTA_AUTO_SYNC_MIN_GAP_MS,
 } from './api/desktop';
-import { logTypeLabel, toCursorUserMessage, toUserMessage } from './api/user-messages';
+import { logTypeLabel, toUserMessage } from './api/user-messages';
+import {
+  accountsFromSnapshot,
+  isManagedProduct,
+  importAccountCopy,
+  oauthFinishedCopy,
+  officialClientLabel,
+  productActions,
+  productLabel,
+  productOfAccount,
+  syncFailedCopy,
+  toProductUserMessage,
+} from './api/product-adapter';
 import { productById, readStoredProduct } from './data/products';
 import Login from './components/Login';
 import Sidebar from './components/Sidebar';
@@ -67,6 +82,7 @@ import {
 } from 'lucide-react';
 
 const desktopBridgeAvailable = hasDesktopBridge();
+const actions = productActions();
 
 const DEFAULT_CONFIG: DesktopAutoSwitchConfig = {
   enabled: false,
@@ -108,6 +124,7 @@ function settingsFromDesktopState(
   codexStatus: DesktopCodexStatus | null,
   updateStatus: DesktopUpdateStatus | null,
   cursorStatus: DesktopCursorStatus | null = null,
+  antigravityStatus: DesktopAntigravityStatus | null = null,
 ): SystemSettings {
   return {
     globalSwitch: !!config.enabled,
@@ -116,6 +133,8 @@ function settingsFromDesktopState(
     clientDetected: !!codexStatus?.installed,
     cursorDetected: !!cursorStatus?.installed,
     cursorHasLocalLogin: !!cursorStatus?.vscdbPresent,
+    antigravityDetected: !!antigravityStatus?.installed,
+    antigravityHasLocalLogin: !!antigravityStatus?.vscdbPresent,
     updateChannel: updateChannelForUi(updateStatus),
     version: appInfo?.version || INITIAL_SETTINGS.version,
     latestStatus: latestStatusForUi(updateStatus),
@@ -150,11 +169,12 @@ function DashboardApp() {
   const [accountsFilterTab, setAccountsFilterTab] = useState<'all' | 'current' | 'warning'>('all');
   const didPickLandingTab = useRef(false);
   const didAutoShowFloat = useRef(false);
-  const didCursorOpenSync = useRef(false);
+  const didOpenQuotaSync = useRef(false);
   const [product, setProduct] = useState<ProductKind>(() => readStoredProduct());
   const [codexAccounts, setCodexAccounts] = useState<AccountQuota[]>(desktopBridgeAvailable ? [] : INITIAL_ACCOUNTS);
   const [cursorAccounts, setCursorAccounts] = useState<AccountQuota[]>(desktopBridgeAvailable ? [] : INITIAL_CURSOR_ACCOUNTS);
-  const accounts = product === 'cursor' ? cursorAccounts : codexAccounts;
+  const [antigravityAccounts, setAntigravityAccounts] = useState<AccountQuota[]>(desktopBridgeAvailable ? [] : INITIAL_ANTIGRAVITY_ACCOUNTS);
+  const accounts = accountsFromSnapshot(product, { accounts: codexAccounts, cursorAccounts, antigravityAccounts });
   const [daemonState, setDaemonState] = useState<DaemonState>(
     desktopBridgeAvailable ? { status: 'Stopped', syncInterval: 1, lastChecked: '' } : INITIAL_DAEMON_STATE,
   );
@@ -164,10 +184,12 @@ function DashboardApp() {
   const [appInfo, setAppInfo] = useState<DesktopAppInfo | null>(null);
   const [codexStatus, setCodexStatus] = useState<DesktopCodexStatus | null>(null);
   const [cursorStatus, setCursorStatus] = useState<DesktopCursorStatus | null>(null);
+  const [antigravityStatus, setAntigravityStatus] = useState<DesktopAntigravityStatus | null>(null);
   const [updateStatus, setUpdateStatus] = useState<DesktopUpdateStatus | null>(null);
   const [authState, setAuthState] = useState<DesktopAuthState>(EMPTY_AUTH_STATE);
   const [oauthStatus, setOAuthStatus] = useState<DesktopOAuthStatus | null>(null);
   const [cursorOAuthStatus, setCursorOAuthStatus] = useState<DesktopOAuthStatus | null>(null);
+  const [antigravityOAuthStatus, setAntigravityOAuthStatus] = useState<DesktopOAuthStatus | null>(null);
   const [isResolvingAuth, setIsResolvingAuth] = useState(false);
   const [dashboardLoadState, setDashboardLoadState] = useState<'loading' | 'ready' | 'error'>(
     desktopBridgeAvailable ? 'loading' : 'ready',
@@ -179,8 +201,10 @@ function DashboardApp() {
   const accountsRef = useRef<AccountQuota[]>(accounts);
   const codexAccountsRef = useRef<AccountQuota[]>(codexAccounts);
   const cursorAccountsRef = useRef<AccountQuota[]>(cursorAccounts);
+  const antigravityAccountsRef = useRef<AccountQuota[]>(antigravityAccounts);
   const productRef = useRef(product);
   const cursorOAuthStatusRef = useRef<DesktopOAuthStatus | null>(cursorOAuthStatus);
+  const antigravityOAuthStatusRef = useRef<DesktopOAuthStatus | null>(antigravityOAuthStatus);
   const accountOperationIds = useRef<Set<string>>(new Set());
   const autoSwitchConfigRef = useRef<DesktopAutoSwitchConfig>(autoSwitchConfig);
   const authStateRef = useRef<DesktopAuthState>(authState);
@@ -206,8 +230,16 @@ function DashboardApp() {
   }, [cursorAccounts]);
 
   useEffect(() => {
+    antigravityAccountsRef.current = antigravityAccounts;
+  }, [antigravityAccounts]);
+
+  useEffect(() => {
     cursorOAuthStatusRef.current = cursorOAuthStatus;
   }, [cursorOAuthStatus]);
+
+  useEffect(() => {
+    antigravityOAuthStatusRef.current = antigravityOAuthStatus;
+  }, [antigravityOAuthStatus]);
 
   useEffect(() => {
     autoSwitchConfigRef.current = autoSwitchConfig;
@@ -247,7 +279,7 @@ function DashboardApp() {
   const addToast = useCallback((msg: string, type: 'success' | 'info' | 'warning' | 'error' = 'info', source: ProductKind | 'auto' = 'auto') => {
     const id = `toast_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
     const kind = source === 'auto' ? productRef.current : source;
-    const text = kind === 'cursor' ? toCursorUserMessage(msg) : toUserMessage(msg);
+    const text = toProductUserMessage(kind, msg);
     setToasts(prev => [...prev, { id, msg: text, type }]);
     const timer = setTimeout(() => {
       toastTimers.current.delete(id);
@@ -262,7 +294,7 @@ function DashboardApp() {
     const newLog: LogEntry = {
       id: `l_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
       timestamp,
-      message: kind === 'cursor' ? toCursorUserMessage(message) : toUserMessage(message),
+      message: toProductUserMessage(kind, message),
       type,
     };
     // Cap the in-memory feed so long sessions cannot grow it without bound.
@@ -294,6 +326,7 @@ function DashboardApp() {
   const dashboardLoadSeqRef = useRef(0);
   const wasOAuthPendingRef = useRef(false);
   const wasCursorOAuthPendingRef = useRef(false);
+  const wasAntigravityOAuthPendingRef = useRef(false);
   const oauthStatusRef = useRef<DesktopOAuthStatus | null>(oauthStatus);
   const oauthReportKeyRef = useRef<string | null>(null);
 
@@ -315,7 +348,9 @@ function DashboardApp() {
 
   const setVisibleAccounts = useCallback((updater: SetStateAction<AccountQuota[]>) => {
     const apply = (prev: AccountQuota[]) => typeof updater === 'function' ? updater(prev) : updater;
-    if (productById(productRef.current).id === 'cursor') setCursorAccounts(apply);
+    const current = productById(productRef.current).id;
+    if (current === 'antigravity') setAntigravityAccounts(apply);
+    else if (current === 'cursor') setCursorAccounts(apply);
     else setCodexAccounts(apply);
   }, []);
 
@@ -342,9 +377,32 @@ function DashboardApp() {
     wasCursorOAuthPendingRef.current = pending;
   }, [persistProduct]);
 
+  const applyAntigravityState = useCallback((snapshot: Awaited<ReturnType<typeof desktopApi.loadAntigravityState>>) => {
+    setAntigravityAccounts(snapshot.accounts);
+    const incomingOAuth = snapshot.oauthStatus;
+    const localOAuth = antigravityOAuthStatusRef.current;
+    const nextOAuth = localOAuth?.pending && !incomingOAuth.pending && incomingOAuth.status === 'idle'
+      ? localOAuth
+      : incomingOAuth;
+    setAntigravityOAuthStatus(nextOAuth);
+    antigravityOAuthStatusRef.current = nextOAuth;
+    setAntigravityStatus(snapshot.antigravityStatus);
+    setSettings((prev) => ({
+      ...prev,
+      antigravityDetected: !!snapshot.antigravityStatus?.installed,
+      antigravityHasLocalLogin: !!snapshot.antigravityStatus?.vscdbPresent,
+    }));
+    const pending = !!nextOAuth.pending;
+    if (pending && !wasAntigravityOAuthPendingRef.current && productRef.current === 'antigravity') {
+      persistProduct('antigravity');
+      setActiveTab('accounts');
+    }
+    wasAntigravityOAuthPendingRef.current = pending;
+  }, [persistProduct]);
+
   const applyDashboardState = useCallback((snapshot: Awaited<ReturnType<typeof desktopApi.loadDashboardState>>) => {
     setCodexAccounts(snapshot.accounts);
-    accountsRef.current = productRef.current === 'cursor' ? accountsRef.current : snapshot.accounts;
+    accountsRef.current = isManagedProduct(productRef.current) ? accountsRef.current : snapshot.accounts;
     const prunedSelected = snapshot.config.account_scope_mode === 'selected'
       ? pruneAutoSwitchAccountIds(snapshot.config.selected_account_ids || [], snapshot.accounts)
       : snapshot.accounts.filter(canJoinAutoSwitch).map((account) => account.id);
@@ -389,6 +447,8 @@ function DashboardApp() {
       ...settingsFromDesktopState(nextConfig, snapshot.appInfo, snapshot.codexStatus, snapshot.updateStatus),
       cursorDetected: prev.cursorDetected,
       cursorHasLocalLogin: prev.cursorHasLocalLogin,
+      antigravityDetected: prev.antigravityDetected,
+      antigravityHasLocalLogin: prev.antigravityHasLocalLogin,
     }));
     setDaemonState({
       status: snapshot.daemonRunning ? 'Running' : 'Stopped',
@@ -406,7 +466,7 @@ function DashboardApp() {
     }
   }, [persistProduct]);
 
-  const loadDashboardState = useCallback(async (showLoading = false) => {
+  const loadDashboardState = useCallback(async (showLoading = false, options?: { skipOfficialSync?: boolean }) => {
     if (!desktopBridgeAvailable) return null;
     const seq = ++dashboardLoadSeqRef.current;
     if (showLoading && !hasLoadedDashboard.current) {
@@ -414,24 +474,30 @@ function DashboardApp() {
       setDashboardLoadError(null);
     }
     try {
-      const [snapshot, cursorSnapshot] = await Promise.all([
+      const [snapshot, cursorSnapshot, antigravitySnapshot] = await Promise.all([
         desktopApi.loadDashboardState(),
-        desktopApi.loadCursorState().catch(() => null),
+        desktopApi.loadCursorState({ skipOfficialSync: options?.skipOfficialSync }).catch(() => null),
+        desktopApi.loadAntigravityState({ skipOfficialSync: options?.skipOfficialSync }).catch(() => null),
       ]);
       if (seq !== dashboardLoadSeqRef.current) return null;
       applyDashboardState(snapshot);
       if (cursorSnapshot) applyCursorState(cursorSnapshot);
+      if (antigravitySnapshot) applyAntigravityState(antigravitySnapshot);
       hasLoadedDashboard.current = true;
-      const landingProduct = cursorSnapshot?.oauthStatus?.pending
-        ? 'cursor'
-        : snapshot.oauthStatus.pending
-          ? 'codex'
-          : productRef.current;
+      const landingProduct = antigravitySnapshot?.oauthStatus?.pending
+        ? 'antigravity'
+        : cursorSnapshot?.oauthStatus?.pending
+          ? 'cursor'
+          : snapshot.oauthStatus.pending
+            ? 'codex'
+            : productRef.current;
       if (!didPickLandingTab.current) {
         didPickLandingTab.current = true;
-        const landingAccounts = landingProduct === 'cursor'
-          ? (cursorSnapshot?.accounts || [])
-          : snapshot.accounts;
+        const landingAccounts = accountsFromSnapshot(landingProduct, {
+          accounts: snapshot.accounts,
+          cursorAccounts: cursorSnapshot?.accounts || [],
+          antigravityAccounts: antigravitySnapshot?.accounts || [],
+        });
         if (landingAccounts.some(needsHandling)) {
           setActiveTab('accounts');
         }
@@ -442,6 +508,7 @@ function DashboardApp() {
           landingProduct,
           snapshot.accounts,
           cursorSnapshot?.accounts || [],
+          antigravitySnapshot?.accounts || [],
         );
         if (chosen) {
           void desktopApi.showFloatWindow(chosen).catch(() => {});
@@ -449,7 +516,11 @@ function DashboardApp() {
       }
       setDashboardLoadState('ready');
       setDashboardLoadError(null);
-      return { ...snapshot, cursorAccounts: cursorSnapshot?.accounts || [] };
+      return {
+        ...snapshot,
+        cursorAccounts: cursorSnapshot?.accounts || [],
+        antigravityAccounts: antigravitySnapshot?.accounts || [],
+      };
     } catch (error) {
       if (seq !== dashboardLoadSeqRef.current) return null;
       const message = toUserMessage(error instanceof Error ? error.message : String(error));
@@ -461,7 +532,7 @@ function DashboardApp() {
       }
       return null;
     }
-  }, [addLogEntry, addToast, applyCursorState, applyDashboardState]);
+  }, [addLogEntry, addToast, applyAntigravityState, applyCursorState, applyDashboardState]);
 
   const queueQuotaAutoSync = useCallback((candidateAccounts: AccountQuota[]) => {
     if (!desktopBridgeAvailable || quotaAutoSyncPromise.current) return;
@@ -469,7 +540,7 @@ function DashboardApp() {
     const authBlocked = authStateRef.current.requiresResolution;
     const staleAccounts = candidateAccounts.filter((account) => {
       if (accountOperationIds.current.has(account.id)) return false;
-      if (authBlocked && !isCursorAccount(account)) return false;
+      if (authBlocked && !isManagedProductAccount(account)) return false;
       return needsQuotaAutoSync(
         account,
         quotaAutoSyncStaleMs(account, autoSwitchConfigRef.current.sync_interval_minutes),
@@ -480,9 +551,9 @@ function DashboardApp() {
     lastQuotaAutoSyncAt.current = Date.now();
     quotaAutoSyncPromise.current = (async () => {
       for (const account of staleAccounts) {
-        const kind = isCursorAccount(account) ? 'cursor' : 'codex';
+        const kind = productOfAccount(account);
         try {
-          if (kind === 'cursor') await desktopApi.refreshCursorQuota(account.id, false);
+          if (isManagedProduct(kind)) await actions.refreshQuota(kind, account.id, false);
           else await desktopApi.refreshQuota(account.id, false);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -565,25 +636,31 @@ function DashboardApp() {
     if (!isAuthenticated || !desktopBridgeAvailable) return;
     let disposed = false;
 
-    loadDashboardState(true).then(async (snapshot) => {
+    loadDashboardState(true, { skipOfficialSync: true }).then(async (snapshot) => {
       if (disposed || !snapshot) return;
-      if (!didCursorOpenSync.current) {
-        didCursorOpenSync.current = true;
-        const cursorAccounts = snapshot.cursorAccounts || [];
-        if (cursorAccounts.some((account) => canRefreshQuota(account))) {
+      void desktopApi.notifyUiReady().catch(() => {});
+      if (!disposed) void loadDashboardState(false);
+      if (!didOpenQuotaSync.current) {
+        didOpenQuotaSync.current = true;
+        let refreshedAny = false;
+        for (const kind of (['codex', 'cursor', 'antigravity'] as ProductKind[])) {
+          const list = accountsFromSnapshot(kind, snapshot);
+          if (!list.some((account) => canRefreshQuota(account))) continue;
           try {
-            await desktopApi.refreshAllCursorQuotas();
+            await actions.refreshAllQuotas(kind);
+            refreshedAny = true;
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            addLogEntry(message, 'info', 'cursor');
+            addLogEntry(message, 'info', kind);
           }
-          if (!disposed) await loadDashboardState(false);
         }
+        if (!disposed && refreshedAny) await loadDashboardState(false);
       }
       if (!disposed) {
         queueQuotaAutoSync([
           ...snapshot.accounts,
           ...(snapshot.cursorAccounts || []),
+          ...(snapshot.antigravityAccounts || []),
         ]);
       }
     });
@@ -596,6 +673,7 @@ function DashboardApp() {
         queueQuotaAutoSync([
           ...codexAccountsRef.current,
           ...cursorAccountsRef.current,
+          ...antigravityAccountsRef.current,
         ]);
       }
     }, QUOTA_AUTO_SYNC_MIN_GAP_MS);
@@ -647,6 +725,7 @@ function DashboardApp() {
       result?.accountId || '',
       result?.email || '',
       result?.mismatch ? '1' : '0',
+      result?.updated ? '1' : '0',
       status.targetAccountId || '',
       status.message || '',
     ].join('|');
@@ -666,24 +745,38 @@ function DashboardApp() {
     }
     if (status.status !== 'completed') return;
     if (result?.mismatch) {
-      const message = result.email
-        ? `浏览器登录的不是这个账号，已另存为 ${result.email}。原来的账号仍需重新授权。`
-        : '浏览器登录的不是这个账号，已另存为新账号。原来的账号仍需重新授权。';
+      const message = oauthFinishedCopy({
+        product: kind,
+        email: result.email,
+        mismatch: true,
+      });
       addToast(message, 'warning', kind);
       addLogEntry(message, 'warning', kind);
       return;
     }
     const isReauth = !!(status.targetAccountId || result?.targetAccountId);
-    const message = result?.email
-      ? (isReauth ? `已重新授权 ${result.email}` : `已添加 ${result.email}`)
-      : (isReauth ? '账号已重新授权' : '账号已添加');
+    const message = oauthFinishedCopy({
+      product: kind,
+      email: result?.email,
+      isReauth,
+      updated: !!result?.updated,
+    });
     addToast(message, 'success', kind);
     addLogEntry(message, 'success', kind);
-  }, [addLogEntry, addToast]);
+    if (kind === 'antigravity' && result?.accountId) {
+      void actions.refreshQuota('antigravity', result.accountId)
+        .catch(() => {})
+        .then(() => loadDashboardState(false));
+    }
+  }, [addLogEntry, addToast, loadDashboardState]);
 
-  const anyOAuthPending = () => productRef.current === 'cursor'
-    ? !!cursorOAuthStatusRef.current?.pending
-    : !!oauthStatusRef.current?.pending;
+  const oauthStatusFor = (kind: ProductKind) => {
+    if (kind === 'antigravity') return antigravityOAuthStatusRef.current;
+    if (kind === 'cursor') return cursorOAuthStatusRef.current;
+    return oauthStatusRef.current;
+  };
+
+  const anyOAuthPending = () => !!oauthStatusFor(productRef.current)?.pending;
 
   const markOAuthPending = useCallback((targetAccountId: string | null) => {
     dashboardLoadSeqRef.current += 1;
@@ -697,7 +790,13 @@ function DashboardApp() {
       expiresAt: null,
       callbackPort: 1455,
     };
-    if (productById(productRef.current).id === 'cursor') {
+    const kind = productById(productRef.current).id;
+    if (kind === 'antigravity') {
+      antigravityOAuthStatusRef.current = nextStatus;
+      setAntigravityOAuthStatus(nextStatus);
+      return;
+    }
+    if (kind === 'cursor') {
       cursorOAuthStatusRef.current = nextStatus;
       setCursorOAuthStatus(nextStatus);
       return;
@@ -769,6 +868,36 @@ function DashboardApp() {
     };
   }, [addToast, isAuthenticated, loadDashboardState, cursorOAuthStatus?.pending, reportOAuthFinished]);
 
+  useEffect(() => {
+    if (!isAuthenticated || !desktopBridgeAvailable || !antigravityOAuthStatus?.pending) return;
+    let disposed = false;
+    let failCount = 0;
+    const pollAntigravityOAuthStatus = async () => {
+      try {
+        const status = await desktopApi.getAntigravityOAuthStatus();
+        failCount = 0;
+        if (disposed) return;
+        setAntigravityOAuthStatus(status);
+        if (status.pending) return;
+        await loadDashboardState(false);
+        reportOAuthFinished(status, 'antigravity');
+      } catch {
+        failCount += 1;
+        if (!disposed && (failCount === 5 || failCount % 15 === 0)) {
+          addToast('授权状态读取失败，可点取消后重试。', 'error', 'antigravity');
+        }
+      }
+    };
+    void pollAntigravityOAuthStatus();
+    const timer = window.setInterval(() => {
+      void pollAntigravityOAuthStatus();
+    }, 1000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [addToast, isAuthenticated, loadDashboardState, antigravityOAuthStatus?.pending, reportOAuthFinished]);
+
   // Global Refresh All trigger
   const handleRefreshAll = async () => {
     if (desktopBridgeAvailable) {
@@ -779,9 +908,7 @@ function DashboardApp() {
       addToast('正在刷新全部账号额度...', 'info', kind);
       addLogEntry('开始同步全部账号额度...', 'info', kind);
       try {
-        const results = kind === 'cursor'
-          ? await desktopApi.refreshAllCursorQuotas()
-          : await desktopApi.refreshAllQuotas();
+        const results = await actions.refreshAllQuotas(kind);
         const { refreshed, reauthSkipped, bannedSkipped, failed } = summarizeRefreshAllResults(results);
         const snapshot = await loadDashboardState(false);
         if (snapshot && currentProduct.features.autoSwitch) queueQuotaAutoSync(snapshot.accounts);
@@ -790,12 +917,12 @@ function DashboardApp() {
           const parts = [`已刷新 ${refreshed} 个`];
           if (reauthSkipped) parts.push(`${reauthSkipped} 个需重新授权`);
           if (bannedSkipped && currentProduct.features.autoSwitch) parts.push(`${bannedSkipped} 个已封号`);
-          if (failed) parts.push(kind === 'cursor' ? `${failed} 个这次没查清` : `${failed} 个同步失败`);
+          if (failed) parts.push(isManagedProduct(kind) ? `${failed} 个这次没查清` : `${failed} 个同步失败`);
           addToast(parts.join('，'), 'warning', kind);
           const logParts = [];
           if (reauthSkipped) logParts.push(`需重新授权 ${reauthSkipped} 个`);
           if (bannedSkipped && currentProduct.features.autoSwitch) logParts.push(`封号 ${bannedSkipped} 个`);
-          if (failed) logParts.push(kind === 'cursor' ? `没查清 ${failed} 个` : `失败 ${failed} 个`);
+          if (failed) logParts.push(isManagedProduct(kind) ? `没查清 ${failed} 个` : `失败 ${failed} 个`);
           addLogEntry(`额度刷新完成：${logParts.join('，')}。`, 'warning', kind);
         } else if (reauthSkipped) {
           addToast(`已刷新 ${refreshed} 个；${reauthSkipped} 个需重新授权`, 'info', kind);
@@ -850,18 +977,14 @@ function DashboardApp() {
       const account = accountsRef.current.find(item => item.id === id);
       let refreshError: unknown = null;
       try {
-        await runAccountOperation(id, () => (
-          kind === 'cursor' ? desktopApi.refreshCursorQuota(id) : desktopApi.refreshQuota(id)
-        ));
+        await runAccountOperation(id, () => actions.refreshQuota(kind, id));
       } catch (error) {
         refreshError = error;
       }
       const snapshot = await loadDashboardState(false);
-      if (snapshot && kind !== 'cursor') queueQuotaAutoSync(snapshot.accounts);
+      if (snapshot && !isManagedProduct(kind)) queueQuotaAutoSync(snapshot.accounts);
       if (productRef.current !== kind) return;
-      const fresh = kind === 'cursor'
-        ? snapshot?.cursorAccounts?.find(item => item.id === id)
-        : snapshot?.accounts.find(item => item.id === id);
+      const fresh = accountsFromSnapshot(kind, snapshot).find(item => item.id === id);
       const label = account?.email || id;
       if (!refreshError) {
         if (fresh?.status === 'SUSPENDED') {
@@ -871,12 +994,12 @@ function DashboardApp() {
           return;
         }
         if (fresh?.status === 'SYNC_FAILED') {
-          const detail = fresh.warning || (kind === 'cursor' ? '这次没查清额度，请稍后重试。' : '额度同步失败，请稍后重试。');
+          const detail = fresh.warning || (syncFailedCopy(kind));
           addToast(detail, 'warning', kind);
           addLogEntry(`${label}：${detail}`, 'warning', kind);
           return;
         }
-        if (fresh?.status === 'BANNED' && kind !== 'cursor') {
+        if (fresh?.status === 'BANNED' && !isManagedProduct(kind)) {
           const detail = fresh.warning || '账号已封号，无法继续使用。';
           addToast(detail, 'error', kind);
           addLogEntry(`${label}：${detail}`, 'error', kind);
@@ -892,11 +1015,17 @@ function DashboardApp() {
           addToast('额度已请求，列表还在更新，请稍候。', 'info', kind);
           return;
         }
+        if (!accountHasVisibleQuota(fresh)) {
+          const detail = fresh.warning || syncFailedCopy(kind);
+          addToast(detail, 'warning', kind);
+          addLogEntry(`${label}：${detail}`, 'warning', kind);
+          return;
+        }
         addToast(`${label} 额度已刷新`, 'success', kind);
         addLogEntry(`账号额度已刷新：${label}`, 'success', kind);
         return;
       }
-      if (fresh?.status === 'BANNED' && kind !== 'cursor') {
+      if (fresh?.status === 'BANNED' && !isManagedProduct(kind)) {
         const detail = fresh.warning || '账号已封号，无法继续使用。';
         addToast(detail, 'error', kind);
         addLogEntry(`${label}：${detail}`, 'error', kind);
@@ -915,7 +1044,7 @@ function DashboardApp() {
         return;
       }
       if (fresh?.status === 'SYNC_FAILED') {
-        const detail = fresh.warning || (kind === 'cursor' ? '这次没查清额度，请稍后重试。' : '额度同步失败，请稍后重试。');
+        const detail = fresh.warning || (syncFailedCopy(kind));
         addToast(detail, 'warning', kind);
         addLogEntry(`${label}：${detail}`, 'warning', kind);
         return;
@@ -944,20 +1073,18 @@ function DashboardApp() {
     const account = accountsRef.current.find(item => item.id === id);
     try {
       const result = await runAccountOperation(id, () => (
-        kind === 'cursor' ? desktopApi.refreshCursorToken(id) : desktopApi.refreshToken(id)
+        actions.refreshToken(kind, id)
       ));
       const snapshot = await loadDashboardState(false);
       if (productRef.current !== kind) return;
-      const fresh = kind === 'cursor'
-        ? snapshot?.cursorAccounts?.find(item => item.id === id)
-        : snapshot?.accounts.find(item => item.id === id);
+      const fresh = accountsFromSnapshot(kind, snapshot).find(item => item.id === id);
       if (fresh?.status === 'SUSPENDED' || result.reauthRequired) {
         const detail = `${account?.email || id} 仍需重新授权后才能继续使用`;
         addToast(detail, 'warning', kind);
         addLogEntry(detail, 'warning', kind);
         return;
       }
-      if (fresh?.status === 'BANNED' && kind !== 'cursor') {
+      if (fresh?.status === 'BANNED' && !isManagedProduct(kind)) {
         const detail = fresh.warning || '账号已封号，无法继续使用。';
         addToast(detail, 'error', kind);
         addLogEntry(`${account?.email || id}：${detail}`, 'error', kind);
@@ -972,16 +1099,14 @@ function DashboardApp() {
     } catch (error) {
       const snapshot = await loadDashboardState(false);
       if (productRef.current !== kind) return;
-      const fresh = kind === 'cursor'
-        ? snapshot?.cursorAccounts?.find(item => item.id === id)
-        : snapshot?.accounts.find(item => item.id === id);
+      const fresh = accountsFromSnapshot(kind, snapshot).find(item => item.id === id);
       if (fresh?.status === 'SUSPENDED') {
         const detail = `${account?.email || id} 仍需重新授权后才能继续使用`;
         addToast(detail, 'warning', kind);
         addLogEntry(detail, 'warning', kind);
         return;
       }
-      if (fresh?.status === 'BANNED' && kind !== 'cursor') {
+      if (fresh?.status === 'BANNED' && !isManagedProduct(kind)) {
         const detail = fresh.warning || '账号已封号，无法继续使用。';
         addToast(detail, 'error', kind);
         addLogEntry(`${account?.email || id}：${detail}`, 'error', kind);
@@ -1062,23 +1187,16 @@ function DashboardApp() {
       addToast('正在打开授权页面，请在浏览器里完成登录。', 'info', kind);
       addLogEntry('正在为新账号打开授权。', 'info', kind);
       try {
-        if (kind === 'cursor') await desktopApi.addCursorAccount();
-        else await desktopApi.addAccount();
+        await actions.addAccount(kind);
         const snapshot = await loadDashboardState(false);
-        if (snapshot && kind !== 'cursor') queueQuotaAutoSync(snapshot.accounts);
+        if (snapshot && !isManagedProduct(kind)) queueQuotaAutoSync(snapshot.accounts);
         if (productRef.current !== kind) return;
-        if (kind === 'cursor') {
-          reportOAuthFinished(await desktopApi.getCursorOAuthStatus(), 'cursor');
-        } else if (snapshot?.oauthStatus) {
-          reportOAuthFinished(snapshot.oauthStatus, 'codex');
-        }
+        reportOAuthFinished(await actions.oauthStatus(kind), kind);
       } catch (error) {
         const snapshot = await loadDashboardState(false);
-        if (snapshot && kind !== 'cursor') queueQuotaAutoSync(snapshot.accounts);
+        if (snapshot && !isManagedProduct(kind)) queueQuotaAutoSync(snapshot.accounts);
         if (productRef.current !== kind) throw error;
-        const finished = kind === 'cursor'
-          ? await desktopApi.getCursorOAuthStatus().catch(() => null)
-          : snapshot?.oauthStatus;
+        const finished = await actions.oauthStatus(kind).catch(() => snapshot?.oauthStatus || null);
         if (finished && !finished.pending) {
           reportOAuthFinished(finished, kind);
         } else {
@@ -1108,14 +1226,12 @@ function DashboardApp() {
     addToast('正在打开授权页面，请在浏览器里完成登录。', 'info', kind);
     addLogEntry('正在打开重新授权。', 'info', kind);
     try {
-      const result = kind === 'cursor'
-        ? await desktopApi.reauthorizeCursorAccount(id)
-        : await desktopApi.reauthorizeAccount(id);
+      const result = await actions.reauthorize(kind, id);
       const snapshot = await loadDashboardState(false);
-      if (snapshot && kind !== 'cursor') queueQuotaAutoSync(snapshot.accounts);
+      if (snapshot && !isManagedProduct(kind)) queueQuotaAutoSync(snapshot.accounts);
       if (productRef.current !== kind) return;
-      if (kind === 'cursor') {
-        reportOAuthFinished(await desktopApi.getCursorOAuthStatus(), 'cursor');
+      if (isManagedProduct(kind)) {
+        reportOAuthFinished(await actions.oauthStatus(kind), kind);
         return;
       }
       if (snapshot?.oauthStatus) {
@@ -1135,10 +1251,10 @@ function DashboardApp() {
       }, 'codex');
     } catch (error) {
       const snapshot = await loadDashboardState(false);
-      if (snapshot && kind !== 'cursor') queueQuotaAutoSync(snapshot.accounts);
+      if (snapshot && !isManagedProduct(kind)) queueQuotaAutoSync(snapshot.accounts);
       if (productRef.current !== kind) throw error;
-      const finished = kind === 'cursor'
-        ? await desktopApi.getCursorOAuthStatus().catch(() => null)
+      const finished = isManagedProduct(kind)
+        ? await actions.oauthStatus(kind).catch(() => null)
         : snapshot?.oauthStatus;
       if (finished && !finished.pending) {
         reportOAuthFinished(finished, kind);
@@ -1152,17 +1268,13 @@ function DashboardApp() {
   };
 
   const handleCancelOAuth = async () => {
-    if (productById(productRef.current).id === 'cursor') {
-      await desktopApi.cancelCursorOAuth();
-      const status = await desktopApi.getCursorOAuthStatus();
-      setCursorOAuthStatus(status);
-      reportOAuthFinished(status, 'cursor');
-      return;
-    }
-    await desktopApi.cancelOAuth();
-    const status = await desktopApi.getOAuthStatus();
-    setOAuthStatus(status);
-    reportOAuthFinished(status, 'codex');
+    const kind = productById(productRef.current).id;
+    await actions.cancelOAuth(kind);
+    const status = await actions.oauthStatus(kind);
+    if (kind === 'antigravity') setAntigravityOAuthStatus(status);
+    else if (kind === 'cursor') setCursorOAuthStatus(status);
+    else setOAuthStatus(status);
+    reportOAuthFinished(status, kind);
   };
 
   const handleCompleteOAuthManually = async (callbackUrl: string) => {
@@ -1213,13 +1325,9 @@ function DashboardApp() {
     setIsDeletingAccount(true);
     const kind = productRef.current;
     try {
-      await runAccountOperation(deleteTarget.id, () => (
-        kind === 'cursor'
-          ? desktopApi.deleteCursorAccount(deleteTarget.id)
-          : desktopApi.deleteAccount(deleteTarget.id)
-      ));
+      await runAccountOperation(deleteTarget.id, () => actions.deleteAccount(kind, deleteTarget.id));
       const snapshot = await loadDashboardState(false);
-      if (snapshot && kind !== 'cursor') queueQuotaAutoSync(snapshot.accounts);
+      if (snapshot && !isManagedProduct(kind)) queueQuotaAutoSync(snapshot.accounts);
       if (productRef.current !== kind) {
         setDeleteTarget(null);
         return;
@@ -1248,26 +1356,23 @@ function DashboardApp() {
       const selected = accountsRef.current.find(a => a.id === id);
       const isCurrent = !!selected?.isCurrent;
       addToast(
-        kind === 'cursor'
-          ? (isCurrent ? '正在重新写入官方 Cursor，请稍候。' : '正在切换 Cursor 账号，请稍候。')
-          : (isCurrent ? '正在重新写入官方 Codex，请稍候。' : '正在切换账号，请稍候。'),
+        isCurrent
+          ? `正在重新写入官方 ${officialClientLabel(kind)}，请稍候。`
+          : `正在切换 ${productLabel(kind)} 账号，请稍候。`,
         'info',
         kind,
       );
       try {
-        const result = await runAccountOperation(id, () => {
-          if (kind === 'cursor') return desktopApi.switchCursorAccount(id);
-          return isCurrent ? desktopApi.reapplyManagedAccount(id) : desktopApi.switchAccount(id);
-        }) as { launched?: boolean; launchError?: string | null } | undefined;
+        const result = await runAccountOperation(id, () => actions.switchAccount(kind, id, isCurrent)) as { launched?: boolean; launchError?: string | null } | undefined;
         setSessionSwitchCount(count => count + 1);
         const snapshot = await loadDashboardState(false);
-        if (snapshot && kind !== 'cursor') queueQuotaAutoSync(snapshot.accounts);
+        if (snapshot && !isManagedProduct(kind)) queueQuotaAutoSync(snapshot.accounts);
         if (productRef.current !== kind) return;
-        if (kind === 'cursor' && result?.launchError) {
+        if (isManagedProduct(kind) && result?.launchError) {
           addToast(result.launchError, 'warning', kind);
           addLogEntry(`${selected?.email || id}：${result.launchError}`, 'warning', kind);
         } else if (isCurrent) {
-          const clientName = kind === 'cursor' ? 'Cursor' : 'Codex';
+          const clientName = officialClientLabel(kind);
           addToast(`已将 ${clientName} 重新登录为 ${selected?.email || id}`, 'success', kind);
           addLogEntry(`已将 ${clientName} 重新登录为 ${selected?.email || id}`, 'success', kind);
         } else {
@@ -1290,13 +1395,13 @@ function DashboardApp() {
     const selected = accounts.find(a => a.id === id);
     if (selected) {
       addToast(selected.isCurrent
-        ? `已将 ${productRef.current === 'cursor' ? 'Cursor' : 'Codex'} 重新登录为 ${selected.email}`
+        ? `已将 ${officialClientLabel(productRef.current)} 重新登录为 ${selected.email}`
         : `当前主账号已切换至 ${selected.email}`, 'success');
     }
   };
 
   const handleSwitchCurrentAccount = async (id: string) => {
-    if (desktopBridgeAvailable && productRef.current === 'cursor') {
+    if (desktopBridgeAvailable && isManagedProduct(productRef.current)) {
       const pending = accountsRef.current.find(a => a.id === id);
       if (!pending) return;
       setSwitchTarget(pending);
@@ -1381,6 +1486,10 @@ function DashboardApp() {
         installed: prev.cursorDetected,
         vscdbPresent: prev.cursorHasLocalLogin,
       },
+      antigravityStatus || {
+        installed: prev.antigravityDetected,
+        vscdbPresent: prev.antigravityHasLocalLogin,
+      },
     ));
     const saveOperation = configSaveQueue.current
       .catch(() => {})
@@ -1449,10 +1558,15 @@ function DashboardApp() {
   const handleBatchVerifyTokens = async () => {
     if (!desktopBridgeAvailable) return;
     let cursorError: string | null = null;
-    const [codex, cursor] = await Promise.all([
+    let antigravityError: string | null = null;
+    const [codex, cursor, antigravity] = await Promise.all([
       desktopApi.refreshAllTokens(false),
       desktopApi.refreshAllCursorTokens(false).catch((error) => {
         cursorError = error instanceof Error ? error.message : String(error);
+        return { results: [] };
+      }),
+      desktopApi.refreshAllAntigravityTokens(false).catch((error) => {
+        antigravityError = error instanceof Error ? error.message : String(error);
         return { results: [] };
       }),
     ]);
@@ -1461,9 +1575,14 @@ function DashboardApp() {
       addToast(cursorError, 'error', 'cursor');
       addLogEntry(cursorError, 'error', 'cursor');
     }
+    if (antigravityError) {
+      addToast(antigravityError, 'error', 'antigravity');
+      addLogEntry(antigravityError, 'error', 'antigravity');
+    }
     const summaries = [
       { kind: 'codex' as const, label: 'Codex', results: codex?.results || [] },
       { kind: 'cursor' as const, label: 'Cursor', results: cursor?.results || [] },
+      { kind: 'antigravity' as const, label: 'Antigravity', results: antigravity?.results || [] },
     ].filter((item) => item.results.length > 0);
     if (summaries.length === 0) {
       if (!cursorError) addToast('没有可检查的账号', 'info');
@@ -1479,22 +1598,27 @@ function DashboardApp() {
 
   const handleDetectClient = async () => {
     if (!desktopBridgeAvailable) return;
-    const [status, cursor] = await Promise.all([
+    const [status, cursor, antigravity] = await Promise.all([
       desktopApi.getCodexStatus(),
       desktopApi.getCursorStatus().catch(() => null),
+      desktopApi.getAntigravityStatus().catch(() => null),
     ]);
     setCodexStatus(status);
     setCursorStatus(cursor);
+    setAntigravityStatus(antigravity);
     setSettings(prev => ({
       ...prev,
       clientDetected: !!status?.installed,
       cursorDetected: !!cursor?.installed,
       cursorHasLocalLogin: !!cursor?.vscdbPresent,
+      antigravityDetected: !!antigravity?.installed,
+      antigravityHasLocalLogin: !!antigravity?.vscdbPresent,
     }));
     const cursorLabel = cursor?.installed ? '已安装' : cursor?.vscdbPresent ? '有本机登录' : '未安装';
+    const antigravityLabel = antigravity?.installed ? '已安装' : antigravity?.vscdbPresent ? '有本机登录' : '未安装';
     addToast(
-      `Codex ${status?.installed ? '已安装' : '未安装'}，Cursor ${cursorLabel}`,
-      status?.installed || cursor?.installed || cursor?.vscdbPresent ? 'success' : 'warning',
+      `Codex ${status?.installed ? '已安装' : '未安装'}，Cursor ${cursorLabel}，Antigravity ${antigravityLabel}`,
+      status?.installed || cursor?.installed || cursor?.vscdbPresent || antigravity?.installed || antigravity?.vscdbPresent ? 'success' : 'warning',
     );
   };
 
@@ -1505,25 +1629,28 @@ function DashboardApp() {
       addToast('已有授权正在进行，请先完成或取消。', 'warning', kind);
       throw new Error('已有授权正在进行，请先完成或取消。');
     }
-    if (kind === 'cursor') {
-      const result = await desktopApi.importLocalCursorAccount();
+    if (isManagedProduct(kind)) {
+      const result = await actions.importLocal(kind) as { found?: boolean; account?: { id?: string; email?: string } | null; updated?: boolean; stalePossible?: boolean };
+      const label = officialClientLabel(kind);
       if (!result?.found) {
         await loadDashboardState(false);
-        if (productRef.current !== kind) throw new Error('本机没有已登录的 Cursor');
-        addToast('本机没有已登录的 Cursor', 'warning', 'cursor');
-        throw new Error('本机没有已登录的 Cursor');
+        if (productRef.current !== kind) throw new Error(`本机没有已登录的 ${label}`);
+        addToast(`本机没有已登录的 ${label}`, 'warning', kind);
+        throw new Error(`本机没有已登录的 ${label}`);
       }
       if (result.account?.id && productRef.current === kind) {
-        try { await desktopApi.refreshCursorQuota(result.account.id); } catch {}
+        try { await actions.refreshQuota(kind, result.account.id); } catch {}
       }
       await loadDashboardState(false);
       if (productRef.current !== kind) return;
-      if (result.stalePossible) {
-        addToast('已导入。Cursor 开着时导入的可能不是最新登录。', 'warning', 'cursor');
-      } else {
-        addToast(`已导入 ${result.account?.email || 'Cursor 账号'}`, 'success', 'cursor');
-      }
-      addLogEntry(`已从本机导入 Cursor 账号 ${result.account?.email || ''}`, 'success', 'cursor');
+      const imported = importAccountCopy({
+        product: kind,
+        email: result.account?.email,
+        updated: !!result.updated,
+        stalePossible: !!result.stalePossible,
+      });
+      addToast(imported.message, imported.tone, kind);
+      addLogEntry(imported.message, imported.tone, kind);
       return;
     }
     const account = await desktopApi.adoptOfficialAccount();
@@ -1532,8 +1659,13 @@ function DashboardApp() {
     }
     await loadDashboardState(false);
     if (productRef.current !== kind) return;
-    addToast(`已导入 ${account?.email || 'Codex 账号'}`, 'success', 'codex');
-    addLogEntry(`已从本机导入 Codex 账号 ${account?.email || ''}`, 'success', 'codex');
+    const imported = importAccountCopy({
+      product: 'codex',
+      email: account?.email,
+      updated: !!account?.updated,
+    });
+    addToast(imported.message, imported.tone, 'codex');
+    addLogEntry(imported.message, 'success', 'codex');
   };
 
   const handleCheckUpdates = async () => {
@@ -1822,8 +1954,8 @@ function DashboardApp() {
                   onImportLocal={desktopBridgeAvailable && productById(product).features.localImport ? handleImportLocalAccount : undefined}
                   onAddLog={addLogEntry}
                   oauthMode={desktopBridgeAvailable}
-                  oauthStatus={productById(product).id === 'cursor' ? cursorOAuthStatus : oauthStatus}
-                  actionsLocked={productById(product).id === 'cursor' ? !!cursorOAuthStatus?.pending : !!oauthStatus?.pending}
+                  oauthStatus={product === 'antigravity' ? antigravityOAuthStatus : product === 'cursor' ? cursorOAuthStatus : oauthStatus}
+                  actionsLocked={!!(product === 'antigravity' ? antigravityOAuthStatus?.pending : product === 'cursor' ? cursorOAuthStatus?.pending : oauthStatus?.pending)}
                   authState={desktopBridgeAvailable && productById(product).features.autoSwitch ? authState : null}
                   onOpenModal={() => setShowNotifications(false)}
                 />
@@ -1844,7 +1976,7 @@ function DashboardApp() {
                   onInstallUpdate={desktopBridgeAvailable ? handleInstallUpdate : undefined}
                   canInstallUpdate={updateStatus?.status === 'downloaded'}
                   updateEnabled={!!appInfo?.updateEnabled}
-                  tokenAccountsByProduct={{ codex: codexAccounts, cursor: cursorAccounts }}
+                  tokenAccountsByProduct={{ codex: codexAccounts, cursor: cursorAccounts, antigravity: antigravityAccounts }}
                   repositoryUrl={appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}
                   onOpenLogs={desktopBridgeAvailable ? async () => { await desktopApi.openLogs(); } : undefined}
                   onShowFloatWindow={async () => {
@@ -1947,9 +2079,9 @@ function DashboardApp() {
             aria-modal="true"
           >
             <ArrowLeftRight className="mb-4 h-9 w-9 text-accent" />
-            <h3 className="text-lg font-bold text-white">写入官方 Cursor</h3>
+            <h3 className="text-lg font-bold text-white">写入官方 {officialClientLabel(product)}</h3>
             <p className="mt-2 text-xs leading-relaxed text-label-2">
-              会先关掉正在运行的官方 Cursor，再把 <strong className="text-white">{switchTarget.email}</strong> 写进去并重新打开。未保存的编辑可能会丢。
+              会先关掉正在运行的官方 {officialClientLabel(product)}，再把 <strong className="text-white">{switchTarget.email}</strong> 写进去并重新打开。未保存的编辑可能会丢。
             </p>
             <div className="mt-6 grid grid-cols-2 gap-3">
               <button

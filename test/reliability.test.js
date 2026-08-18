@@ -866,7 +866,9 @@ test("auth state detects drift, migrates legacy projections, and adopts official
   assert.equal(conflictWarnings().length, 1);
 
   const adopted = await engine.adoptOfficialAuth();
-  assert.equal(adopted.id, second.id);
+  assert.equal(adopted.account.id, second.id);
+  assert.equal(adopted.updated, true);
+  assert.equal(engine.loadAcct(second.id).updated, undefined);
   assert.equal(engine.loadIdx().current_account_id, second.id);
   assert.equal(engine.inspectAuthState().status, "aligned");
 
@@ -2664,4 +2666,134 @@ test("a mismatched reauthorization still merges into an existing same-identity r
   assert.equal(result.mismatch, true);
   assert.equal(result.account.id, existing.id);
   assert.equal(engine.listAccts().length, 2);
+});
+
+test("codex same email different account ids stay two accounts", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await addAccount(engine, "same@example.com", "acct-one", "one");
+  const second = await addAccount(engine, "same@example.com", "acct-two", "two");
+  assert.notEqual(first.id, second.id);
+  assert.equal(engine.listAccts().length, 2);
+});
+
+test("codex same email merges when one side has no account id", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await addAccount(engine, "merge-email@example.com", "acct-keep", "keep");
+  const thin = {
+    email: "merge-email@example.com",
+    exp: Math.floor(Date.now() / 1000) + 3600,
+  };
+  const result = await engine.upsert({
+    id_token: jwt(thin),
+    access_token: jwt(thin),
+    refresh_token: "refresh-thin",
+  });
+  assert.equal(result.account.id, first.id);
+  assert.equal(result.updated, true);
+  assert.equal(engine.listAccts().length, 1);
+});
+
+test("codex collapse folds same-identity files and keeps current", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await addAccount(engine, "fold@example.com", "acct-fold", "fold");
+  const index = engine.loadIdx();
+  index.current_account_id = first.id;
+  engine.saveIdx(index);
+  const extra = {
+    ...first,
+    id: engine.buildId("fold@example.com", "acct-fold", "org-extra"),
+    created_at: first.created_at + 10,
+  };
+  engine.saveAcct(extra);
+  assert.equal(engine.listAccts().length, 2);
+  engine.collapseDuplicateCodexAccounts();
+  const remaining = engine.listAccts();
+  assert.equal(remaining.length, 1);
+  assert.equal(remaining[0].id, first.id);
+  assert.equal(engine.loadIdx().current_account_id, first.id);
+});
+
+test("codex unknown emails do not merge without account ids", () => {
+  const { engine } = { engine: require("../engine/oauth") };
+  assert.equal(engine.sameAccountIdentity({ email: "unknown" }, { email: "unknown" }), false);
+  assert.equal(engine.sameAccountIdentity({ email: "one@example.com" }, { email: "unknown" }), false);
+});
+
+test("codex collapse remaps selected auto-switch ids onto the keeper", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await addAccount(engine, "fold-sel@example.com", "acct-fold-sel", "fold-sel");
+  const extra = {
+    ...first,
+    id: engine.buildId("fold-sel@example.com", "acct-fold-sel", "org-extra"),
+    created_at: first.created_at + 10,
+  };
+  engine.saveAcct(extra);
+  engine.saveAutoSwitchCfg({
+    ...engine.loadAutoSwitchCfg(),
+    account_scope_mode: "selected",
+    selected_account_ids: [extra.id, "unrelated-id"],
+  });
+  engine.collapseDuplicateCodexAccounts();
+  assert.deepEqual(engine.loadAutoSwitchCfg().selected_account_ids, [first.id, "unrelated-id"]);
+  assert.equal(engine.listAccts().length, 1);
+});
+
+test("codex upsert keeps quota_error when no new windows arrive", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await addAccount(engine, "keep-error@example.com", "acct-keep-error", "keep-error");
+  const stored = engine.loadAcct(first.id);
+  stored.quota_error = { code: "probe_failed", message: "这次没查清额度，请稍后重试。" };
+  stored.probe = { status: "probe_failed" };
+  engine.saveAcct(stored);
+  const result = await engine.upsert(tokens("keep-error@example.com", "acct-keep-error", "keep-error-2"));
+  assert.equal(result.updated, true);
+  assert.equal(result.account.quota_error.code, "probe_failed");
+  assert.equal(engine.loadAcct(first.id).quota_error.code, "probe_failed");
+});
+
+test("account lists still return when fold throws", async () => {
+  const handlers = new Map();
+  const warnings = [];
+  const electron = {
+    ipcMain: {
+      handle(channel, listener) {
+        handlers.set(channel, listener);
+      },
+    },
+    BrowserWindow: { getAllWindows: () => [] },
+    app: {
+      getVersion: () => "0.1.0-beta.29",
+      isPackaged: false,
+    },
+    shell: {
+      async openExternal() {},
+      async openPath() { return ""; },
+    },
+  };
+  const engine = {
+    collapseDuplicateCodexAccounts() { throw new Error("codex fold boom"); },
+    collapseDuplicateCursorAccounts() { throw new Error("cursor fold boom"); },
+    collapseDuplicateAntigravityAccounts() { throw new Error("ag fold boom"); },
+    listAccts: () => [{ id: "codex_one", email: "one@example.com" }],
+    listCursorAccts: () => [{ id: "cursor_one", email: "cursor@example.com", tokens: {} }],
+    listAntigravityAccts: () => [{ id: "antigravity_one", email: "ag@example.com", tokens: {} }],
+    withAccountLock: async (_id, task) => task(),
+    logWarn: (message) => warnings.push(message),
+    jwtExp: () => null,
+    jwtPayload: () => null,
+    ts: () => 1,
+    isTokenExpired: () => true,
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, { electron });
+  const listed = await handlers.get("account:list")({});
+  assert.equal(listed.success, true);
+  assert.equal(listed.data.length, 1);
+  const cursor = await handlers.get("cursor:list")({}, { skipOfficialSync: true });
+  assert.equal(cursor.success, true);
+  assert.equal(cursor.data.length, 1);
+  const antigravity = await handlers.get("antigravity:list")({}, { skipOfficialSync: true });
+  assert.equal(antigravity.success, true);
+  assert.equal(antigravity.data.length, 1);
+  assert.equal(warnings.length, 3);
 });

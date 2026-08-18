@@ -2,7 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const net = require("node:net");
 const dns = require("node:dns").promises;
-const { execFileSync } = require("node:child_process");
+const { execFile } = require("node:child_process");
 const { getProxyForUrl: getEnvProxyForUrl } = require("proxy-from-env");
 const { DATA_DIR, HOME } = require("./config");
 const { writeJsonAtomic } = require("./atomic-file");
@@ -71,13 +71,35 @@ function parseWindowsProxyEnable(regOutput) {
   return { raw: match[1], enabled: Number.parseInt(match[1], 16) === 1 };
 }
 
-function readWindowsInternetProxy() {
+function execFileAsync(file, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, options, (error, stdout, stderr) => {
+      if (error) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+async function readWindowsInternetProxy() {
   try {
-    const enableOut = execFileSync("reg", ["query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyEnable"], { encoding: "utf8" });
+    const { stdout: enableOut } = await execFileAsync("reg", ["query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyEnable"], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 2000,
+    });
     const parsed = parseWindowsProxyEnable(enableOut);
     let server = "";
     try {
-      const serverOut = execFileSync("reg", ["query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyServer"], { encoding: "utf8" });
+      const { stdout: serverOut } = await execFileAsync("reg", ["query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyServer"], {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 2000,
+      });
       server = /ProxyServer\s+REG_SZ\s+(.+)/i.exec(serverOut)?.[1]?.trim() || "";
     } catch {
       server = "";
@@ -205,13 +227,13 @@ function collectCandidatesFromHints(hints = {}) {
   return list;
 }
 
-function collectCandidates(url, extras = {}) {
+async function collectCandidates(url, extras = {}) {
   const stored = loadNetworkState();
   return collectCandidatesFromHints({
     override: stored.overrideProxyUrl,
     lastGood: stored.lastGood?.proxyUrl,
     envProxy: getEnvProxyForUrl(url),
-    windows: extras.windows || readWindowsInternetProxy(),
+    windows: extras.windows || await readWindowsInternetProxy(),
     pacRule: extras.pacRule || "",
     cursorProxy: extras.cursorProxy ?? readCursorHttpProxy(),
     extraPorts: extras.extraPorts || readConfigProxyPorts(),
@@ -389,7 +411,7 @@ async function resolveLiveProxy(url = "https://chatgpt.com/") {
   }
 
   const poisoned = await hostLooksPoisoned(destHost);
-  const candidates = collectCandidates(url, { pacRule: await readPacRule(url) });
+  const candidates = await collectCandidates(url, { pacRule: await readPacRule(url) });
 
   for (const candidate of candidates) {
     if (await probeProxyUrl(candidate.proxyUrl, destHost)) {
@@ -459,6 +481,20 @@ async function applySignatureToRuntime(signature, options = {}) {
   return { ...signature, mode: "system" };
 }
 
+async function applyStartupProxyHint() {
+  const { initLogger } = require("./logger");
+  initLogger();
+  const lastGood = loadNetworkState().lastGood;
+  if (lastGood?.proxyUrl) {
+    return applySignatureToRuntime({
+      source: lastGood.source || "lastGood",
+      proxyUrl: lastGood.proxyUrl,
+      probed: false,
+    });
+  }
+  return applySignatureToRuntime({ source: "system", proxyUrl: "", probed: false });
+}
+
 async function applyAppProxy() {
   const { initLogger } = require("./logger");
   initLogger();
@@ -485,6 +521,8 @@ module.exports = {
   invalidateLiveProxy,
   discoverProxyForUrl,
   applyAppProxy,
+  applyStartupProxyHint,
   applySignatureToRuntime,
+  loadNetworkState,
   syncProxyEnv,
 };

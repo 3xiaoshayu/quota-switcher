@@ -26,6 +26,10 @@ OpenAI.Codex_2p2nqsd0c76g0!App
 
 管 Cursor 需要本机装着官方 Cursor。装好后打开一次，再到设置里点「重新检测」。不是 `Cursor.exe` 的便携版，可能认不出来。
 
+## 说找不到 Antigravity
+
+第一期只认官方 **Antigravity IDE**（`Antigravity IDE.exe`）。装好后打开一次并登录，再到设置里点「重新检测」。旧版 `Antigravity.exe` 这期不管。不多开实例。
+
 ## Codex 账号加不进去
 
 Codex 网页授权会回到本机 `1455` 端口。

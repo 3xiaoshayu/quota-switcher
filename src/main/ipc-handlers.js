@@ -116,6 +116,17 @@ async function withFreshAccount(eng, id, task) {
     });
 }
 
+async function foldListedAccounts(eng, lockId, collapse) {
+    if (typeof collapse !== "function") return;
+    try {
+        await eng.withAccountLock(lockId, async () => collapse());
+    } catch (error) {
+        if (typeof eng.logWarn === "function") {
+            eng.logWarn(`Account fold skipped: ${error.message}`);
+        }
+    }
+}
+
 function registerIpcHandlers(engineInstance = null, services = {}) {
     const { ipcMain, BrowserWindow, app, shell } = services.electron || require("electron");
     if (engineInstance) engine = engineInstance;
@@ -141,6 +152,12 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         });
     };
 
+    handle("app:uiReady", () => {
+        try { services.onUiReady?.(); } catch (error) {
+            console.error("Startup housekeeping failed:", error);
+        }
+        return ok(true);
+    });
     handle("app:info", () => ok(updateService?.getAppInfo?.() || {
         name: "Codex Account Manager",
         version: app.getVersion(),
@@ -309,12 +326,13 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         }
         catch (error) { return fail(error.message); }
     });
-    handle("cursor:list", async () => {
-        await eng.syncCurrentCursorFromOfficial();
+    handle("cursor:list", async (event, options) => {
+        if (!options?.skipOfficialSync) await eng.syncCurrentCursorFromOfficial();
+        await foldListedAccounts(eng, "__cursor_switch__", eng.collapseDuplicateCursorAccounts);
         return ok(eng.listCursorAccts().map((account) => publicCursorAccount(account)));
     });
-    handle("cursor:current", async () => {
-        await eng.syncCurrentCursorFromOfficial();
+    handle("cursor:current", async (event, options) => {
+        if (!options?.skipOfficialSync) await eng.syncCurrentCursorFromOfficial();
         return ok(publicCursorAccount(eng.currentCursorAcct()));
     });
     handle("cursor:importLocal", async () => {
@@ -324,6 +342,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                 found: !!result.found,
                 account: publicCursorAccount(result.account),
                 mismatch: !!result.mismatch,
+                updated: !!result.updated,
                 stalePossible: !!result.stalePossible,
             });
         });
@@ -424,7 +443,194 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         catch (error) { return fail(error.message); }
     });
 
-    handle("account:list", () => ok(eng.listAccts().map(account => publicAccount(eng, account))));
+    function publicAntigravityQuota(quota) {
+        if (!quota) return null;
+        const { raw_data, ...safeQuota } = quota;
+        return safeQuota;
+    }
+
+    function publicAntigravityAccount(account) {
+        if (!account) return null;
+        const accessToken = account.tokens?.access_token || null;
+        const expiryDate = Number(account.tokens?.expiry_timestamp || 0) || (accessToken ? eng.jwtExp(accessToken) : null);
+        const issuedAt = accessToken ? (eng.jwtPayload(accessToken)?.iat ?? null) : null;
+        return {
+            id: account.id,
+            platform: "antigravity",
+            email: account.email,
+            plan_type: account.plan_type,
+            auth_id: account.auth_id || null,
+            auth_mode: account.auth_mode,
+            token_source_mode: account.token_source_mode,
+            token_generation: account.token_generation,
+            token_updated_at: account.token_updated_at,
+            created_at: account.created_at,
+            last_used: account.last_used,
+            usage_updated_at: account.usage_updated_at,
+            requires_reauth: !!account.requires_reauth,
+            reauth_reason: account.reauth_reason || null,
+            banned: false,
+            probe: account.probe ? {
+                status: account.probe.status || null,
+                error_code: account.probe.error_code || null,
+                http_status: account.probe.http_status || null,
+                checked_at: account.probe.checked_at || null,
+            } : null,
+            quota: publicAntigravityQuota(account.quota),
+            quota_error: account.quota_error ? {
+                code: account.quota_error.code || null,
+                message: account.quota_error.message || String(account.quota_error),
+                timestamp: account.quota_error.timestamp || null,
+            } : null,
+            token_status: {
+                accessAvailable: !!accessToken,
+                refreshAvailable: !!account.tokens?.refresh_token,
+                expired: expiryDate ? expiryDate < eng.ts() : !accessToken,
+                expiryDate: expiryDate || null,
+                issuedAt: typeof issuedAt === "number" ? issuedAt : null,
+                timeLeft: expiryDate ? expiryDate - eng.ts() : null,
+            },
+        };
+    }
+
+    async function withFreshAntigravityAccount(id, task) {
+        return eng.withAccountLocks(["__antigravity_switch__", id], async () => {
+            const account = eng.loadAntigravityAcct(id);
+            if (!account) return fail("Account does not exist");
+            return task(account);
+        });
+    }
+
+    handle("antigravity:status", async () => {
+        try {
+            const detect = typeof eng.getAntigravityInstallationStatusAsync === "function"
+                ? eng.getAntigravityInstallationStatusAsync()
+                : Promise.resolve(eng.getAntigravityInstallationStatus());
+            return ok(await detect);
+        }
+        catch (error) { return fail(error.message); }
+    });
+    handle("antigravity:list", async (event, options) => {
+        if (!options?.skipOfficialSync) await eng.syncCurrentAntigravityFromOfficial();
+        await foldListedAccounts(eng, "__antigravity_switch__", eng.collapseDuplicateAntigravityAccounts);
+        return ok(eng.listAntigravityAccts().map((account) => publicAntigravityAccount(account)));
+    });
+    handle("antigravity:current", async (event, options) => {
+        if (!options?.skipOfficialSync) await eng.syncCurrentAntigravityFromOfficial();
+        return ok(publicAntigravityAccount(eng.currentAntigravityAcct()));
+    });
+    handle("antigravity:importLocal", async () => {
+        return eng.withAccountLock("__antigravity_switch__", async () => {
+            const result = await eng.importLocalAntigravityAccount();
+            return ok({
+                found: !!result.found,
+                account: publicAntigravityAccount(result.account),
+                mismatch: !!result.mismatch,
+                updated: !!result.updated,
+                stalePossible: !!result.stalePossible,
+            });
+        });
+    });
+    handle("antigravity:add", async () => {
+        const result = await eng.antigravityLoginFlow();
+        return ok({
+            account: publicAntigravityAccount(result.account),
+            mismatch: !!result.mismatch,
+            targetAccountId: result.targetAccountId || null,
+        });
+    });
+    handle("antigravity:reauthorize", async (event, id) => {
+        const target = eng.loadAntigravityAcct(id);
+        if (!target) return fail("Account does not exist");
+        const result = await eng.antigravityLoginFlow({ targetAccountId: target.id });
+        return ok({
+            account: publicAntigravityAccount(result.account),
+            mismatch: !!result.mismatch,
+            targetAccountId: target.id,
+        });
+    });
+    handle("antigravity:oauthStatus", () => ok(eng.getAntigravityOAuthStatus()));
+    handle("antigravity:oauthCancel", () => ok(eng.cancelAntigravityOAuth()));
+    handle("antigravity:delete", async (event, id) => {
+        return withFreshAntigravityAccount(id, async (account) => {
+            return ok(eng.deleteAntigravityAcct(account.id, { allowCurrent: false }));
+        });
+    });
+    handle("antigravity:switch", async (event, id) => {
+        const target = eng.loadAntigravityAcct(id);
+        if (!target) return fail("Account does not exist");
+        const currentId = eng.currentAntigravityAcct()?.id;
+        const lockIds = ["__antigravity_switch__", target.id];
+        if (currentId && currentId !== target.id) lockIds.push(currentId);
+        return eng.withAccountLocks(lockIds, async () => {
+            const account = eng.loadAntigravityAcct(target.id);
+            if (!account) return fail("Account does not exist");
+            const result = await eng.doAntigravitySwitch(account);
+            return ok({
+                ...result,
+                account: publicAntigravityAccount(result.account),
+            });
+        });
+    });
+    handle("antigravity:refreshQuota", async (event, id, force = true) => {
+        return withFreshAntigravityAccount(id, async (account) => {
+            const quota = await eng.refreshAntigravityQuota(account, { force: force !== false });
+            return ok(publicAntigravityQuota(quota));
+        });
+    });
+    handle("antigravity:refreshAllQuotas", async () => {
+        const results = [];
+        for (const listed of eng.listAntigravityAccts()) {
+            try {
+                await eng.withAccountLocks(["__antigravity_switch__", listed.id], async () => {
+                    const account = eng.loadAntigravityAcct(listed.id);
+                    if (!account) return;
+                    const quota = await eng.refreshAntigravityQuota(account, { force: true });
+                    const fresh = eng.loadAntigravityAcct(account.id) || account;
+                    if (fresh.requires_reauth || fresh.quota_error?.code === "reauthorization_required") {
+                        results.push({
+                            id: account.id,
+                            email: account.email,
+                            skipped: true,
+                            reason: "reauthorization_required",
+                        });
+                    } else if (fresh.quota_error) {
+                        results.push({
+                            id: account.id,
+                            email: account.email,
+                            error: fresh.quota_error.message,
+                            reason: fresh.quota_error.code,
+                        });
+                    } else {
+                        results.push({ id: account.id, email: account.email, quota: publicAntigravityQuota(quota) });
+                    }
+                });
+            } catch (error) {
+                results.push({
+                    id: listed.id,
+                    email: listed.email,
+                    error: error.message,
+                    reason: error.code || undefined,
+                });
+            }
+        }
+        return ok(results);
+    });
+    handle("antigravity:refreshToken", async (event, id) => {
+        return withFreshAntigravityAccount(id, async (account) => {
+            const result = await eng.refreshAntigravityToken(account, { force: true });
+            return tokenRefreshResponse(result);
+        });
+    });
+    handle("antigravity:refreshAllTokens", async (event, force) => {
+        try { return ok(await eng.refreshAllAntigravityTokens(!!force)); }
+        catch (error) { return fail(error.message); }
+    });
+
+    handle("account:list", async () => {
+        await foldListedAccounts(eng, "__switch__", eng.collapseDuplicateCodexAccounts);
+        return ok(eng.listAccts().map(account => publicAccount(eng, account)));
+    });
     handle("account:current", () => ok(publicAccount(eng, eng.currentAcct())));
     handle("account:get", (event, id) => {
         const account = eng.loadAcct(id);
@@ -453,7 +659,11 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         finally { if (busyTimer) clearTimeout(busyTimer); }
     });
     handle("account:adoptOfficial", async () => {
-        try { return ok(publicAccount(eng, await eng.adoptOfficialAuth())); }
+        try {
+            const result = await eng.adoptOfficialAuth();
+            const account = result?.account || result;
+            return ok({ ...publicAccount(eng, account), updated: !!result?.updated });
+        }
         catch (error) { return fail(error.message); }
     });
     handle("account:reapplyManaged", async (event, id) => {

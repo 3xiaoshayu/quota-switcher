@@ -4,6 +4,7 @@ import {
   DesktopAppInfo,
   DesktopAutoSwitchConfig,
   DesktopAuthState,
+  DesktopAntigravityStatus,
   DesktopCodexStatus,
   DesktopCursorStatus,
   DesktopOAuthStatus,
@@ -12,7 +13,11 @@ import {
   LogEntry,
   StorageDiagnostic,
 } from '../types';
-import { toCursorUserMessage, toUserMessage } from './user-messages';
+import { toAntigravityUserMessage, toCursorUserMessage, toUserMessage } from './user-messages';
+
+function isManagedProduct(value: string | null | undefined): boolean {
+  return value === 'cursor' || value === 'antigravity';
+}
 
 type ApiResponse<T> = { success: true; data: T } | { success: false; error?: string };
 
@@ -33,6 +38,22 @@ interface DesktopQuota {
   auto_remaining_percentage?: number | null;
   api_remaining_percentage?: number | null;
   membership_type?: string | null;
+  tier?: string | null;
+  credits_remaining?: number | null;
+  credits_limit?: number | null;
+  credits_remaining_percentage?: number | null;
+  primary_model?: string | null;
+  primary_remaining_percentage?: number | null;
+  secondary_model?: string | null;
+  secondary_remaining_percentage?: number | null;
+  gemini_five_hour_remaining?: number | null;
+  gemini_five_hour_reset_time?: string | number | null;
+  gemini_weekly_remaining?: number | null;
+  gemini_weekly_reset_time?: string | number | null;
+  third_party_five_hour_remaining?: number | null;
+  third_party_five_hour_reset_time?: string | number | null;
+  third_party_weekly_remaining?: number | null;
+  third_party_weekly_reset_time?: string | number | null;
 }
 
 interface DesktopAccount {
@@ -80,6 +101,7 @@ type DesktopDaemonStatus = {
 type DesktopOAuthResult = {
   account: DesktopAccount | null;
   mismatch?: boolean;
+  updated?: boolean;
   targetAccountId?: string | null;
 };
 
@@ -126,11 +148,13 @@ type DesktopFloatState = {
 
 interface DesktopBridge {
   getAppInfo: () => Promise<ApiResponse<DesktopAppInfo>>;
+  notifyUiReady?: () => Promise<ApiResponse<true>>;
   getCodexStatus: () => Promise<ApiResponse<DesktopCodexStatus>>;
   getCursorStatus: () => Promise<ApiResponse<DesktopCursorStatus>>;
-  listCursorAccounts: () => Promise<ApiResponse<DesktopAccount[]>>;
-  getCurrentCursorAccount: () => Promise<ApiResponse<DesktopAccount | null>>;
-  importLocalCursorAccount: () => Promise<ApiResponse<{ found: boolean; account: DesktopAccount | null; stalePossible?: boolean }>>;
+  getAntigravityStatus: () => Promise<ApiResponse<DesktopAntigravityStatus>>;
+  listCursorAccounts: (options?: { skipOfficialSync?: boolean }) => Promise<ApiResponse<DesktopAccount[]>>;
+  getCurrentCursorAccount: (options?: { skipOfficialSync?: boolean }) => Promise<ApiResponse<DesktopAccount | null>>;
+  importLocalCursorAccount: () => Promise<ApiResponse<{ found: boolean; account: DesktopAccount | null; updated?: boolean; stalePossible?: boolean }>>;
   addCursorAccount: () => Promise<ApiResponse<DesktopOAuthResult>>;
   reauthorizeCursorAccount: (id: string) => Promise<ApiResponse<DesktopOAuthResult>>;
   getCursorOAuthStatus: () => Promise<ApiResponse<DesktopOAuthStatus>>;
@@ -147,6 +171,25 @@ interface DesktopBridge {
   }>>>;
   refreshCursorToken: (id: string) => Promise<ApiResponse<DesktopTokenRefreshResult>>;
   refreshAllCursorTokens: (force?: boolean) => Promise<ApiResponse<DesktopTokenRefreshAllResult>>;
+  listAntigravityAccounts: (options?: { skipOfficialSync?: boolean }) => Promise<ApiResponse<DesktopAccount[]>>;
+  getCurrentAntigravityAccount: (options?: { skipOfficialSync?: boolean }) => Promise<ApiResponse<DesktopAccount | null>>;
+  importLocalAntigravityAccount: () => Promise<ApiResponse<{ found: boolean; account: DesktopAccount | null; updated?: boolean; stalePossible?: boolean }>>;
+  addAntigravityAccount: () => Promise<ApiResponse<DesktopOAuthResult>>;
+  reauthorizeAntigravityAccount: (id: string) => Promise<ApiResponse<DesktopOAuthResult>>;
+  getAntigravityOAuthStatus: () => Promise<ApiResponse<DesktopOAuthStatus>>;
+  cancelAntigravityOAuth: () => Promise<ApiResponse<boolean>>;
+  deleteAntigravityAccount: (id: string) => Promise<ApiResponse<boolean>>;
+  switchAntigravityAccount: (id: string) => Promise<ApiResponse<unknown>>;
+  refreshAntigravityQuota: (id: string, force?: boolean) => Promise<ApiResponse<DesktopQuota>>;
+  refreshAllAntigravityQuotas: () => Promise<ApiResponse<Array<{
+    id: string;
+    email: string;
+    quota?: DesktopQuota;
+    error?: string;
+    reason?: string;
+  }>>>;
+  refreshAntigravityToken: (id: string) => Promise<ApiResponse<DesktopTokenRefreshResult>>;
+  refreshAllAntigravityTokens: (force?: boolean) => Promise<ApiResponse<DesktopTokenRefreshAllResult>>;
   getUpdateStatus: () => Promise<ApiResponse<DesktopUpdateStatus>>;
   checkForUpdates: () => Promise<ApiResponse<unknown>>;
   installUpdate: () => Promise<ApiResponse<unknown>>;
@@ -172,7 +215,7 @@ interface DesktopBridge {
   cancelOAuth: () => Promise<ApiResponse<boolean>>;
   completeOAuthManually: (callbackUrl: string) => Promise<ApiResponse<DesktopOAuthResult>>;
   getAuthState: () => Promise<ApiResponse<DesktopAuthState>>;
-  adoptOfficialAccount: () => Promise<ApiResponse<DesktopAccount>>;
+  adoptOfficialAccount: () => Promise<ApiResponse<DesktopAccount & { updated?: boolean }>>;
   reapplyManagedAccount: (id?: string | null) => Promise<ApiResponse<unknown>>;
   deleteAccount: (id: string) => Promise<ApiResponse<boolean>>;
   switchAccount: (id: string) => Promise<ApiResponse<unknown>>;
@@ -488,15 +531,30 @@ export function quotaHero(account: AccountQuota | null | undefined): {
     return {
       percent: null,
       key: 'none',
-      label: account.status === 'BANNED' && !isCursorAccount(account) ? '已封号' : '需重新授权',
+      label: account.status === 'BANNED' && !isManagedProductAccount(account) ? '已封号' : '需重新授权',
     };
   }
   if (account.status === 'SYNC_FAILED') {
     return {
       percent: null,
       key: 'none',
-      label: isCursorAccount(account) ? '这次没查清' : '同步失败',
+      label: isManagedProductAccount(account) ? '这次没查清' : '同步失败',
     };
+  }
+  if (isAntigravityAccount(account)) {
+    const candidates: Array<{ percent: number; key: 'auto' | 'api'; label: string }> = [];
+    for (const bar of quotaBarsForAccount(account)) {
+      if (bar.remaining != null && Number.isFinite(bar.remaining)) {
+        candidates.push({
+          percent: bar.remaining,
+          key: bar.key.includes('weekly') ? 'auto' : 'api',
+          label: bar.label,
+        });
+      }
+    }
+    if (candidates.length === 0) return { percent: null, key: 'none', label: '额度' };
+    candidates.sort((left, right) => left.percent - right.percent);
+    return candidates[0];
   }
   if (isCursorAccount(account)) {
     const candidates: Array<{ percent: number; key: 'auto' | 'api'; label: string }> = [];
@@ -623,7 +681,7 @@ export const STATUS_TEXT: Record<string, string> = {
 };
 
 export function statusTextForAccount(account: Pick<AccountQuota, 'status' | 'quotaKind' | 'id'>): string {
-  if (isCursorAccount(account)) {
+  if (isManagedProductAccount(account)) {
     if (account.status === 'SUSPENDED') return '需重新授权';
     if (account.status === 'EXPIRED' || account.status === 'LIMITED') return '已用尽';
     if (account.status === 'WARNING' || account.status === 'LOW_QUOTA' || account.status === 'ACTIVE') return '正常';
@@ -634,7 +692,7 @@ export function statusTextForAccount(account: Pick<AccountQuota, 'status' | 'quo
 }
 
 export function statusDotForAccount(account: Pick<AccountQuota, 'status' | 'quotaKind' | 'id'>): string {
-  if (isCursorAccount(account) && (account.status === 'WARNING' || account.status === 'LOW_QUOTA')) {
+  if (isManagedProductAccount(account) && (account.status === 'WARNING' || account.status === 'LOW_QUOTA')) {
     return STATUS_DOT.ACTIVE;
   }
   return STATUS_DOT[account.status] || 'bg-fill-3';
@@ -672,6 +730,7 @@ function cursorPlanForUi(planType: string | null | undefined): AccountQuota['pla
 export function planLabel(plan: AccountQuota['plan'] | string | null | undefined): string {
   const name = String(plan || '').trim().replace(/\s+(Plan|套餐)$/i, '');
   if (!name) return '套餐';
+  if (name === 'Free' || name === '免费') return '免费';
   return `${name} 套餐`;
 }
 
@@ -862,7 +921,7 @@ export function formatTokenCheckMessage(results: Array<{
   banned?: boolean;
   reauthRequired?: boolean;
   error?: string;
-}> = [], options: { product?: 'codex' | 'cursor' } = {}): { message: string; tone: 'success' | 'warning' | 'info' } {
+}> = [], options: { product?: ProductKind } = {}): { message: string; tone: 'success' | 'warning' | 'info' } {
   const total = results.length;
   const { passed, reauthSkipped, bannedSkipped, failed } = summarizeTokenCheckResults(results);
   if (total === 0) return { message: '没有可检查的账号', tone: 'info' };
@@ -1028,19 +1087,168 @@ export function mapCursorAccountForUi(
   };
 }
 
+function antigravityStatusForUi(account: DesktopAccount): AccountQuota['status'] {
+  if (account.requires_reauth || account.probe?.status === 'token_invalid' || account.probe?.status === 'banned') {
+    return 'SUSPENDED';
+  }
+  const tokenUnusable = (account.token_status?.expired || account.token_status?.accessAvailable === false)
+    && account.token_status?.refreshAvailable === false;
+  if (tokenUnusable) return 'SUSPENDED';
+  if (account.quota_error) return 'SYNC_FAILED';
+  const windows = [
+    clampPercent(account.quota?.gemini_five_hour_remaining),
+    clampPercent(account.quota?.gemini_weekly_remaining),
+    clampPercent(account.quota?.third_party_five_hour_remaining),
+    clampPercent(account.quota?.third_party_weekly_remaining),
+  ].filter((value): value is number => value != null);
+  if (account.probe?.status === 'usage_limited' || (windows.length > 0 && windows.every((value) => value === 0))) {
+    return 'EXPIRED';
+  }
+  if (windows.some((value) => value === 0) || windows.some((value) => value <= 20)) {
+    return windows.some((value) => value === 0) ? 'WARNING' : 'LOW_QUOTA';
+  }
+  if (!account.quota) return 'READY';
+  return 'ACTIVE';
+}
+
+function antigravityWarningForUi(account: DesktopAccount, status: AccountQuota['status'], quotaError: string | null): string | null {
+  if (status === 'LIMITED' || status === 'EXPIRED') return '额度已用尽。';
+  if (status === 'SYNC_FAILED') {
+    if (quotaError && quotaError.includes('额度暂时没刷到')) return quotaError;
+    return '这次没查清 Antigravity 额度，请稍后重试。';
+  }
+  if (status === 'SUSPENDED') return '该账号需要重新授权后才能使用。';
+  return quotaError ? toAntigravityUserMessage(quotaError) : null;
+}
+
+function antigravityPlanForUi(planType: string | null | undefined): AccountQuota['plan'] {
+  const value = String(planType || '').toLowerCase().trim();
+  if (!value) return '' as AccountQuota['plan'];
+  if (value.includes('ultra')) return 'Ultra';
+  if (value.includes('pro')) return 'Pro';
+  if (
+    value.includes('team')
+    || value.includes('business')
+    || value.includes('enterprise')
+    || value.includes('org')
+  ) return 'Team';
+  return 'Free';
+}
+
+function antigravityPriorityForUi(account: DesktopAccount): AccountQuota['priority'] {
+  const plan = antigravityPlanForUi(account.plan_type || account.quota?.tier);
+  if (plan === 'Team' || plan === 'Pro' || plan === 'Ultra') return 'High';
+  return 'Normal';
+}
+
+function antigravityEmailForUi(value: string | null | undefined): string {
+  const email = String(value || '').trim();
+  if (!email || email.toLowerCase() === 'unknown' || !email.includes('@')) return '未读取邮箱';
+  return email;
+}
+
+export function mapAntigravityAccountForUi(
+  account: DesktopAccount,
+  currentAccount: DesktopAccount | null,
+): AccountQuota {
+  const quotaError = account.quota_error?.message || account.quota_error?.code
+    ? toAntigravityUserMessage(account.quota_error?.message || account.quota_error?.code)
+    : null;
+  const status = antigravityStatusForUi(account);
+  const tokenStatus = account.token_status || {};
+  const leftoverUsable = leftoverAccessUsableFor(account, tokenStatus);
+  const leftoverRejected = !leftoverUsable
+    && !!tokenStatus.accessAvailable
+    && !tokenStatus.expired
+    && !!account.requires_reauth;
+  const tokenValidityPct = tokenValidityPctForUi(account, tokenStatus, leftoverRejected);
+  const geminiWeekly = clampPercent(account.quota?.gemini_weekly_remaining);
+  const geminiFiveHour = clampPercent(account.quota?.gemini_five_hour_remaining);
+  const thirdWeekly = clampPercent(account.quota?.third_party_weekly_remaining);
+  const thirdFiveHour = clampPercent(account.quota?.third_party_five_hour_remaining);
+  const geminiTighter = [geminiWeekly, geminiFiveHour].filter((value): value is number => value != null);
+  const thirdTighter = [thirdWeekly, thirdFiveHour].filter((value): value is number => value != null);
+  const email = antigravityEmailForUi(account.email);
+
+  return {
+    id: account.id,
+    name: email.includes('@') ? displayName(email) : email,
+    email,
+    status,
+    quotaKind: 'antigravity',
+    fiveHourQuotaRemaining: geminiFiveHour ?? thirdFiveHour,
+    fiveHourQuotaTotal: 100,
+    weeklyQuotaRemaining: geminiWeekly ?? thirdWeekly,
+    weeklyQuotaTotal: 100,
+    fiveHourQuotaPresent: geminiFiveHour != null || thirdFiveHour != null,
+    weeklyQuotaPresent: geminiWeekly != null || thirdWeekly != null,
+    agCreditsRemaining: account.quota?.credits_remaining ?? clampPercent(account.quota?.credits_remaining_percentage),
+    agCreditsLimit: account.quota?.credits_limit ?? null,
+    agTier: account.quota?.tier || account.plan_type || null,
+    agPrimaryModel: null,
+    agPrimaryRemaining: geminiTighter.length ? Math.min(...geminiTighter) : null,
+    agSecondaryModel: null,
+    agSecondaryRemaining: thirdTighter.length ? Math.min(...thirdTighter) : null,
+    agGeminiWeeklyRemaining: geminiWeekly,
+    agGeminiWeeklyResetAt: account.quota?.gemini_weekly_reset_time ?? null,
+    agGeminiFiveHourRemaining: geminiFiveHour,
+    agGeminiFiveHourResetAt: account.quota?.gemini_five_hour_reset_time ?? null,
+    agThirdPartyWeeklyRemaining: thirdWeekly,
+    agThirdPartyWeeklyResetAt: account.quota?.third_party_weekly_reset_time ?? null,
+    agThirdPartyFiveHourRemaining: thirdFiveHour,
+    agThirdPartyFiveHourResetAt: account.quota?.third_party_five_hour_reset_time ?? null,
+    priority: antigravityPriorityForUi(account),
+    plan: antigravityPlanForUi(account.plan_type || account.quota?.tier),
+    tokenValidity: tokenStatus.expired ? '已过期' : leftoverRejected ? '已失效' : tokenRemainLabel(tokenStatus.timeLeft),
+    tokenValidityPct,
+    resetInFiveHour: '',
+    resetInWeekly: '',
+    warning: antigravityWarningForUi(account, status, quotaError),
+    isCurrent: !!currentAccount && currentAccount.id === account.id,
+    quotaUpdatedAt: account.usage_updated_at,
+    quotaError,
+    tokenExpired: !!tokenStatus.expired,
+    tokenAccessAvailable: !!tokenStatus.accessAvailable,
+    tokenRefreshAvailable: !!tokenStatus.refreshAvailable,
+    leftoverAccessUsable: leftoverUsable,
+  };
+}
+
 export function isCursorAccount(account: { id?: string; quotaKind?: string | null }): boolean {
   return account.quotaKind === 'cursor' || String(account.id || '').startsWith('cursor_');
+}
+
+export function isAntigravityAccount(account: { id?: string; quotaKind?: string | null }): boolean {
+  return account.quotaKind === 'antigravity' || String(account.id || '').startsWith('antigravity_');
+}
+
+export function productOfAccount(account: { id?: string; quotaKind?: string | null }): ProductKind {
+  if (isAntigravityAccount(account)) return 'antigravity';
+  if (isCursorAccount(account)) return 'cursor';
+  return 'codex';
+}
+
+export function isManagedProductAccount(account: { id?: string; quotaKind?: string | null }): boolean {
+  return isManagedProduct(productOfAccount(account));
 }
 
 export function pickStartupFloatProduct(
   preferred: ProductKind,
   codexAccounts: Array<Pick<AccountQuota, 'isCurrent'>> = [],
   cursorAccounts: Array<Pick<AccountQuota, 'isCurrent'>> = [],
+  antigravityAccounts: Array<Pick<AccountQuota, 'isCurrent'>> = [],
 ): ProductKind | null {
   const hasCurrent = (list: Array<Pick<AccountQuota, 'isCurrent'>>) => list.some((account) => !!account.isCurrent);
-  if (preferred === 'cursor' ? hasCurrent(cursorAccounts) : hasCurrent(codexAccounts)) return preferred;
-  const other: ProductKind = preferred === 'cursor' ? 'codex' : 'cursor';
-  return (other === 'cursor' ? hasCurrent(cursorAccounts) : hasCurrent(codexAccounts)) ? other : null;
+  const lists: Record<ProductKind, Array<Pick<AccountQuota, 'isCurrent'>>> = {
+    codex: codexAccounts,
+    cursor: cursorAccounts,
+    antigravity: antigravityAccounts,
+  };
+  if (hasCurrent(lists[preferred] || [])) return preferred;
+  for (const id of (['codex', 'cursor', 'antigravity'] as ProductKind[])) {
+    if (id !== preferred && hasCurrent(lists[id] || [])) return id;
+  }
+  return null;
 }
 
 export function lensQuotaWindows(account: AccountQuota | null | undefined): {
@@ -1052,14 +1260,37 @@ export function lensQuotaWindows(account: AccountQuota | null | undefined): {
   innerReset: string | number | null;
 } {
   const cursor = !!account && isCursorAccount(account);
+  const antigravity = !!account && isAntigravityAccount(account);
   if (!account || hideStaleQuota(account) || account.status === 'SYNC_FAILED') {
     return {
       outer: null,
       inner: null,
-      outerLabel: cursor ? 'Auto' : '周额度',
-      innerLabel: cursor ? 'API' : '5 小时',
+      outerLabel: antigravity ? 'Gemini' : cursor ? 'Auto' : '周额度',
+      innerLabel: antigravity ? 'Claude 与 GPT' : cursor ? 'API' : '5 小时',
       outerReset: null,
       innerReset: null,
+    };
+  }
+  if (antigravity) {
+    const gemini = tighterWindow(
+      account.agGeminiWeeklyRemaining,
+      account.agGeminiFiveHourRemaining,
+      account.agGeminiWeeklyResetAt,
+      account.agGeminiFiveHourResetAt,
+    );
+    const third = tighterWindow(
+      account.agThirdPartyWeeklyRemaining,
+      account.agThirdPartyFiveHourRemaining,
+      account.agThirdPartyWeeklyResetAt,
+      account.agThirdPartyFiveHourResetAt,
+    );
+    return {
+      outer: gemini.remaining,
+      inner: third.remaining,
+      outerLabel: 'Gemini',
+      innerLabel: 'Claude 与 GPT',
+      outerReset: gemini.resetAt,
+      innerReset: third.resetAt,
     };
   }
   if (cursor) {
@@ -1085,11 +1316,70 @@ export function lensQuotaWindows(account: AccountQuota | null | undefined): {
 }
 
 export function isBannedStatus(account: Pick<AccountQuota, 'status' | 'quotaKind' | 'id'>): boolean {
-  return account.status === 'BANNED' && !isCursorAccount(account);
+  return account.status === 'BANNED' && !isManagedProductAccount(account);
 }
 
-export function quotaBarsForAccount(account: AccountQuota): Array<{ key: string; label: string; remaining: number | null }> {
+function tighterWindow(
+  weekly: number | null | undefined,
+  fiveHour: number | null | undefined,
+  weeklyReset: string | number | null | undefined,
+  fiveHourReset: string | number | null | undefined,
+): { remaining: number | null; resetAt: string | number | null } {
+  const weeklyValue = weekly ?? null;
+  const fiveHourValue = fiveHour ?? null;
+  if (weeklyValue == null && fiveHourValue == null) return { remaining: null, resetAt: null };
+  if (weeklyValue == null) return { remaining: fiveHourValue, resetAt: fiveHourReset ?? null };
+  if (fiveHourValue == null) return { remaining: weeklyValue, resetAt: weeklyReset ?? null };
+  return fiveHourValue <= weeklyValue
+    ? { remaining: fiveHourValue, resetAt: fiveHourReset ?? null }
+    : { remaining: weeklyValue, resetAt: weeklyReset ?? null };
+}
+
+export function antigravityQuotaFamilies(account: AccountQuota): Array<{
+  key: 'gemini' | 'third_party';
+  title: string;
+  weekly: { remaining: number | null; resetAt: string | number | null };
+  fiveHour: { remaining: number | null; resetAt: string | number | null };
+}> {
+  const hidden = account.status === 'SYNC_FAILED' || hideStaleQuota(account);
+  return [
+    {
+      key: 'gemini',
+      title: 'Gemini',
+      weekly: {
+        remaining: hidden ? null : account.agGeminiWeeklyRemaining ?? null,
+        resetAt: hidden ? null : account.agGeminiWeeklyResetAt ?? null,
+      },
+      fiveHour: {
+        remaining: hidden ? null : account.agGeminiFiveHourRemaining ?? null,
+        resetAt: hidden ? null : account.agGeminiFiveHourResetAt ?? null,
+      },
+    },
+    {
+      key: 'third_party',
+      title: 'Claude 与 GPT',
+      weekly: {
+        remaining: hidden ? null : account.agThirdPartyWeeklyRemaining ?? null,
+        resetAt: hidden ? null : account.agThirdPartyWeeklyResetAt ?? null,
+      },
+      fiveHour: {
+        remaining: hidden ? null : account.agThirdPartyFiveHourRemaining ?? null,
+        resetAt: hidden ? null : account.agThirdPartyFiveHourResetAt ?? null,
+      },
+    },
+  ];
+}
+
+export function quotaBarsForAccount(account: AccountQuota): Array<{ key: string; label: string; remaining: number | null; resetAt?: string | number | null }> {
   if (account.status === 'SYNC_FAILED' || hideStaleQuota(account)) {
+    if (isAntigravityAccount(account)) {
+      return [
+        { key: 'gemini-weekly', label: 'Gemini 周限', remaining: null },
+        { key: 'gemini-5h', label: 'Gemini 5 小时', remaining: null },
+        { key: 'third-weekly', label: 'Claude 与 GPT 周限', remaining: null },
+        { key: 'third-5h', label: 'Claude 与 GPT 5 小时', remaining: null },
+      ];
+    }
     if (isCursorAccount(account)) {
       return [
         { key: 'plan', label: '套餐用量', remaining: null },
@@ -1100,6 +1390,14 @@ export function quotaBarsForAccount(account: AccountQuota): Array<{ key: string;
     return [
       { key: 'fiveHour', label: '5 小时额度', remaining: null },
       { key: 'weekly', label: '周额度', remaining: null },
+    ];
+  }
+  if (isAntigravityAccount(account)) {
+    return [
+      { key: 'gemini-weekly', label: 'Gemini 周限', remaining: account.agGeminiWeeklyRemaining ?? null, resetAt: account.agGeminiWeeklyResetAt ?? null },
+      { key: 'gemini-5h', label: 'Gemini 5 小时', remaining: account.agGeminiFiveHourRemaining ?? null, resetAt: account.agGeminiFiveHourResetAt ?? null },
+      { key: 'third-weekly', label: 'Claude 与 GPT 周限', remaining: account.agThirdPartyWeeklyRemaining ?? null, resetAt: account.agThirdPartyWeeklyResetAt ?? null },
+      { key: 'third-5h', label: 'Claude 与 GPT 5 小时', remaining: account.agThirdPartyFiveHourRemaining ?? null, resetAt: account.agThirdPartyFiveHourResetAt ?? null },
     ];
   }
   if (isCursorAccount(account)) {
@@ -1217,8 +1515,11 @@ export function autoSwitchStatusBanner(options: {
   };
 }
 
-export function hideStaleQuota(account: Pick<AccountQuota, 'status' | 'leftoverAccessUsable'> | null | undefined): boolean {
+export function hideStaleQuota(account: Pick<AccountQuota, 'status' | 'leftoverAccessUsable' | 'tokenExpired' | 'quotaKind' | 'id'> | null | undefined): boolean {
   if (!account) return false;
+  if (isAntigravityAccount(account) && account.tokenExpired === true && account.leftoverAccessUsable !== true) {
+    return true;
+  }
   if (account.status !== 'SUSPENDED' && account.status !== 'BANNED') return false;
   return account.leftoverAccessUsable !== true;
 }
@@ -1242,7 +1543,7 @@ export function averageRemainingCaption(
       continue;
     }
     const values: number[] = [];
-    if (isCursorAccount(account) || product === 'cursor') {
+    if (isManagedProductAccount(account) || isManagedProduct(product)) {
       for (const bar of quotaBarsForAccount(account)) {
         if (bar.remaining != null) values.push(bar.remaining);
       }
@@ -1291,7 +1592,7 @@ export function quotaWindowSummary(
     return { label, text: '额度限流' };
   }
   if (account.status === 'SYNC_FAILED') {
-    return { label, text: isCursorAccount(account) ? '这次没查清' : '同步失败' };
+    return { label, text: isManagedProductAccount(account) ? '这次没查清' : '同步失败' };
   }
   if (window === 'fiveHour' && account.weeklyBlocksFiveHour) {
     return { label, text: '周额度已用尽' };
@@ -1300,7 +1601,7 @@ export function quotaWindowSummary(
   const remaining = window === 'fiveHour' ? account.fiveHourQuotaRemaining : account.weeklyQuotaRemaining;
   const total = window === 'fiveHour' ? account.fiveHourQuotaTotal : account.weeklyQuotaTotal;
   if (account.quotaError && remaining == null) {
-    return { label, text: isCursorAccount(account) ? '这次没查清' : '同步失败' };
+    return { label, text: isManagedProductAccount(account) ? '这次没查清' : '同步失败' };
   }
   if (!present || remaining == null) {
     return { label, text: '暂无此项' };
@@ -1309,6 +1610,23 @@ export function quotaWindowSummary(
   if (!Number.isFinite(pct)) return { label, text: '暂无数据' };
   if (pct <= 0) return { label, text: '已用尽' };
   return { label, text: `${pct}%` };
+}
+
+export function accountHasVisibleQuota(account: Pick<AccountQuota, 'quotaKind' | 'id' | 'agGeminiWeeklyRemaining' | 'agGeminiFiveHourRemaining' | 'agThirdPartyWeeklyRemaining' | 'agThirdPartyFiveHourRemaining' | 'agCreditsRemaining' | 'cursorPlanRemaining' | 'cursorAutoRemaining' | 'cursorApiRemaining' | 'fiveHourQuotaPresent' | 'weeklyQuotaPresent' | 'fiveHourQuotaRemaining' | 'weeklyQuotaRemaining'>): boolean {
+  if (isAntigravityAccount(account)) {
+    return [
+      account.agGeminiWeeklyRemaining,
+      account.agGeminiFiveHourRemaining,
+      account.agThirdPartyWeeklyRemaining,
+      account.agThirdPartyFiveHourRemaining,
+      account.agCreditsRemaining,
+    ].some((value) => value != null);
+  }
+  if (isCursorAccount(account)) {
+    return [account.cursorPlanRemaining, account.cursorAutoRemaining, account.cursorApiRemaining].some((value) => value != null);
+  }
+  return (account.fiveHourQuotaPresent !== false && account.fiveHourQuotaRemaining != null)
+    || (account.weeklyQuotaPresent !== false && account.weeklyQuotaRemaining != null);
 }
 
 export function cursorEmptyQuotaText(account: Pick<AccountQuota, 'status' | 'warning'>): string {
@@ -1348,6 +1666,12 @@ export function needsQuotaAutoSync(account: AccountQuota, staleMs = QUOTA_AUTO_S
 export const desktopApi = {
   async getAppInfo() {
     return expectData(await bridge().getAppInfo(), 'Read app info');
+  },
+
+  async notifyUiReady() {
+    const api = getBridge();
+    if (typeof api?.notifyUiReady !== 'function') return;
+    await captureResponse(() => api.notifyUiReady!(), 'Notify UI ready');
   },
 
   async loadDashboardState(): Promise<DashboardState> {
@@ -1410,7 +1734,7 @@ export const desktopApi = {
     };
   },
 
-  async loadCursorState() {
+  async loadCursorState(options: { skipOfficialSync?: boolean } = {}) {
     const api = bridge();
     const [
       accountsResponse,
@@ -1418,8 +1742,8 @@ export const desktopApi = {
       oauthStatusResponse,
       statusResponse,
     ] = await Promise.all([
-      captureResponse(() => api.listCursorAccounts(), 'Read Cursor accounts'),
-      captureResponse(() => api.getCurrentCursorAccount(), 'Read current Cursor account'),
+      captureResponse(() => api.listCursorAccounts(options), 'Read Cursor accounts'),
+      captureResponse(() => api.getCurrentCursorAccount(options), 'Read current Cursor account'),
       captureResponse(() => api.getCursorOAuthStatus(), 'Read Cursor OAuth status'),
       timedCapture(() => api.getCursorStatus(), 'Read Cursor status'),
     ]);
@@ -1434,7 +1758,38 @@ export const desktopApi = {
     };
   },
 
+  async loadAntigravityState(options: { skipOfficialSync?: boolean } = {}) {
+    const api = bridge();
+    const [
+      accountsResponse,
+      currentResponse,
+      oauthStatusResponse,
+      statusResponse,
+    ] = await Promise.all([
+      captureResponse(() => api.listAntigravityAccounts(options), 'Read Antigravity accounts'),
+      captureResponse(() => api.getCurrentAntigravityAccount(options), 'Read current Antigravity account'),
+      captureResponse(() => api.getAntigravityOAuthStatus(), 'Read Antigravity OAuth status'),
+      timedCapture(() => api.getAntigravityStatus(), 'Read Antigravity status'),
+    ]);
+    const rawAccounts = expectData(accountsResponse, 'Read Antigravity accounts') || [];
+    const currentAccount = optionalData(currentResponse, null);
+    return {
+      accounts: rawAccounts.map((account) => mapAntigravityAccountForUi(account, currentAccount)),
+      rawAccounts,
+      currentAccount,
+      oauthStatus: optionalData(oauthStatusResponse, defaultOAuthStatus()) || defaultOAuthStatus(),
+      antigravityStatus: optionalData(statusResponse, null),
+    };
+  },
+
   async loadFloatAccounts(product: ProductKind = 'codex') {
+    if (product === 'antigravity') {
+      const snapshot = await desktopApi.loadAntigravityState();
+      return {
+        accounts: snapshot.accounts,
+        currentAccount: snapshot.currentAccount,
+      };
+    }
     if (product === 'cursor') {
       const snapshot = await desktopApi.loadCursorState();
       return {
@@ -1579,6 +1934,56 @@ export const desktopApi = {
 
   async refreshAllCursorTokens(force = false) {
     return expectData(await bridge().refreshAllCursorTokens(force), 'Refresh all Cursor tokens');
+  },
+
+  async getAntigravityStatus() {
+    return expectData(await bridge().getAntigravityStatus(), 'Read Antigravity status');
+  },
+
+  async importLocalAntigravityAccount() {
+    return expectData(await bridge().importLocalAntigravityAccount(), 'Import local Antigravity account');
+  },
+
+  async addAntigravityAccount() {
+    return expectData(await bridge().addAntigravityAccount(), 'Add Antigravity account');
+  },
+
+  async reauthorizeAntigravityAccount(id: string) {
+    return expectData(await bridge().reauthorizeAntigravityAccount(id), 'Reauthorize Antigravity account');
+  },
+
+  async getAntigravityOAuthStatus() {
+    return expectData(await bridge().getAntigravityOAuthStatus(), 'Read Antigravity OAuth status');
+  },
+
+  async cancelAntigravityOAuth() {
+    return expectData(await bridge().cancelAntigravityOAuth(), 'Cancel Antigravity OAuth');
+  },
+
+  async deleteAntigravityAccount(id: string) {
+    return expectData(await bridge().deleteAntigravityAccount(id), 'Delete Antigravity account');
+  },
+
+  async switchAntigravityAccount(id: string) {
+    return expectData(await bridge().switchAntigravityAccount(id), 'Switch Antigravity account');
+  },
+
+  async refreshAntigravityQuota(id: string, force = true) {
+    return expectData(await bridge().refreshAntigravityQuota(id, force), 'Refresh Antigravity quota');
+  },
+
+  async refreshAllAntigravityQuotas() {
+    return expectData(await bridge().refreshAllAntigravityQuotas(), 'Refresh all Antigravity quotas') || [];
+  },
+
+  async refreshAntigravityToken(id: string) {
+    const result = expectData(await bridge().refreshAntigravityToken(id), 'Refresh Antigravity token');
+    if (result && result.ok === false && !result.reauthRequired) throw new Error(result.error || 'Token refresh failed');
+    return result;
+  },
+
+  async refreshAllAntigravityTokens(force = false) {
+    return expectData(await bridge().refreshAllAntigravityTokens(force), 'Refresh all Antigravity tokens');
   },
 
   async checkForUpdates() {

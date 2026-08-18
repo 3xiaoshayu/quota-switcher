@@ -31,6 +31,10 @@ function buildCursorId(email, authId) {
   return "cursor_" + sha256hex(`${(email || "").toLowerCase()}|${authId || ""}`).slice(0, 32);
 }
 
+function buildAntigravityId(email, authId) {
+  return "antigravity_" + sha256hex(`${(email || "").toLowerCase()}|${authId || ""}`).slice(0, 32);
+}
+
 function extractCursorWorkosUserId(accessToken) {
   const payload = jwtPayload(accessToken);
   const sub = String(payload?.sub || "").trim();
@@ -90,7 +94,7 @@ function extractChatgptOrganizationId(token) {
 }
 
 module.exports = {
-  b64url, sha256hex, codeChallenge, ts, tsIso, buildId, buildCursorId,
+  b64url, sha256hex, codeChallenge, ts, tsIso, buildId, buildCursorId, buildAntigravityId,
   jwtPayload, jwtExp, isTokenExpired, extractChatgptAccountId, extractChatgptOrganizationId,
   extractCursorWorkosUserId,
 };

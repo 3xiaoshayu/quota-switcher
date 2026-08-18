@@ -46,11 +46,15 @@ function floatStatePath(userDataPath) {
 }
 
 function normalizeFloatProduct(value) {
-    return value === "cursor" ? "cursor" : "codex";
+    if (value === "cursor" || value === "antigravity") return value;
+    return "codex";
 }
 
 function floatWindowTitle(product) {
-    return normalizeFloatProduct(product) === "cursor" ? "Cursor 桌面额度" : "Codex 桌面额度";
+    const kind = normalizeFloatProduct(product);
+    if (kind === "antigravity") return "Antigravity 桌面额度";
+    if (kind === "cursor") return "Cursor 桌面额度";
+    return "Codex 桌面额度";
 }
 
 function loadFloatState(userDataPath) {

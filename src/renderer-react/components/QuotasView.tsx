@@ -11,7 +11,14 @@ import {
   KeyRound
 } from 'lucide-react';
 import { AccountQuota, ProductKind } from '../types';
-import { averageRemainingCaption, avatarGradient, canRefreshQuota, cursorEmptyQuotaText, formatDateTime, hideStaleQuota, isBannedStatus, isCursorAccount, isRedundantQuotaNotice, needsHandling, planLabel, quotaBarColor, quotaBarsForAccount, quotaSummaryPercent, quotaWindowSummary, statusDotForAccount, statusTextForAccount } from '../api/desktop';
+import { antigravityQuotaFamilies, averageRemainingCaption, avatarGradient, canRefreshQuota, cursorEmptyQuotaText, formatDateTime, formatResetLine, hideStaleQuota, isAntigravityAccount, isBannedStatus, isManagedProductAccount, isRedundantQuotaNotice, needsHandling, planLabel, quotaBarColor, quotaBarsForAccount, quotaSummaryPercent, quotaWindowSummary, statusDotForAccount, statusTextForAccount } from '../api/desktop';
+import { isManagedProduct, officialClientLabel } from '../api/product-adapter';
+
+function remainingCaption(remaining: number | null, emptyText: string) {
+  if (remaining == null) return emptyText;
+  if (remaining === 0) return '已用尽';
+  return `剩余 ${remaining}%`;
+}
 
 interface QuotasProps {
   accounts: AccountQuota[];
@@ -213,9 +220,7 @@ export default function QuotasView({
           </div>
           <h3 className="text-sm font-bold text-white">还没有账号</h3>
           <p className="mt-2 max-w-xs text-xs leading-5 text-label-2">
-            {product === 'cursor'
-              ? '前往“账号管理”导入或授权 Cursor 账号，额度状态会在这里展示。'
-              : '前往“账号管理”导入或授权 Codex 账号，额度状态会在这里展示。'}
+            {`前往“账号管理”导入或授权 ${officialClientLabel(product)} 账号，额度状态会在这里展示。`}
           </p>
         </div>
       )}
@@ -225,7 +230,7 @@ export default function QuotasView({
         <AnimatePresence initial={false}>
         {gridAccounts.map((account) => {
           const isCardRefreshing = refreshingCardIds.has(account.id);
-          const cursorAccount = isCursorAccount(account) || product === 'cursor';
+          const cursorAccount = isManagedProductAccount(account) || isManagedProduct(product);
           const quotaBars = quotaBarsForAccount(account);
           const fiveHourSummary = quotaWindowSummary('fiveHour', account);
           const weeklySummary = quotaWindowSummary('weekly', account);
@@ -274,7 +279,46 @@ export default function QuotasView({
               ) : null}
 
               <div className="space-y-4 flex-1 select-none" id={`quota-progress-container-${account.id}`}>
-                {cursorAccount ? quotaBars.map((bar) => {
+                {isAntigravityAccount(account) ? (
+                  <div className="grid grid-cols-2 gap-4">
+                    {antigravityQuotaFamilies(account).map((family) => {
+                      const emptyText = cursorEmptyQuotaText(account);
+                      return (
+                        <div className="space-y-3" id={`quota-family-${family.key}-${account.id}`} key={family.key}>
+                          <span className="text-[12px] font-semibold text-label">{family.title}</span>
+                          {([
+                            { key: 'weekly', label: '周限', window: family.weekly },
+                            { key: 'fiveHour', label: '5 小时', window: family.fiveHour },
+                          ] as const).map((row) => {
+                            const remaining = row.window.remaining;
+                            const reset = formatResetLine(row.window.resetAt);
+                            return (
+                              <div className="space-y-1.5" id={`quota-${family.key}-${row.key}-row-${account.id}`} key={row.key}>
+                                <div className="flex items-center justify-between text-xs font-semibold">
+                                  <span className="text-label-2">{row.label}</span>
+                                  <span className={`tabular-nums ${remaining == null ? 'text-label-3' : 'text-label-2'}`}>
+                                    {remainingCaption(remaining, emptyText)}
+                                  </span>
+                                </div>
+                                {remaining != null ? (
+                                  <div className="h-1 bg-fill-2 rounded-full overflow-hidden relative">
+                                    <motion.div
+                                      initial={{ width: 0 }}
+                                      animate={{ width: `${remaining}%` }}
+                                      transition={{ duration: 0.8, ease: 'easeOut' }}
+                                      className={`h-full rounded-full ${quotaBarColor(remaining)}`}
+                                    />
+                                  </div>
+                                ) : null}
+                                {reset ? <span className="text-[10px] text-label-3 font-medium">{reset}</span> : null}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : cursorAccount ? quotaBars.map((bar) => {
                   const remaining = bar.remaining;
                   return (
                     <div className="space-y-1.5" id={`quota-${bar.key}-row-${account.id}`} key={bar.key}>

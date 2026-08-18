@@ -32,6 +32,12 @@ Cursor features need the official Cursor app on this PC. Install Cursor, launch
 it once, then select **重新检测** in Settings. Portable copies that are not
 registered as `Cursor.exe` may not be detected.
 
+## Antigravity is reported as not found
+
+Phase 1 only detects official **Antigravity IDE** (`Antigravity IDE.exe`).
+Install it, launch and sign in once, then select **重新检测** in Settings.
+Legacy `Antigravity.exe` is out of scope. Multiple instances are not supported.
+
 ## Adding a Codex account does not complete
 
 The Codex OAuth callback listens on local port `1455`.

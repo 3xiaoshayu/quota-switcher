@@ -21,17 +21,25 @@ const RULES: Array<{ test: RegExp; to: string }> = [
   { test: /refresh_token_invalidated|invalid_refresh_token|invalid_grant/i, to: '刷新令牌已失效，请重新授权' },
   { test: /Token 已过期且刷新失败|令牌已过期且刷新失败/i, to: '令牌已过期且刷新失败，请重新授权' },
   { test: /target account is incomplete/i, to: '该账号资料不完整，无法切换' },
+  { test: /Official Antigravity(?: IDE)? did not exit|antigravity_process_still_running/i, to: '官方 Antigravity IDE 没能退出，请手动关掉后再切' },
   { test: /did not exit/i, to: '官方 Codex 未能退出，请稍后重试' },
   { test: /crash recovery window/i, to: '官方 Codex 打开了崩溃恢复窗口，未能正常启动' },
   { test: /did not start within the expected time/i, to: '官方 Codex 未能在预期时间内启动' },
   { test: /Official Cursor was not found|cursor_app_path_not_found/i, to: '没有找到官方 Cursor，请先安装后再切号' },
+  { test: /Official Antigravity IDE was not found|antigravity_app_path_not_found/i, to: '没有找到官方 Antigravity IDE，请先安装后再切号' },
   { test: /Official Cursor did not exit|cursor_process_still_running/i, to: '官方 Cursor 没能退出，请手动关掉后再切' },
+  { test: /官方 Antigravity(?: IDE)? 还没把登录库写完|antigravity_vscdb_wal_pending/i, to: '官方 Antigravity IDE 还没把登录库写完，请再试一次' },
   { test: /还没把登录库写完|cursor_vscdb_wal_pending/i, to: '官方 Cursor 还没把登录库写完，请再试一次' },
   { test: /Could not enumerate official Cursor processes/i, to: '无法读取官方 Cursor 进程' },
+  { test: /Could not enumerate official Antigravity(?: IDE)? processes|antigravity_process_enumeration_failed/i, to: '无法读取官方 Antigravity IDE 进程' },
   { test: /Cursor refresh token/i, to: 'Cursor 刷新令牌已失效，请重新授权' },
   { test: /Cursor 会话已过期/i, to: 'Cursor 登录已失效，请重新授权' },
   { test: /Cursor session cookie|Cursor usage request failed|Cursor usage response was not JSON|cursor_session_missing|invalid_usage_json/i, to: '这次没查清 Cursor 额度，请稍后重试' },
+  { test: /Antigravity usage request failed|Antigravity usage response was not JSON|antigravity_session_missing/i, to: '这次没查清 Antigravity 额度，请稍后重试' },
+  { test: /Could not read the official Antigravity OAuth client|Official Antigravity OAuth client was not found|antigravity_oauth_client_missing/i, to: '没有找到官方 Antigravity 的授权配置，网页授权暂时不可用。' },
+  { test: /Google 登录已失效/i, to: 'Google 登录已失效，请重新授权' },
   { test: /未找到本地 Cursor|not found local Cursor|found":false/i, to: '本机没有已登录的 Cursor' },
+  { test: /本机没有已登录的 Antigravity|not found local Antigravity/i, to: '本机没有已登录的 Antigravity IDE' },
   { test: /cannot be switched into official Codex/i, to: 'Cursor 账号不能写进官方 Codex' },
   { test: /Could not enumerate official Codex processes/i, to: '无法读取官方 Codex 进程' },
   { test: /No supported official Codex OAuth login was found/i, to: '本机没有已登录的 Codex' },
@@ -55,6 +63,8 @@ const RULES: Array<{ test: RegExp; to: string }> = [
   { test: /No OAuth authorization is pending/i, to: '当前没有等待完成的授权' },
   { test: /Enter the complete OAuth callback URL/i, to: '请输入完整的授权回调地址' },
   { test: /missing code or has an invalid state/i, to: '回调地址缺少授权码或状态不正确' },
+  { test: /OAuth callback was missing a code/i, to: '回调缺少授权码，请关闭页面后重新点一次网页授权' },
+  { test: /OAuth callback state did not match/i, to: '这次授权和当前等待的对不上，请关闭页面后重新点一次网页授权' },
   { test: /(token refresh failed|quota authorization could not be repaired).{0,160}account_disabled/i, to: '刷新令牌已失效，请重新授权' },
   { test: /HTTP 40[13]\b.*\baccount_disabled\b|\baccount_disabled\b.*HTTP 40[13]\b/i, to: '账号已封号，无法继续使用。' },
   { test: /\baccount_disabled\b/i, to: '刷新令牌已失效，请重新授权' },
@@ -97,6 +107,13 @@ export function toUserMessage(raw: unknown): string {
 export function toCursorUserMessage(raw: unknown): string {
   const text = toUserMessage(raw)
   if (text.includes('已封号')) return 'Cursor 登录已失效，请重新授权'
+  return text
+}
+
+export function toAntigravityUserMessage(raw: unknown): string {
+  const text = toUserMessage(raw)
+  if (text.includes('已封号')) return 'Google 登录已失效，请重新授权'
+  if (text.includes('没查清')) return '这次没查清 Antigravity 额度，请稍后重试'
   return text
 }
 

@@ -728,3 +728,147 @@ test("cursor quota usage_limited only follows plan remaining", async (t) => {
   assert.equal(depleted.probe.status, "usage_limited");
   assert.equal(depleted.quota.plan_remaining_percentage, 0);
 });
+
+test("cursor same email different auth id stays one account", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await engine.upsertCursorAccount({
+    email: "same@example.com",
+    auth_id: "user_old",
+    access_token: cursorToken("same@example.com", "old"),
+    refresh_token: "refresh-old",
+  });
+  const second = await engine.upsertCursorAccount({
+    email: "same@example.com",
+    auth_id: "user_new",
+    access_token: cursorToken("same@example.com", "new"),
+    refresh_token: "refresh-new",
+  });
+  assert.equal(second.account.id, first.account.id);
+  assert.equal(second.updated, true);
+  assert.equal(engine.listCursorAccts().length, 1);
+  assert.equal(engine.loadCursorAcct(first.account.id).auth_id, "user_new");
+});
+
+test("cursor collapse folds same-email files and keeps current", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await engine.upsertCursorAccount({
+    email: "fold@example.com",
+    auth_id: "user_fold",
+    access_token: cursorToken("fold@example.com", "fold"),
+    refresh_token: "refresh-fold",
+  });
+  engine.setCurrentCursorAccountId(first.account.id);
+  const extra = {
+    ...first.account,
+    id: engine.buildCursorId("fold@example.com", "user_other"),
+    auth_id: "user_other",
+    created_at: first.account.created_at + 10,
+    tokens: {
+      ...first.account.tokens,
+      auth_id: "user_other",
+    },
+  };
+  engine.saveCursorAcct(extra);
+  assert.equal(engine.listCursorAccts().length, 2);
+  engine.collapseDuplicateCursorAccounts();
+  const remaining = engine.listCursorAccts();
+  assert.equal(remaining.length, 1);
+  assert.equal(remaining[0].id, first.account.id);
+  assert.equal(engine.currentCursorAcct().id, first.account.id);
+});
+
+test("cursor default exe path does not query running processes", () => {
+  const cp = require("node:child_process");
+  const runtime = require("../engine/cursor-runtime");
+  const original = cp.execFileSync;
+  let spawned = false;
+  cp.execFileSync = (...args) => {
+    spawned = true;
+    return original(...args);
+  };
+  try {
+    assert.equal(runtime.defaultCursorExePath(), runtime.firstExistingCursorExe());
+    assert.equal(spawned, false);
+  } finally {
+    cp.execFileSync = original;
+  }
+});
+
+test("cursor unknown email does not bridge two mailboxes", () => {
+  const { groupByIdentity } = require("../engine/account-identity");
+  const { sameCursorIdentity } = require("../engine/cursor-local");
+  const accounts = [
+    { id: "a", email: "alpha@example.com", auth_id: "shared-fp" },
+    { id: "b", email: "unknown", auth_id: "shared-fp" },
+    { id: "c", email: "beta@example.com", auth_id: "shared-fp" },
+  ];
+  const groups = groupByIdentity(accounts, sameCursorIdentity);
+  const groupOf = (email) => groups.find((group) => group.some((item) => item.email === email));
+  assert.notEqual(groupOf("alpha@example.com"), groupOf("beta@example.com"));
+});
+
+test("cursor upsert keeps quota_error when no new windows arrive", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertCursorAccount({
+    email: "keep-error@example.com",
+    auth_id: "user_keep",
+    access_token: cursorToken("keep-error@example.com", "old"),
+    refresh_token: "refresh-old",
+  });
+  const stored = engine.loadCursorAcct(created.account.id);
+  stored.quota_error = { code: "probe_failed", message: "这次没查清额度，请稍后重试。" };
+  stored.probe = { status: "probe_failed" };
+  engine.saveCursorAcct(stored);
+  const updated = await engine.upsertCursorAccount({
+    email: "keep-error@example.com",
+    auth_id: "user_keep",
+    access_token: cursorToken("keep-error@example.com", "new"),
+    refresh_token: "refresh-new",
+  });
+  assert.equal(updated.updated, true);
+  assert.equal(updated.account.quota_error.code, "probe_failed");
+  assert.equal(engine.loadCursorAcct(created.account.id).quota_error.code, "probe_failed");
+});
+
+test("cursor official sync copies sqlite asynchronously and shares one pass", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const kept = await engine.upsertCursorAccount({
+    email: "keep@example.com",
+    auth_id: "user_keep",
+    access_token: cursorToken("keep@example.com", "keep"),
+    refresh_token: "refresh-keep",
+  });
+  const dbPath = path.join(root, "ttl.vscdb");
+  await engine.writeCursorAuth(dbPath, {
+    "cursorAuth/accessToken": cursorToken("keep@example.com", "keep"),
+    "cursorAuth/cachedEmail": "keep@example.com",
+    "cursorAuth/authId": "user_keep",
+  });
+  engine.setCursorRuntimeForTests({ vscdbPath: () => dbPath });
+  let asyncCopies = 0;
+  let syncCopies = 0;
+  const originalAsync = fs.promises.copyFile;
+  const originalSync = fs.copyFileSync;
+  fs.promises.copyFile = async (...args) => {
+    asyncCopies += 1;
+    return originalAsync.apply(fs.promises, args);
+  };
+  fs.copyFileSync = (...args) => {
+    if (String(args[1] || "").includes("cursor-vscdb")) syncCopies += 1;
+    return originalSync(...args);
+  };
+  t.after(() => {
+    fs.promises.copyFile = originalAsync;
+    fs.copyFileSync = originalSync;
+  });
+  await Promise.all([
+    engine.syncCurrentCursorFromOfficial(),
+    engine.syncCurrentCursorFromOfficial(),
+  ]);
+  const afterPair = asyncCopies;
+  await engine.syncCurrentCursorFromOfficial();
+  assert.equal(syncCopies, 0);
+  assert.ok(afterPair >= 1);
+  assert.equal(asyncCopies, afterPair);
+  assert.equal(engine.currentCursorAcct().id, kept.account.id);
+});

@@ -1,4 +1,4 @@
-import { ProductKind } from '../types';
+import { ManagedProductKind, ProductKind } from '../types';
 
 export interface ProductDefinition {
   id: ProductKind;
@@ -13,8 +13,6 @@ export interface ProductDefinition {
   };
 }
 
-// Antigravity can be added here later as its own id, storage prefix, and
-// feature flags. Do not fold it into Codex scanning.
 export const PRODUCTS: ProductDefinition[] = [
   {
     id: 'codex',
@@ -40,6 +38,18 @@ export const PRODUCTS: ProductDefinition[] = [
       localImport: true,
     },
   },
+  {
+    id: 'antigravity',
+    label: 'Antigravity',
+    accountPrefix: 'antigravity_',
+    features: {
+      autoSwitch: false,
+      floatLens: true,
+      tokenBatch: true,
+      oauthPasteCallback: false,
+      localImport: true,
+    },
+  },
 ];
 
 export function isActiveProduct(value: string | null | undefined): value is ProductKind {
@@ -53,4 +63,8 @@ export function productById(id: ProductKind | string | null | undefined): Produc
 export function readStoredProduct(): ProductKind {
   const stored = typeof localStorage === 'undefined' ? null : localStorage.getItem('cam_product');
   return isActiveProduct(stored) ? stored : 'codex';
+}
+
+export function isManagedProduct(value: string | null | undefined): value is ManagedProductKind {
+  return value === 'cursor' || value === 'antigravity';
 }

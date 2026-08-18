@@ -21,11 +21,23 @@ import { AccountQuota, SystemSettings, DaemonState, ProductKind } from '../types
 import { lastCheckCaption, tokenStatusChip } from '../api/desktop';
 import { PRODUCTS, productById, type ProductDefinition } from '../data/products';
 
+function productListCaption(labels: string[]) {
+  if (labels.length <= 1) return labels[0] || '';
+  if (labels.length === 2) return labels.join(' 与 ');
+  return `${labels.slice(0, -1).join('、')} 与 ${labels[labels.length - 1]}`;
+}
+
 function clientDetectLine(product: ProductDefinition, settings: SystemSettings) {
   if (product.id === 'cursor') {
     return {
       ok: !!(settings.cursorDetected || settings.cursorHasLocalLogin),
       text: settings.cursorDetected ? '已安装' : settings.cursorHasLocalLogin ? '有本机登录' : '未安装',
+    };
+  }
+  if (product.id === 'antigravity') {
+    return {
+      ok: !!(settings.antigravityDetected || settings.antigravityHasLocalLogin),
+      text: settings.antigravityDetected ? '已安装' : settings.antigravityHasLocalLogin ? '有本机登录' : '未安装',
     };
   }
   return {
@@ -114,7 +126,7 @@ export default function SettingsView({
   const handleDetectClient = () => {
     if (onDetectClient) {
       setIsDetectingClient(true);
-      onAddLog('正在检测官方 Codex 和 Cursor...', 'info');
+      onAddLog(`正在检测官方 ${productListCaption(PRODUCTS.map((item) => item.label))}...`, 'info');
       onDetectClient()
         .then(() => onAddLog('官方客户端检测已更新。', 'success'))
         .catch((error) => onAddLog(error instanceof Error ? error.message : String(error), 'error'))
@@ -328,7 +340,7 @@ export default function SettingsView({
               </div>
               <div className="flex flex-col text-left min-w-0">
                 <h3 className="font-bold text-label text-sm tracking-wide font-sans">官方客户端</h3>
-                <span className="text-[11px] text-label-2 mt-0.5">检测本机 {PRODUCTS.map((item) => item.label).join(' 与 ')}</span>
+                <span className="text-[11px] text-label-2 mt-0.5">检测本机 {productListCaption(PRODUCTS.map((item) => item.label))}</span>
                 <div className="mt-2.5 flex flex-wrap gap-1.5" id="client-detect-status">
                   {PRODUCTS.map((item) => {
                     const line = clientDetectLine(item, settings);
@@ -494,7 +506,7 @@ export default function SettingsView({
               Codex Account Manager {settings.version.startsWith('v') ? settings.version : `v${settings.version}`}
             </span>
             <span className="text-xs text-label-2 mt-1">
-              本地优先的 Codex / Cursor 账号管理工具。
+              本地优先的 Codex / Cursor / Antigravity 账号管理工具。
             </span>
           </div>
         </div>

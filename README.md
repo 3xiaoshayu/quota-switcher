@@ -2,7 +2,7 @@
 
 # Codex Account Manager
 
-多个 Codex 和 Cursor 账号，一个窗口里照看。
+多个 Codex、Cursor 和 Antigravity 账号，一个窗口里照看。
 
 [![Release](https://img.shields.io/github/v/release/3xiaoshayu/codex-account-manager?include_prereleases&sort=semver&label=release)](https://github.com/3xiaoshayu/codex-account-manager/releases)
 [![CI](https://github.com/3xiaoshayu/codex-account-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/3xiaoshayu/codex-account-manager/actions/workflows/ci.yml)
@@ -24,15 +24,19 @@
 
 ## 这是什么
 
-侧栏切换 **Codex** / **Cursor**。每个账号一张卡片，剩多少额度一眼能看完。要换号时，由它去改官方客户端的登录。账号只存在这台电脑上。
+侧栏切换 **Codex** / **Cursor** / **Antigravity**。每个账号一张卡片，剩多少额度一眼能看完。要换号时，由它去改官方客户端的登录。账号只存在这台电脑上。
 
-它不会给你加额度。自动切号只换 Codex。Cursor 可以看、可以切，但不会自动换。
+它不会给你加额度。自动切号只换 Codex。Cursor 和 Antigravity 可以看、可以切，但不会自动换。
+
+Antigravity 第一期只接官方 **Antigravity IDE**：导入本机、网页授权、切号、刷额度、浮窗。不管旧版 `Antigravity.exe`，也不多开实例。Google 第三方登录有风控讨论，额度没查清时不会写成「已封号」。
 
 ## 能做什么
 
 **Codex** — 看 5 小时和周额度。可以「导入本机已登录的 Codex」，也可以「打开网页授权」。换号会写进微软商店版 Codex。额度不够时，后台按你设的线换号；关掉窗口也不会停。
 
 **Cursor** — 看套餐、Auto 和 API。可以「导入本机已登录的 Cursor」，或「打开网页授权」，写进官方 Cursor。本机当前登录的那个号，会标成当前账号。
+
+**Antigravity** — 看套餐/积分和主要模型剩余。可以「导入本机已登录的 Antigravity」，或走 Google 网页授权，写进官方 Antigravity IDE。
 
 **都有** — 关窗口进托盘，桌面上放额度镜，也能检查登录还剩多久。没有遥测，没有我们的云。
 
@@ -71,11 +75,11 @@
 
 ## 安装
 
-Windows 10 / 11（x64）。管 Codex 需要微软商店里的官方 Codex，管 Cursor 需要本机装着官方 Cursor。可以只用其中一个。
+Windows 10 / 11（x64）。管 Codex 需要微软商店里的官方 Codex，管 Cursor 需要本机装着官方 Cursor，管 Antigravity 需要本机装着官方 Antigravity IDE。可以只用其中几个。
 
 1. 打开 [Releases](https://github.com/3xiaoshayu/codex-account-manager/releases)，下载 `Codex-Account-Manager-Setup-<版本>-x64.exe`
 2. 安装并打开
-3. 侧栏选 Codex 或 Cursor，点「导入本机已登录的 Codex」或「导入本机已登录的 Cursor」，也可以「打开网页授权」
+3. 侧栏选 Codex、Cursor 或 Antigravity，点对应的「导入本机已登录」，也可以「打开网页授权」
 4. 回来就能看到卡片和额度
 
 ZIP 解压也能用，数据还是写在用户目录。Beta 请自己更新。

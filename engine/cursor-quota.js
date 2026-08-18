@@ -70,6 +70,16 @@ function buildCursorUsageCookie(account) {
   return `WorkosCursorSessionToken=${encodeURIComponent(`${workosId}::${accessToken}`)}`;
 }
 
+function cursorQuotaHasWindows(quota) {
+  if (!quota) return false;
+  if (quota.is_unlimited === true) return true;
+  return [
+    quota.plan_remaining_percentage,
+    quota.auto_remaining_percentage,
+    quota.api_remaining_percentage,
+  ].some((value) => value != null);
+}
+
 function usageLimited(quota) {
   if (!quota) return false;
   return quota.plan_remaining_percentage === 0;
@@ -146,6 +156,9 @@ async function refreshCursorQuota(account, options = {}) {
       throw Object.assign(new Error("Cursor usage response was not JSON"), { code: "invalid_usage_json" });
     }
     const quota = parseCursorUsage(payload);
+    if (!cursorQuotaHasWindows(quota)) {
+      throw Object.assign(new Error("这次没查清额度，请稍后重试。"), { code: "probe_failed" });
+    }
     account.quota = quota;
     account.quota_error = null;
     account.usage_updated_at = ts();

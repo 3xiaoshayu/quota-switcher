@@ -14,7 +14,11 @@ const {
   loadAcct,
   saveAcct,
   listAccts,
+  deleteAcct,
+  currentAcct,
 } = require("./storage");
+const { extraIdentityIds, foldDuplicateAccounts, mergePreservedQuota, pickIdentityKeeper, usableEmail } = require("./account-identity");
+const { remapSelectedAccountIds } = require("./config-manager");
 const { writeJsonAtomic } = require("./atomic-file");
 const { logInfo, logWarn, logError } = require("./logger");
 
@@ -31,6 +35,7 @@ function publicAccountResult(result) {
     email: result.account.email,
     mismatch: !!result.mismatch,
     targetAccountId: result.targetAccountId || null,
+    updated: !!result.updated,
   };
 }
 
@@ -257,12 +262,14 @@ function accountFromTokens(tokens, existing = null) {
     requires_reauth: false,
     reauth_reason: null,
     banned: false,
-    probe: null,
-    quota: existing?.quota || null,
-    quota_error: null,
-    usage_updated_at: existing?.usage_updated_at || null,
-    quota_refresh_failures: 0,
-    quota_next_retry_at: null,
+    ...mergePreservedQuota(existing, {
+      quota: tokens.quota,
+      quota_error: tokens.quota_error,
+      probe: tokens.probe,
+      usage_updated_at: tokens.usage_updated_at,
+    }),
+    quota_refresh_failures: existing?.quota_refresh_failures || 0,
+    quota_next_retry_at: existing?.quota_next_retry_at || null,
     created_at: existing?.created_at || now,
     last_used: existing?.last_used || now,
   };
@@ -273,17 +280,56 @@ function sameAccountIdentity(left, right) {
   const rightAccountId = String(right?.account_id || right?.tokens?.account_id || "");
   if (leftAccountId && rightAccountId) return leftAccountId === rightAccountId;
 
-  const leftEmail = String(left?.email || "").trim().toLowerCase();
-  const rightEmail = String(right?.email || "").trim().toLowerCase();
+  const leftEmail = usableEmail(left?.email).toLowerCase();
+  const rightEmail = usableEmail(right?.email).toLowerCase();
   return !!leftEmail && leftEmail === rightEmail;
 }
 
 // Merge into an existing record for the same identity so identity-hash
 // changes (e.g. improved organization extraction) cannot split an account.
 function findSameIdentityId(preview) {
-  if (loadAcct(preview.id)) return preview.id;
-  const existingMatch = listAccts().find((account) => sameAccountIdentity(preview, account));
-  return existingMatch?.id || preview.id;
+  const matches = listAccts().filter((account) => sameAccountIdentity(preview, account));
+  const self = loadAcct(preview.id);
+  if (self && !matches.some((account) => account.id === self.id)) matches.push(self);
+  return pickIdentityKeeper(matches, currentAcct()?.id)?.id || preview.id;
+}
+
+function persistCodexIndexEntry(account) {
+  const index = loadIdx();
+  const summary = {
+    id: account.id,
+    email: account.email,
+    plan_type: account.plan_type,
+    subscription_active_until: account.subscription_active_until,
+    created_at: account.created_at,
+    last_used: account.last_used,
+  };
+  const position = index.accounts.findIndex((item) => item.id === account.id);
+  if (position >= 0) index.accounts[position] = summary;
+  else index.accounts.push(summary);
+  saveIdx(index);
+}
+
+function collapseDuplicateCodexAccounts() {
+  return foldDuplicateAccounts(
+    listAccts(),
+    sameAccountIdentity,
+    currentAcct()?.id || null,
+    (keeper, extras) => {
+      const index = loadIdx();
+      if (extras.some((item) => item.id === index.current_account_id)) {
+        index.current_account_id = keeper.id;
+        saveIdx(index);
+      }
+      saveAcct(keeper);
+      persistCodexIndexEntry(keeper);
+      remapSelectedAccountIds(extras.map((item) => item.id), keeper.id);
+      for (const extra of extras) {
+        deleteAcct(extra.id, { allowCurrent: true });
+      }
+    },
+    (error) => logWarn(`Codex account fold skipped: ${error.message}`),
+  );
 }
 
 async function upsert(tokens, options = {}) {
@@ -292,33 +338,23 @@ async function upsert(tokens, options = {}) {
   const targetAccount = targetAccountId ? loadAcct(targetAccountId) : null;
   const mismatch = !!targetAccountId && (!targetAccount || !sameAccountIdentity(preview, targetAccount));
   const saveId = !mismatch && targetAccountId ? targetAccountId : findSameIdentityId(preview);
+  const updated = !!loadAcct(saveId);
+  const lockIds = [saveId, ...extraIdentityIds(preview, saveId, listAccts(), sameAccountIdentity)];
 
   // Hold the account lock while merging so an in-flight token refresh cannot
   // overwrite this login with a stale snapshot (and vice versa).
-  const { withAccountLock } = require("./operation-locks");
-  const account = await withAccountLock(saveId, async () => {
+  const { withAccountLocks } = require("./operation-locks");
+  const account = await withAccountLocks(lockIds, async () => {
     const existing = loadAcct(saveId);
     const merged = accountFromTokens(tokens, existing);
     merged.id = saveId;
     saveAcct(merged);
-
-    const index = loadIdx();
-    const summary = {
-      id: merged.id,
-      email: merged.email,
-      plan_type: merged.plan_type,
-      subscription_active_until: merged.subscription_active_until,
-      created_at: merged.created_at,
-      last_used: merged.last_used,
-    };
-    const position = index.accounts.findIndex((item) => item.id === merged.id);
-    if (position >= 0) index.accounts[position] = summary;
-    else index.accounts.push(summary);
-    saveIdx(index);
-    return merged;
+    persistCodexIndexEntry(merged);
+    collapseDuplicateCodexAccounts();
+    return loadAcct(saveId) || merged;
   });
 
-  return { account, mismatch, targetAccountId };
+  return { account, mismatch, targetAccountId, updated };
 }
 
 function settleActive(error, result) {
@@ -496,4 +532,6 @@ module.exports = {
   getOAuthStatus,
   setOpenUrlHandler,
   upsert,
+  sameAccountIdentity,
+  collapseDuplicateCodexAccounts,
 };

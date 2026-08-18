@@ -222,12 +222,66 @@ export const INITIAL_CURSOR_ACCOUNTS: AccountQuota[] = [
   },
 ];
 
+export const INITIAL_ANTIGRAVITY_ACCOUNTS: AccountQuota[] = [
+  {
+    id: 'antigravity_demo_1',
+    name: 'ag-main',
+    email: 'ag-main@example.com',
+    status: 'ACTIVE',
+    quotaKind: 'antigravity',
+    fiveHourQuotaRemaining: 80,
+    fiveHourQuotaTotal: 100,
+    weeklyQuotaRemaining: 64,
+    weeklyQuotaTotal: 100,
+    agCreditsRemaining: 80,
+    agCreditsLimit: 100,
+    agTier: 'Pro',
+    agGeminiWeeklyRemaining: 64,
+    agGeminiFiveHourRemaining: 80,
+    agThirdPartyWeeklyRemaining: 90,
+    agThirdPartyFiveHourRemaining: 70,
+    priority: 'High',
+    plan: 'Pro',
+    tokenValidity: '剩余 50 分钟',
+    tokenValidityPct: 70,
+    resetInFiveHour: '',
+    resetInWeekly: '',
+    isCurrent: true,
+  },
+  {
+    id: 'antigravity_demo_2',
+    name: 'ag-low',
+    email: 'ag-low@example.com',
+    status: 'LOW_QUOTA',
+    quotaKind: 'antigravity',
+    fiveHourQuotaRemaining: 12,
+    fiveHourQuotaTotal: 100,
+    weeklyQuotaRemaining: 40,
+    weeklyQuotaTotal: 100,
+    agCreditsRemaining: 12,
+    agCreditsLimit: 100,
+    agTier: 'Pro',
+    agGeminiWeeklyRemaining: 40,
+    agGeminiFiveHourRemaining: 18,
+    agThirdPartyWeeklyRemaining: 12,
+    agThirdPartyFiveHourRemaining: 8,
+    priority: 'Normal',
+    plan: 'Pro',
+    tokenValidity: '剩余 20 分钟',
+    tokenValidityPct: 30,
+    resetInFiveHour: '',
+    resetInWeekly: '',
+    warning: '额度已用尽或所剩不多。',
+  },
+];
+
 export const INITIAL_SETTINGS: SystemSettings = {
   globalSwitch: true,
   fiveHourThreshold: 10,
   weeklyThreshold: 5,
   clientDetected: true,
   cursorDetected: true,
+  antigravityDetected: true,
   updateChannel: 'Beta Channel',
   version: '0.1.0-beta.29',
   latestStatus: 'Up to date',
@@ -279,7 +333,11 @@ function remainingAsPercent(
 
 export const previewAccountsForLens = (product: ProductKind = 'codex'): AccountQuota[] => {
   const now = Date.now();
-  const source = product === 'cursor' ? INITIAL_CURSOR_ACCOUNTS : INITIAL_ACCOUNTS;
+  const source = product === 'antigravity'
+    ? INITIAL_ANTIGRAVITY_ACCOUNTS
+    : product === 'cursor'
+      ? INITIAL_CURSOR_ACCOUNTS
+      : INITIAL_ACCOUNTS;
   return source.map((account) => ({
     ...account,
     fiveHourQuotaRemaining: remainingAsPercent(
@@ -294,11 +352,11 @@ export const previewAccountsForLens = (product: ProductKind = 'codex'): AccountQ
       account.weeklyQuotaPresent,
     ),
     weeklyQuotaTotal: 100,
-    fiveHourResetAt: product === 'cursor' || account.fiveHourQuotaPresent === false
-      ? null
-      : now + (3 * 60 * 60 * 1000),
-    weeklyResetAt: product === 'cursor' || account.weeklyQuotaPresent === false
-      ? null
-      : now + (4 * 24 * 60 * 60 * 1000),
+    fiveHourResetAt: product === 'codex' && account.fiveHourQuotaPresent !== false
+      ? now + (3 * 60 * 60 * 1000)
+      : null,
+    weeklyResetAt: product === 'codex' && account.weeklyQuotaPresent !== false
+      ? now + (4 * 24 * 60 * 60 * 1000)
+      : null,
   }));
 };

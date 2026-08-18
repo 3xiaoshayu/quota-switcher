@@ -201,6 +201,7 @@ function encodeAccount(account) {
   const tokens = copy.tokens || {};
   delete copy.tokens;
   delete copy.tokens_encrypted;
+  delete copy.updated;
   return {
     ...copy,
     storage_version: 3,

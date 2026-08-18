@@ -266,7 +266,7 @@ async function adoptOfficialAuth() {
     saveIdx(index);
     writeManagedProjection(account, official.value);
     logInfo("Adopted the official Codex login as the managed current account");
-    return account;
+    return { account, updated: !!result.updated };
   });
 }
 

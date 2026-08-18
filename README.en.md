@@ -2,7 +2,7 @@
 
 # Codex Account Manager
 
-Several Codex and Cursor accounts, one Windows window.
+Several Codex, Cursor, and Antigravity accounts, one Windows window.
 
 [![Release](https://img.shields.io/github/v/release/3xiaoshayu/codex-account-manager?include_prereleases&sort=semver&label=release)](https://github.com/3xiaoshayu/codex-account-manager/releases)
 [![CI](https://github.com/3xiaoshayu/codex-account-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/3xiaoshayu/codex-account-manager/actions/workflows/ci.yml)
@@ -26,13 +26,18 @@ Several Codex and Cursor accounts, one Windows window.
 
 ## What this is
 
-The sidebar switches **Codex** / **Cursor**. One card per account, remaining
-quota at a glance. When you switch, it updates the official client's login.
-Accounts stay on this PC.
+The sidebar switches **Codex** / **Cursor** / **Antigravity**. One card per
+account, remaining quota at a glance. When you switch, it updates the official
+client's login. Accounts stay on this PC.
 
 It cannot raise anyone's limits. Auto-switch only moves between your saved
-Codex accounts. Cursor can show usage and switch by hand; it does not
-auto-switch.
+Codex accounts. Cursor and Antigravity can show usage and switch by hand; they
+do not auto-switch.
+
+Antigravity phase 1 is official **Antigravity IDE** only: import the local
+login, browser Google OAuth, switch, refresh quota, and the float window. It
+does not manage legacy `Antigravity.exe` and does not open multiple instances.
+Failed quota reads are not shown as a Codex-style banned account.
 
 ## What it does
 
@@ -40,6 +45,10 @@ auto-switch.
 sign in through the browser. A switch writes the official Microsoft Store
 Codex app. When usage is low, a background worker switches at the line you
 set. Closing the window does not stop it.
+
+**Antigravity** — plan/credits and primary model remaining. Import the local
+Antigravity IDE login or sign in with Google, then write official Antigravity
+IDE.
 
 **Cursor** — plan, Auto, and API. Import the local login or sign in through
 the browser, then write official Cursor. The official current login is marked

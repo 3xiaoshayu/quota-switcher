@@ -31,6 +31,7 @@ function publicAccountResult(result) {
     email: result.account.email,
     mismatch: !!result.mismatch,
     targetAccountId: result.targetAccountId || null,
+    updated: !!result.updated,
   };
 }
 

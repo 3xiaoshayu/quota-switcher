@@ -36,10 +36,27 @@ const CURSOR_TOKEN_URL = "https://api2.cursor.sh/oauth/token";
 const CURSOR_USAGE_URL = "https://cursor.com/api/usage-summary";
 const CURSOR_META_URL = "https://api2.cursor.sh/aiserver.v1.AuthService/GetUserMeta";
 const CURSOR_OAUTH_PENDING_PATH = path.join(DATA_DIR, "cursor_oauth_pending.json");
+const ANTIGRAVITY_ACCTS_DIR = path.join(DATA_DIR, "antigravity-accounts");
+const ANTIGRAVITY_IDX_PATH = path.join(DATA_DIR, "antigravity-accounts.json");
+const ANTIGRAVITY_OAUTH_PENDING_PATH = path.join(DATA_DIR, "antigravity_oauth_pending.json");
+const ANTIGRAVITY_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
+const ANTIGRAVITY_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const ANTIGRAVITY_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo";
+const ANTIGRAVITY_CLOUDCODE_URL = "https://cloudcode-pa.googleapis.com";
+const ANTIGRAVITY_CLOUDCODE_DAILY_URL = "https://daily-cloudcode-pa.googleapis.com";
+const ANTIGRAVITY_CALLBACK_PORT = Number(process.env.ANTIGRAVITY_MANAGER_CALLBACK_PORT || 51121);
+const ANTIGRAVITY_SCOPES = [
+  "https://www.googleapis.com/auth/cloud-platform",
+  "https://www.googleapis.com/auth/userinfo.email",
+  "https://www.googleapis.com/auth/userinfo.profile",
+  "https://www.googleapis.com/auth/cclog",
+  "https://www.googleapis.com/auth/experimentsandconfigs",
+].join(" ");
 
 const PRODUCT_ACCOUNT_PREFIXES = {
   codex: "codex_",
   cursor: "cursor_",
+  antigravity: "antigravity_",
 };
 
 const CODEX_AUMID = "OpenAI.Codex_2p2nqsd0c76g0!App";
@@ -51,5 +68,8 @@ module.exports = {
   CURSOR_ACCTS_DIR, CURSOR_IDX_PATH, CURSOR_CLIENT_ID, CURSOR_LOGIN_URL,
   CURSOR_POLL_URL, CURSOR_TOKEN_URL, CURSOR_USAGE_URL, CURSOR_META_URL,
   CURSOR_OAUTH_PENDING_PATH, PRODUCT_ACCOUNT_PREFIXES,
+  ANTIGRAVITY_ACCTS_DIR, ANTIGRAVITY_IDX_PATH, ANTIGRAVITY_OAUTH_PENDING_PATH,
+  ANTIGRAVITY_AUTH_URL, ANTIGRAVITY_TOKEN_URL, ANTIGRAVITY_USERINFO_URL,
+  ANTIGRAVITY_CLOUDCODE_URL, ANTIGRAVITY_CLOUDCODE_DAILY_URL, ANTIGRAVITY_CALLBACK_PORT, ANTIGRAVITY_SCOPES,
   CODEX_AUMID, resolveCodexHomeFromEnv,
 };

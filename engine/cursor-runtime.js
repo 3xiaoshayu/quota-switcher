@@ -87,7 +87,7 @@ async function findRunningCursorExeAsync() {
 }
 
 function defaultCursorExePath() {
-  return firstExistingCursorExe() || findRunningCursorExe();
+  return firstExistingCursorExe();
 }
 
 function processPath(item) {

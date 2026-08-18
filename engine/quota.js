@@ -300,6 +300,15 @@ async function probeUsageOnly(acct, options = {}) {
   }
 }
 
+function codexQuotaHasWindows(quota) {
+  const q = quota && typeof quota === "object" ? quota : null;
+  if (!q) return false;
+  if (q.hourly_window_present && (q.hourly_remaining_percentage != null || q.hourly_percentage != null)) return true;
+  if (q.weekly_window_present && (q.weekly_remaining_percentage != null || q.weekly_percentage != null)) return true;
+  return q.hourly_remaining_percentage != null || q.weekly_remaining_percentage != null
+    || q.hourly_percentage != null || q.weekly_percentage != null;
+}
+
 async function refreshQuota(acct, options = {}) {
   const force = options.force !== false;
   const now = ts();
@@ -310,6 +319,9 @@ async function refreshQuota(acct, options = {}) {
   }
   try {
     const q = await module.exports.fetchQuotaWithTokenRepair(acct);
+    if (!codexQuotaHasWindows(q)) {
+      throw Object.assign(new Error("这次没查清额度，请稍后重试。"), { code: "probe_failed" });
+    }
     applyProbeToAccount(acct, {
       status: "active",
       error_code: null,

@@ -16,11 +16,17 @@ import {
   MoreHorizontal
 } from 'lucide-react';
 import { AccountQuota, DesktopAuthState, DesktopOAuthStatus, ProductKind } from '../types';
-import { avatarGradient, needsHandling, planLabel, quotaBarColor, quotaBarsForAccount, quotaSummaryPercent, quotaWindowSummary, canRefreshQuota, canSwitchAccount, cursorEmptyQuotaText, isBannedStatus, isCursorAccount, isRedundantQuotaNotice, statusDotForAccount, statusTextForAccount } from '../api/desktop';
-import { toCursorUserMessage, toUserMessage } from '../api/user-messages';
+import { antigravityQuotaFamilies, avatarGradient, needsHandling, planLabel, quotaBarColor, quotaBarsForAccount, quotaSummaryPercent, quotaWindowSummary, canRefreshQuota, canSwitchAccount, cursorEmptyQuotaText, formatResetLine, isAntigravityAccount, isBannedStatus, isManagedProductAccount, isRedundantQuotaNotice, statusDotForAccount, statusTextForAccount } from '../api/desktop';
+import { isManagedProduct, officialClientLabel, productLabel, toProductUserMessage } from '../api/product-adapter';
 
 function formMessage(kind: ProductKind | undefined, raw: unknown) {
-  return kind === 'cursor' ? toCursorUserMessage(raw) : toUserMessage(raw);
+  return toProductUserMessage(kind || 'codex', raw);
+}
+
+function remainingCaption(remaining: number | null, emptyText: string) {
+  if (remaining == null) return emptyText;
+  if (remaining === 0) return '已用尽';
+  return `${remaining}%`;
 }
 
 interface AccountsProps {
@@ -286,7 +292,9 @@ export default function AccountsView({
   };
 
   const currentAccount = accounts.find(account => account.isCurrent);
-  const productName = product === 'cursor' ? 'Cursor' : 'Codex';
+  const productName = productLabel(product);
+  const clientName = officialClientLabel(product);
+  const oauthLoginName = product === 'antigravity' ? 'Google' : clientName;
   const accountsMeta = accounts.length === 0
     ? `还没有 ${productName} 账号`
     : currentAccount
@@ -417,7 +425,7 @@ export default function AccountsView({
           <h3 className="text-sm font-bold text-white">{accounts.length === 0 ? '还没有账号' : '没有匹配的账号'}</h3>
           <p className="mt-2 max-w-xs text-xs leading-5 text-label-2">
             {accounts.length === 0
-              ? `导入本机 ${product === 'cursor' ? 'Cursor' : 'Codex'}，或打开网页授权添加第一个账号。`
+              ? `导入本机 ${clientName}，或打开网页授权添加第一个账号。`
               : '换个关键词，或切换筛选条件再试试。'}
           </p>
           {accounts.length === 0 && (
@@ -442,7 +450,7 @@ export default function AccountsView({
         <AnimatePresence initial={false}>
         {filteredAccounts.map((account) => {
           const isCardRefreshing = refreshingIds.has(account.id);
-          const cursorAccount = isCursorAccount(account) || product === 'cursor';
+          const cursorAccount = isManagedProductAccount(account) || isManagedProduct(product);
           const quotaBars = quotaBarsForAccount(account);
           const fiveHourSummary = quotaWindowSummary('fiveHour', account);
           const weeklySummary = quotaWindowSummary('weekly', account);
@@ -459,8 +467,8 @@ export default function AccountsView({
               authState?.status === 'aligned' &&
               authState.currentAccountId === account.id
             );
-          const switchTitle = cursorAccount ? '将此账号写入官方 Cursor 并登录' : '将此账号写入官方 Codex 并登录';
-          const currentActionLabel = cursorAccount ? '重新登录 Cursor' : '重新登录 Codex';
+          const switchTitle = `将此账号写入官方 ${clientName} 并登录`;
+          const currentActionLabel = `重新登录 ${clientName}`;
           const color5h = quotaBarColor(fiveHourPct);
           const colorWeekly = quotaBarColor(weeklyPct);
 
@@ -536,7 +544,44 @@ export default function AccountsView({
                 </div>
 
                 <div className="grid gap-4 select-none grid-cols-2" id={`quotas-boxes-grid-${account.id}`}>
-                  {quotaBars.map((bar, index) => {
+                  {isAntigravityAccount(account) ? antigravityQuotaFamilies(account).map((family) => {
+                    const emptyText = cursorEmptyQuotaText(account);
+                    const weeklyText = remainingCaption(family.weekly.remaining, emptyText);
+                    const fiveHourText = remainingCaption(family.fiveHour.remaining, emptyText);
+                    const weeklyReset = formatResetLine(family.weekly.resetAt);
+                    const fiveHourReset = formatResetLine(family.fiveHour.resetAt);
+                    return (
+                      <div className="bg-fill rounded-xl p-4 text-left" id={`quota-box-${family.key}-${account.id}`} key={family.key}>
+                        <span className="text-[12px] font-medium text-label-3">{family.title}</span>
+                        <div className="mt-3 space-y-3">
+                          <div>
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[11px] text-label-3">周限</span>
+                              <span className={`text-[13px] font-semibold tabular-nums ${family.weekly.remaining == null ? 'text-label-3' : 'text-label'}`}>{weeklyText}</span>
+                            </div>
+                            {family.weekly.remaining != null ? (
+                              <div className="h-1 bg-[#3a3a3c] rounded-full overflow-hidden mt-2">
+                                <div className={`h-full rounded-full ${quotaBarColor(family.weekly.remaining)}`} style={{ width: `${family.weekly.remaining}%` }} />
+                              </div>
+                            ) : null}
+                            {weeklyReset ? <span className="text-[10px] text-label-3 mt-1.5 block font-medium">{weeklyReset}</span> : null}
+                          </div>
+                          <div>
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[11px] text-label-3">5 小时</span>
+                              <span className={`text-[13px] font-semibold tabular-nums ${family.fiveHour.remaining == null ? 'text-label-3' : 'text-label'}`}>{fiveHourText}</span>
+                            </div>
+                            {family.fiveHour.remaining != null ? (
+                              <div className="h-1 bg-[#3a3a3c] rounded-full overflow-hidden mt-2">
+                                <div className={`h-full rounded-full ${quotaBarColor(family.fiveHour.remaining)}`} style={{ width: `${family.fiveHour.remaining}%` }} />
+                              </div>
+                            ) : null}
+                            {fiveHourReset ? <span className="text-[10px] text-label-3 mt-1.5 block font-medium">{fiveHourReset}</span> : null}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }) : quotaBars.map((bar, index) => {
                     const remaining = bar.remaining;
                     const color = quotaBarColor(remaining);
                     const wide = quotaBars.length > 2 && index === 0;
@@ -799,11 +844,11 @@ export default function AccountsView({
               </h3>
               <p className="text-xs text-label-2 mb-6 font-sans">
                 {reauthorizeId
-                  ? (product === 'cursor'
-                    ? '将打开 Cursor 登录页。请用这个账号登录，完成后会自动回来。'
+                  ? (isManagedProduct(product)
+                    ? `将打开 ${oauthLoginName} 登录页。请用这个账号登录，完成后会自动回来。`
                     : '将打开网页授权。请用这个账号登录，完成后会自动回来。')
                   : onImportLocal
-                    ? `可以先导入本机已登录的 ${product === 'cursor' ? 'Cursor' : 'Codex'}，也可以打开网页授权添加账号。`
+                    ? `可以先导入本机已登录的 ${clientName}，也可以打开网页授权添加账号。`
                     : oauthMode
                       ? '将打开网页授权，邮箱、套餐与凭证会在授权完成后自动读取。'
                       : '填写邮箱和展示名称后即可加入管理列表。'}
@@ -877,19 +922,19 @@ export default function AccountsView({
                     className="w-full py-3 bg-fill hover:bg-fill-2 text-label rounded-xl text-xs font-semibold cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
                     id="btn-import-local-account"
                   >
-                    {`导入本机 ${product === 'cursor' ? 'Cursor' : 'Codex'}`}
+                    {`导入本机 ${clientName}`}
                   </button>
                 )}
 
-                {isAdding && oauthMode && product === 'cursor' && (
+                {isAdding && oauthMode && isManagedProduct(product) && (
                   <div className="space-y-3 rounded-xl border border-sep bg-fill p-4">
                     <p className="text-xs text-label-2">
-                      请在浏览器完成 Cursor 登录。完成后会自动回来，不用粘贴回调地址。
+                      请在浏览器完成 {oauthLoginName} 登录。完成后会自动回来，不用粘贴回调地址。
                     </p>
                   </div>
                 )}
 
-                {isAdding && oauthMode && product !== 'cursor' && (
+                {isAdding && oauthMode && !isManagedProduct(product) && (
                   <div className="space-y-3 rounded-xl border border-sep bg-fill p-4">
                     <p className="text-xs text-label-2">
                       请在浏览器完成授权，完成后会自动回来。如果浏览器没有自动跳回，请粘贴完整的回调网址。

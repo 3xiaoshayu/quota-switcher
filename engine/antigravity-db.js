@@ -1,20 +1,15 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { renameWithRetry } = require("./atomic-file");
-
 const { cleanupSqliteCopy, copySqliteForRead, readSqliteBytes } = require("./sqlite-copy");
+const {
+  decodeItemTableValue,
+  decodeOauthTokenTopic,
+  encodeItemTableValue,
+  encodeOauthTokenTopic,
+} = require("./antigravity-proto");
 
-const AUTH_KEYS = [
-  "cursorAuth/accessToken",
-  "cursorAuth/refreshToken",
-  "cursorAuth/cachedEmail",
-  "cursorAuth/authId",
-  "cursorAuth/stripeMembershipType",
-  "cursorAuth/stripeSubscriptionStatus",
-  "cursorAuth/cachedSignUpType",
-  "cursor.accessToken",
-  "cursor.email",
-];
+const OAUTH_ITEM_KEY = "antigravityUnifiedStateSync.oauthToken";
 
 let sqlModulePromise = null;
 
@@ -32,12 +27,11 @@ async function loadSql() {
   return sqlModulePromise;
 }
 
-function asText(value) {
-  if (value == null) return "";
-  if (typeof value === "string") return value;
-  if (Buffer.isBuffer(value)) return value.toString("utf8");
-  if (value instanceof Uint8Array) return Buffer.from(value).toString("utf8");
-  return String(value);
+function asBuffer(value) {
+  if (value == null) return null;
+  if (Buffer.isBuffer(value)) return value;
+  if (value instanceof Uint8Array) return Buffer.from(value);
+  return Buffer.from(String(value), "utf8");
 }
 
 function hasPendingWal(dbPath) {
@@ -59,7 +53,7 @@ async function waitForWalToClear(dbPath, timeoutMs, sleep) {
 }
 
 async function copySqliteForReadLocal(dbPath) {
-  return copySqliteForRead(dbPath, "cursor-vscdb");
+  return copySqliteForRead(dbPath, "antigravity-vscdb");
 }
 
 function cleanupCopy(copyPath) {
@@ -72,34 +66,48 @@ async function openDatabase(filePath) {
   return new SQL.Database(bytes);
 }
 
-async function readCursorAuth(dbPath, options = {}) {
+function readItemValue(db, key) {
+  const statement = db.prepare("SELECT value FROM ItemTable WHERE key = ?");
+  statement.bind([key]);
+  let value = null;
+  if (statement.step()) {
+    const row = statement.getAsObject();
+    value = asBuffer(row.value);
+  }
+  statement.free();
+  return value;
+}
+
+async function readAntigravityAuth(dbPath, options = {}) {
   if (!dbPath || !fs.existsSync(dbPath)) return null;
   const copyFirst = options.copyFirst !== false;
   const target = copyFirst ? await copySqliteForReadLocal(dbPath) : dbPath;
   let db = null;
   try {
     db = await openDatabase(target);
-    const placeholders = AUTH_KEYS.map(() => "?").join(", ");
-    const statement = db.prepare(`SELECT key, value FROM ItemTable WHERE key IN (${placeholders})`);
-    statement.bind(AUTH_KEYS);
-    const values = {};
-    while (statement.step()) {
-      const row = statement.getAsObject();
-      values[String(row.key)] = asText(row.value).trim();
-    }
-    statement.free();
-    return values;
+    const raw = readItemValue(db, OAUTH_ITEM_KEY);
+    if (!raw) return null;
+    const topic = decodeItemTableValue(raw);
+    const token = decodeOauthTokenTopic(topic);
+    if (!token) return null;
+    return {
+      access_token: token.access_token,
+      refresh_token: token.refresh_token,
+      token_type: token.token_type,
+      expiry_timestamp: token.expiry_timestamp,
+      is_gcp_tos: token.is_gcp_tos,
+    };
   } finally {
     try { db?.close(); } catch {}
     if (copyFirst) cleanupCopy(target);
   }
 }
 
-async function writeCursorAuth(dbPath, values) {
-  if (!dbPath) throw new Error("Cursor state.vscdb path is required");
+async function writeAntigravityAuth(dbPath, token) {
+  if (!dbPath) throw new Error("Antigravity state.vscdb path is required");
   if (hasPendingWal(dbPath)) {
-    const error = new Error("官方 Cursor 还没把登录库写完，请再试一次");
-    error.code = "cursor_vscdb_wal_pending";
+    const error = new Error("官方 Antigravity IDE 还没把登录库写完，请再试一次");
+    error.code = "antigravity_vscdb_wal_pending";
     throw error;
   }
   const existed = fs.existsSync(dbPath);
@@ -111,16 +119,13 @@ async function writeCursorAuth(dbPath, values) {
       db = new SQL.Database();
     }
     db.run("CREATE TABLE IF NOT EXISTS ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)");
-    const incoming = values || {};
+    const existingRaw = existed ? readItemValue(db, OAUTH_ITEM_KEY) : null;
+    const existingTopic = existingRaw ? decodeItemTableValue(existingRaw) : null;
+    const topic = encodeOauthTokenTopic(token, existingTopic);
+    const encoded = encodeItemTableValue(topic);
     const insert = db.prepare("INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)");
-    const remove = db.prepare("DELETE FROM ItemTable WHERE key = ?");
-    for (const key of AUTH_KEYS) {
-      const value = incoming[key];
-      if (value == null || value === "") remove.run([key]);
-      else insert.run([key, String(value)]);
-    }
+    insert.run([OAUTH_ITEM_KEY, encoded]);
     insert.free();
-    remove.free();
     const exported = Buffer.from(db.export());
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
     const tempPath = `${dbPath}.tmp.${process.pid}.${Date.now()}`;
@@ -161,11 +166,11 @@ function restoreVscdbSnapshot(snapshot) {
 }
 
 module.exports = {
-  AUTH_KEYS,
+  OAUTH_ITEM_KEY,
   hasPendingWal,
   waitForWalToClear,
-  readCursorAuth,
-  writeCursorAuth,
+  readAntigravityAuth,
+  writeAntigravityAuth,
   snapshotVscdb,
   restoreVscdbSnapshot,
   copySqliteForRead: copySqliteForReadLocal,

@@ -817,6 +817,8 @@ test("startup float product prefers the sidebar product when it has a current ac
   assert.equal(pickStartupFloatProduct("cursor", [current], [other]), "codex");
   assert.equal(pickStartupFloatProduct("cursor", [other], [other]), null);
   assert.equal(pickStartupFloatProduct("codex", [], []), null);
+  assert.equal(pickStartupFloatProduct("antigravity", [other], [other], [current]), "antigravity");
+  assert.equal(pickStartupFloatProduct("codex", [other], [other], [current]), "antigravity");
 });
 
 test("last check caption avoids repeating 检查 when no run has happened", () => {
@@ -1304,4 +1306,290 @@ test("token validity bar uses update or create time when jwt iat is missing", ()
     },
   }, null, config);
   assert.ok(codex.tokenValidityPct > 45 && codex.tokenValidityPct < 55);
+});
+
+test("antigravity quota cards and float use official family labels", () => {
+  const {
+    mapAntigravityAccountForUi,
+    quotaBarsForAccount,
+    lensQuotaWindows,
+    quotaHero,
+    hideStaleQuota,
+  } = loadDesktopExports(bridge());
+  const mapped = mapAntigravityAccountForUi({
+    id: "antigravity_one",
+    email: "ag@example.com",
+    plan_type: "PRO",
+    quota: {
+      tier: "PRO",
+      gemini_weekly_remaining: 64,
+      gemini_five_hour_remaining: 80,
+      third_party_weekly_remaining: 90,
+      third_party_five_hour_remaining: 25,
+    },
+    token_status: {
+      accessAvailable: true,
+      refreshAvailable: true,
+      expired: false,
+      timeLeft: 1800,
+    },
+  }, null);
+  assert.equal(mapped.plan, "Pro");
+  assert.equal(mapped.priority, "High");
+  assert.equal(mapped.status, "ACTIVE");
+  assert.equal(mapped.quotaKind, "antigravity");
+  const bars = quotaBarsForAccount(mapped);
+  assert.equal(bars.length, 4);
+  assert.equal(bars[0].label, "Gemini 周限");
+  assert.equal(bars[1].label, "Gemini 5 小时");
+  assert.equal(bars[2].label, "Claude 与 GPT 周限");
+  assert.equal(bars[3].label, "Claude 与 GPT 5 小时");
+  assert.equal(bars[0].remaining, 64);
+  assert.equal(bars[1].remaining, 80);
+  assert.equal(bars[2].remaining, 90);
+  assert.equal(bars[3].remaining, 25);
+  const windows = lensQuotaWindows(mapped);
+  assert.equal(windows.outerLabel, "Gemini");
+  assert.equal(windows.innerLabel, "Claude 与 GPT");
+  assert.equal(windows.outer, 64);
+  assert.equal(windows.inner, 25);
+  assert.equal(quotaHero(mapped).label, "Claude 与 GPT 5 小时");
+  const failed = lensQuotaWindows({
+    id: "antigravity_one",
+    quotaKind: "antigravity",
+    status: "SYNC_FAILED",
+    leftoverAccessUsable: true,
+  });
+  assert.equal(failed.outer, null);
+  assert.equal(failed.outerLabel, "Gemini");
+  assert.equal(failed.innerLabel, "Claude 与 GPT");
+  const expired = mapAntigravityAccountForUi({
+    id: "antigravity_expired",
+    email: "ag@example.com",
+    quota: {
+      gemini_weekly_remaining: 100,
+      gemini_five_hour_remaining: 100,
+      third_party_weekly_remaining: 100,
+      third_party_five_hour_remaining: 100,
+    },
+    token_status: {
+      accessAvailable: false,
+      refreshAvailable: true,
+      expired: true,
+      timeLeft: -10,
+    },
+  }, null);
+  assert.equal(expired.tokenExpired, true);
+  assert.equal(hideStaleQuota(expired), true);
+  assert.equal(quotaBarsForAccount(expired).every((bar) => bar.remaining == null), true);
+});
+
+test("antigravity plans map to Free Pro Ultra without Standard", () => {
+  const { mapAntigravityAccountForUi, planLabel } = loadDesktopExports(bridge());
+  const free = mapAntigravityAccountForUi({
+    id: "antigravity_free",
+    email: "ag@example.com",
+    plan_type: "free-tier",
+    quota: { tier: "free-tier" },
+  }, null);
+  assert.equal(free.plan, "Free");
+  assert.equal(free.priority, "Normal");
+  assert.equal(planLabel(free.plan), "免费");
+  assert.notEqual(planLabel(free.plan), "Standard 套餐");
+
+  const pro = mapAntigravityAccountForUi({
+    id: "antigravity_pro",
+    email: "ag@example.com",
+    plan_type: "PRO",
+  }, null);
+  assert.equal(pro.plan, "Pro");
+  assert.equal(planLabel(pro.plan), "Pro 套餐");
+
+  const ultra = mapAntigravityAccountForUi({
+    id: "antigravity_ultra",
+    email: "ag@example.com",
+    plan_type: "ULTRA",
+    quota: { tier: "ULTRA" },
+  }, null);
+  assert.equal(ultra.plan, "Ultra");
+  assert.equal(ultra.priority, "High");
+  assert.equal(planLabel(ultra.plan), "Ultra 套餐");
+
+  const empty = mapAntigravityAccountForUi({
+    id: "antigravity_empty_plan",
+    email: "ag@example.com",
+  }, null);
+  assert.equal(empty.plan, "");
+  assert.equal(planLabel(empty.plan), "套餐");
+});
+
+test("antigravity user messages never show 已封号 or Cursor quota copy", () => {
+  const { toAntigravityUserMessage, toUserMessage } = loadUserMessages();
+  assert.equal(toAntigravityUserMessage("HTTP 401 account_disabled"), "Google 登录已失效，请重新授权");
+  assert.equal(toAntigravityUserMessage("invalid_usage_json"), "这次没查清 Antigravity 额度，请稍后重试");
+  assert.equal(toAntigravityUserMessage("Antigravity usage request failed: HTTP 500"), "这次没查清 Antigravity 额度，请稍后重试");
+  assert.equal(toAntigravityUserMessage("Official Antigravity IDE did not exit: 4242"), "官方 Antigravity IDE 没能退出，请手动关掉后再切");
+  assert.equal(toAntigravityUserMessage("官方 Antigravity IDE 还没把登录库写完，请再试一次"), "官方 Antigravity IDE 还没把登录库写完，请再试一次");
+  assert.equal(toAntigravityUserMessage("Could not enumerate official Antigravity IDE processes: timeout"), "无法读取官方 Antigravity IDE 进程");
+  assert.equal(toAntigravityUserMessage("Could not read the official Antigravity OAuth client"), "没有找到官方 Antigravity 的授权配置，网页授权暂时不可用。");
+  assert.equal(toAntigravityUserMessage("antigravity_oauth_client_missing"), "没有找到官方 Antigravity 的授权配置，网页授权暂时不可用。");
+  assert.equal(toAntigravityUserMessage("OAuth callback was missing a code"), "回调缺少授权码，请关闭页面后重新点一次网页授权");
+  assert.equal(toAntigravityUserMessage("OAuth callback state did not match"), "这次授权和当前等待的对不上，请关闭页面后重新点一次网页授权");
+  assert.equal(toUserMessage("Cursor usage request failed: HTTP 500"), "这次没查清 Cursor 额度，请稍后重试");
+});
+
+test("antigravity unknown email is shown as 未读取邮箱", () => {
+  const { mapAntigravityAccountForUi } = loadDesktopExports(bridge());
+  const mapped = mapAntigravityAccountForUi({
+    id: "antigravity_unknown",
+    email: "unknown",
+    plan_type: "FREE",
+    token_status: {
+      accessAvailable: true,
+      refreshAvailable: true,
+      expired: false,
+      timeLeft: 1800,
+    },
+  }, null);
+  assert.equal(mapped.email, "未读取邮箱");
+  assert.equal(mapped.name, "未读取邮箱");
+  const empty = mapAntigravityAccountForUi({
+    id: "antigravity_empty",
+    email: "",
+    plan_type: "PRO",
+  }, null);
+  assert.equal(empty.email, "未读取邮箱");
+  assert.equal(empty.status, "READY");
+  const failed = mapAntigravityAccountForUi({
+    id: "antigravity_failed",
+    email: "unknown",
+    quota_error: { message: "Antigravity usage request failed: HTTP 500" },
+  }, null);
+  assert.equal(failed.status, "SYNC_FAILED");
+  assert.equal(failed.warning, "这次没查清 Antigravity 额度，请稍后重试。");
+  assert.doesNotMatch(failed.warning, /已封号/);
+});
+
+test("first-paint cursor and antigravity lists can skip official sync", async () => {
+  const calls = [];
+  const { desktopApi } = loadDesktopExports(bridge({
+    listCursorAccounts: (options) => {
+      calls.push(["cursor:list", options]);
+      return ok([]);
+    },
+    getCurrentCursorAccount: (options) => {
+      calls.push(["cursor:current", options]);
+      return ok(null);
+    },
+    getCursorOAuthStatus: () => ok({ status: "idle", pending: false }),
+    getCursorStatus: () => ok({ installed: true }),
+    listAntigravityAccounts: (options) => {
+      calls.push(["antigravity:list", options]);
+      return ok([]);
+    },
+    getCurrentAntigravityAccount: (options) => {
+      calls.push(["antigravity:current", options]);
+      return ok(null);
+    },
+    getAntigravityOAuthStatus: () => ok({ status: "idle", pending: false }),
+    getAntigravityStatus: () => ok({ installed: true }),
+  }));
+  await desktopApi.loadCursorState({ skipOfficialSync: true });
+  await desktopApi.loadAntigravityState({ skipOfficialSync: true });
+  assert.deepEqual(calls.find((item) => item[0] === "cursor:list")[1], { skipOfficialSync: true });
+  assert.deepEqual(calls.find((item) => item[0] === "cursor:current")[1], { skipOfficialSync: true });
+  assert.deepEqual(calls.find((item) => item[0] === "antigravity:list")[1], { skipOfficialSync: true });
+  assert.deepEqual(calls.find((item) => item[0] === "antigravity:current")[1], { skipOfficialSync: true });
+});
+
+function loadProductAdapter() {
+  const desktop = loadDesktopExports(bridge());
+  const userMessages = loadUserMessages();
+  const productsPath = path.join(projectRoot, "src", "renderer-react", "data", "products.ts");
+  const productsModule = { exports: {} };
+  vm.runInNewContext(compileTs(productsPath), {
+    module: productsModule,
+    exports: productsModule.exports,
+    localStorage: { getItem() { return null; } },
+  }, { filename: productsPath });
+  const adapterPath = path.join(projectRoot, "src", "renderer-react", "api", "product-adapter.ts");
+  const module = { exports: {} };
+  vm.runInNewContext(compileTs(adapterPath), {
+    module,
+    exports: module.exports,
+    require(id) {
+      if (id === "./desktop") return desktop;
+      if (id === "./user-messages") return userMessages;
+      if (id === "../data/products") return productsModule.exports;
+      if (id === "../types") return {};
+      throw new Error(`Unexpected require: ${id}`);
+    },
+  }, { filename: adapterPath });
+  return { ...module.exports, ...desktop };
+}
+
+test("oauth and import copy distinguish updated existing accounts", () => {
+  const { oauthFinishedCopy, importAccountCopy } = loadProductAdapter();
+  assert.equal(oauthFinishedCopy({
+    product: "antigravity",
+    email: "same@example.com",
+    updated: true,
+  }), "已更新已有账号 same@example.com");
+  assert.equal(oauthFinishedCopy({
+    product: "cursor",
+    email: "new@example.com",
+  }), "已添加 new@example.com");
+  assert.equal(oauthFinishedCopy({
+    product: "codex",
+    email: "old@example.com",
+    isReauth: true,
+  }), "已重新授权 old@example.com");
+  assert.equal(importAccountCopy({
+    product: "antigravity",
+    email: "same@example.com",
+    updated: true,
+  }).message, "已更新已有账号 same@example.com");
+  assert.equal(importAccountCopy({
+    product: "cursor",
+    email: "fresh@example.com",
+  }).message, "已导入 fresh@example.com");
+});
+
+test("antigravity empty refresh maps to sync-failed not 暂无此项", () => {
+  const { mapAntigravityAccountForUi, cursorEmptyQuotaText, accountHasVisibleQuota } = loadDesktopExports(bridge());
+  const mapped = mapAntigravityAccountForUi({
+    id: "antigravity_empty",
+    email: "empty@example.com",
+    quota: {},
+    quota_error: { code: "probe_failed", message: "这次没查清额度，请稍后重试。" },
+    token_status: {
+      accessAvailable: true,
+      refreshAvailable: true,
+      expired: false,
+      timeLeft: 2400,
+    },
+  }, null);
+  assert.equal(mapped.status, "SYNC_FAILED");
+  assert.equal(cursorEmptyQuotaText(mapped), "这次没查清");
+  assert.equal(accountHasVisibleQuota(mapped), false);
+});
+
+test("antigravity preserved quota_error after upsert stays 这次没查清", () => {
+  const { mapAntigravityAccountForUi, cursorEmptyQuotaText } = loadDesktopExports(bridge());
+  const mapped = mapAntigravityAccountForUi({
+    id: "antigravity_reimport",
+    email: "keep@example.com",
+    quota: null,
+    quota_error: { code: "probe_failed", message: "这次没查清额度，请稍后重试。" },
+    probe: { status: "probe_failed" },
+    token_status: {
+      accessAvailable: true,
+      refreshAvailable: true,
+      expired: false,
+      timeLeft: 2400,
+    },
+  }, null);
+  assert.equal(mapped.status, "SYNC_FAILED");
+  assert.equal(cursorEmptyQuotaText(mapped), "这次没查清");
+  assert.notEqual(cursorEmptyQuotaText(mapped), "暂无此项");
 });

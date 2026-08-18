@@ -83,6 +83,10 @@ body.float-lens-root,
   letter-spacing: 0.2em;
 }
 
+.float-lens-mark.is-short {
+  letter-spacing: 0.12em;
+}
+
 .float-lens-tools {
   display: flex;
   gap: 2px;

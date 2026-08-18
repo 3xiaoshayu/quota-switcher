@@ -10,6 +10,7 @@ const {
   redactProxyUrl,
   socksFallbackUrl,
   syncProxyEnv,
+  readWindowsInternetProxy,
 } = require("../engine/proxy-resolve");
 
 test("PAC SOCKS rules use remote DNS", () => {
@@ -135,5 +136,29 @@ test("syncProxyEnv does not grow NO_PROXY on repeated quota refreshes", () => {
       if (value == null) delete process.env[key];
       else process.env[key] = value;
     }
+  }
+});
+
+test("port scan still covers the known local proxy ports", () => {
+  const list = collectCandidatesFromHints({});
+  const ports = list.filter((item) => item.source === "portScan").map((item) => item.proxyUrl);
+  for (const port of [10808, 10809, 7890, 7897, 7891, 7892, 6152, 20171, 1080, 2080]) {
+    assert.ok(ports.includes(`http://127.0.0.1:${port}`), String(port));
+  }
+});
+
+test("readWindowsInternetProxy does not block on execFileSync", async () => {
+  const cp = require("node:child_process");
+  const originalSync = cp.execFileSync;
+  let syncCalled = false;
+  cp.execFileSync = (...args) => {
+    syncCalled = true;
+    return originalSync(...args);
+  };
+  try {
+    await require("../engine/proxy-resolve").readWindowsInternetProxy();
+    assert.equal(syncCalled, false);
+  } finally {
+    cp.execFileSync = originalSync;
   }
 });

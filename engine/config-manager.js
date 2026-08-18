@@ -74,4 +74,29 @@ function saveAutoSwitchCfg(cfg) {
   writeJsonAtomic(CFG_FILE, normalizeAutoSwitchCfg(cfg));
 }
 
-module.exports = { loadAutoSwitchCfg, saveAutoSwitchCfg, DEFAULT_AUTO_SWITCH_CFG, normalizeSyncIntervalMinutes };
+function remapSelectedAccountIds(fromIds, toId) {
+  const extras = [...new Set((fromIds || []).filter(Boolean).map(String))];
+  const keeper = String(toId || "").trim();
+  if (!extras.length || !keeper) return false;
+  const extraSet = new Set(extras);
+  const cfg = loadAutoSwitchCfg();
+  const next = [];
+  const seen = new Set();
+  let changed = false;
+  for (const id of cfg.selected_account_ids) {
+    const mapped = extraSet.has(id) ? keeper : id;
+    if (mapped !== id) changed = true;
+    if (seen.has(mapped)) {
+      changed = true;
+      continue;
+    }
+    seen.add(mapped);
+    next.push(mapped);
+  }
+  if (!changed) return false;
+  cfg.selected_account_ids = next;
+  saveAutoSwitchCfg(cfg);
+  return true;
+}
+
+module.exports = { loadAutoSwitchCfg, saveAutoSwitchCfg, remapSelectedAccountIds, DEFAULT_AUTO_SWITCH_CFG, normalizeSyncIntervalMinutes };

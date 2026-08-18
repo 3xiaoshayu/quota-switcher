@@ -1,4 +1,5 @@
-export type ProductKind = 'codex' | 'cursor';
+export type ProductKind = 'codex' | 'cursor' | 'antigravity';
+export type ManagedProductKind = 'cursor' | 'antigravity';
 
 export interface AccountQuota {
   id: string;
@@ -16,8 +17,23 @@ export interface AccountQuota {
   cursorPlanRemaining?: number | null;
   cursorAutoRemaining?: number | null;
   cursorApiRemaining?: number | null;
+  agCreditsRemaining?: number | null;
+  agCreditsLimit?: number | null;
+  agTier?: string | null;
+  agPrimaryModel?: string | null;
+  agPrimaryRemaining?: number | null;
+  agSecondaryModel?: string | null;
+  agSecondaryRemaining?: number | null;
+  agGeminiWeeklyRemaining?: number | null;
+  agGeminiWeeklyResetAt?: string | number | null;
+  agGeminiFiveHourRemaining?: number | null;
+  agGeminiFiveHourResetAt?: string | number | null;
+  agThirdPartyWeeklyRemaining?: number | null;
+  agThirdPartyWeeklyResetAt?: string | number | null;
+  agThirdPartyFiveHourRemaining?: number | null;
+  agThirdPartyFiveHourResetAt?: string | number | null;
   priority: 'High' | 'Normal' | 'Low' | 'Ultra';
-  plan: 'Plus' | 'Pro' | 'Go' | 'Standard' | 'Enterprise' | 'Team';
+  plan: 'Plus' | 'Pro' | 'Go' | 'Standard' | 'Enterprise' | 'Team' | 'Free' | 'Ultra';
   tokenValidity: string;
   tokenValidityPct?: number | null;
   resetInFiveHour: string;
@@ -64,6 +80,7 @@ export interface DesktopOAuthStatus {
     accountId?: string;
     email?: string;
     mismatch?: boolean;
+    updated?: boolean;
     targetAccountId?: string | null;
   } | null;
 }
@@ -83,6 +100,8 @@ export interface SystemSettings {
   clientDetected: boolean;
   cursorDetected?: boolean;
   cursorHasLocalLogin?: boolean;
+  antigravityDetected?: boolean;
+  antigravityHasLocalLogin?: boolean;
   updateChannel: 'Beta Channel' | 'Stable Channel' | 'Developer Channel';
   version: string;
   latestStatus: string;
@@ -128,6 +147,15 @@ export interface DesktopCodexStatus {
 }
 
 export interface DesktopCursorStatus {
+  installed?: boolean;
+  exePath?: string | null;
+  vscdbPath?: string | null;
+  vscdbPresent?: boolean;
+  source?: string;
+  message?: string;
+}
+
+export interface DesktopAntigravityStatus {
   installed?: boolean;
   exePath?: string | null;
   vscdbPath?: string | null;

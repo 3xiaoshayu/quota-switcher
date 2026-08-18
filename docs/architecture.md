@@ -21,24 +21,25 @@ for a later public-release security pass.
 
 ## Products
 
-The sidebar selects one product at a time. Codex and Cursor keep separate
-account indexes, OAuth flows, quota parsers, and switch transactions.
+The sidebar selects one product at a time. Codex, Cursor, and Antigravity keep
+separate account indexes, OAuth flows, quota parsers, and switch transactions.
 
 | Product | Storage prefix | Official write target | Auto-switch |
 | --- | --- | --- | --- |
 | Codex | `codex_` | `%USERPROFILE%\.codex\auth.json` | Yes |
 | Cursor | `cursor_` | `%APPDATA%\Cursor\User\globalStorage\state.vscdb` | No |
+| Antigravity | `antigravity_` | `%APPDATA%\Antigravity IDE\User\globalStorage\state.vscdb` | No |
 
-Codex storage rejects `cursor_` ids. Cursor status never uses the Codex ban
-bucket. A later product can be added as its own id and prefix; it must not be
-folded into Codex scanning.
+Codex storage rejects `cursor_` and `antigravity_` ids. Cursor and Antigravity
+status never use the Codex ban bucket. Phase 1 Antigravity is official IDE
+only: no legacy `Antigravity.exe`, no multi-instance, no daemon auto-switch.
 
 ## Startup flow
 
 1. Electron initializes a Windows DPAPI-backed secret codec.
 2. The main process registers IPC handlers around the domain engine.
 3. The BrowserWindow loads the isolated preload bridge and renderer.
-4. The renderer loads Codex accounts, Cursor accounts, current identities,
+4. The renderer loads Codex, Cursor, and Antigravity accounts, current identities,
    daemon state, configuration, official-client detection, and update status.
 5. Missing or stale quota data is refreshed sequentially in the background.
    Codex quota auto-sync keeps running while the Cursor tab is open.
@@ -144,6 +145,7 @@ When adding an operation, update all three surfaces and run `npm run audit:ui`.
 ```text
 engine/                 Domain logic and local persistence
 engine/cursor-*.js      Cursor import, OAuth, quota, token, and switch
+engine/antigravity-*.js Antigravity import, Google OAuth, quota, token, and switch
 engine/proxy-resolve.js Outbound proxy discovery
 resources/              Windows application icon
 scripts/                Release and contract verification

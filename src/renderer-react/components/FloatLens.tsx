@@ -8,7 +8,7 @@ import {
   canRefreshQuota,
   canSwitchAccount,
   hideStaleQuota,
-  isCursorAccount,
+  isManagedProductAccount,
   lensQuotaWindows,
   planLabel,
   quotaHero,
@@ -16,9 +16,9 @@ import {
   statusTextForAccount,
   STATUS_TEXT,
 } from '../api/desktop';
-import { toCursorUserMessage, toUserMessage } from '../api/user-messages';
+import { floatChromeMark, isManagedProduct, officialClientLabel, productActions, productLabel as productName, toProductUserMessage } from '../api/product-adapter';
 import { previewAccountsForLens } from '../data/mockData';
-import { productById, readStoredProduct } from '../data/products';
+import { isActiveProduct, readStoredProduct } from '../data/products';
 import './FloatLens.css';
 
 const RING_SIZE = 188;
@@ -45,13 +45,13 @@ function arcOffset(radius: number, percent: number | null): number {
 }
 
 function blockedRefreshText(account: AccountQuota): string {
-  return account.status === 'BANNED' && !isCursorAccount(account)
+  return account.status === 'BANNED' && !isManagedProductAccount(account)
     ? '账号已封号，无法刷新额度'
     : '该账号需要重新授权后才能刷新额度';
 }
 
 function blockedSwitchText(account: AccountQuota): string {
-  return account.status === 'BANNED' && !isCursorAccount(account)
+  return account.status === 'BANNED' && !isManagedProductAccount(account)
     ? '账号已封号，无法切换'
     : '该账号需要重新授权后才能切换';
 }
@@ -61,7 +61,7 @@ function planBadgeText(account: AccountQuota): string {
 }
 
 function statusBadgeText(account: AccountQuota): string | null {
-  if (account.status === 'BANNED' && !isCursorAccount(account)) return STATUS_TEXT.BANNED;
+  if (account.status === 'BANNED' && !isManagedProductAccount(account)) return STATUS_TEXT.BANNED;
   if (account.status === 'SUSPENDED' || account.status === 'LIMITED' || account.status === 'SYNC_FAILED' || account.status === 'EXPIRED') {
     return statusTextForAccount(account);
   }
@@ -70,7 +70,7 @@ function statusBadgeText(account: AccountQuota): string | null {
 
 function accountErrorText(product: ProductKind, error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
-  return product === 'cursor' ? toCursorUserMessage(raw) : toUserMessage(raw);
+  return toProductUserMessage(product, raw);
 }
 
 function tokenRemainLine(text: string | null | undefined): string {
@@ -210,7 +210,9 @@ export default function FloatLens() {
   const shellRef = useRef<HTMLDivElement | null>(null);
   const productRef = useRef(product);
   productRef.current = product;
-  const productLabel = productById(product).label;
+  const productLabel = productName(product);
+  const chromeMark = floatChromeMark(product);
+  const actions = productActions();
 
   const applyProduct = useCallback((next: ProductKind) => {
     setProduct((current) => (current === next ? current : next));
@@ -276,13 +278,13 @@ export default function FloatLens() {
     if (!hasDesktopBridge()) return undefined;
     void desktopApi.getFloatState().then((state) => {
       setAlwaysOnTop(!!state?.alwaysOnTop);
-      if (state?.product === 'cursor' || state?.product === 'codex') applyProduct(state.product);
+      if (isActiveProduct(state?.product)) applyProduct(state.product);
     }).catch(() => {});
     return desktopApi.subscribe({
       onDaemonTick: () => { void loadAccounts(); },
       onAutoSwitch: () => { void loadAccounts(); },
       onFloatProduct: (next) => {
-        if (next === 'cursor' || next === 'codex') applyProduct(next);
+        if (isActiveProduct(next)) applyProduct(next);
       },
     });
   }, [applyProduct, loadAccounts]);
@@ -291,6 +293,14 @@ export default function FloatLens() {
     () => accounts.find((account) => account.id === viewedId) || accounts[0] || null,
     [accounts, viewedId],
   );
+
+  useEffect(() => {
+    if (product !== 'antigravity' || viewed) return undefined;
+    const timer = window.setInterval(() => {
+      void loadAccounts();
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [product, viewed, loadAccounts]);
   const viewedIndex = viewed ? accounts.findIndex((account) => account.id === viewed.id) : -1;
   const hero = quotaHero(viewed);
   const windows = lensQuotaWindows(viewed);
@@ -304,13 +314,13 @@ export default function FloatLens() {
   const innerReset = formatResetLine(windows.innerReset);
   const outerReset = formatResetLine(windows.outerReset);
   const resetLine = hero.key === 'fiveHour' ? innerReset : (outerReset || innerReset);
-  const tokenLine = product === 'cursor' && !hideQuota && !hideFailedQuota ? tokenRemainLine(viewed?.tokenValidity) : '';
+  const tokenLine = isManagedProduct(product) && !hideQuota && !hideFailedQuota ? tokenRemainLine(viewed?.tokenValidity) : '';
   const caption = tokenLine || (!hideQuota && !hideFailedQuota ? resetLine : '');
-  const showPair = product === 'cursor' && !hideQuota;
+  const showPair = isManagedProduct(product) && !hideQuota;
   const planBadge = viewed ? planBadgeText(viewed) : '';
   const statusBadge = viewed ? statusBadgeText(viewed) : null;
   const emptyKind = hideQuota
-    ? (viewed?.status === 'BANNED' && !isCursorAccount(viewed) ? 'banned' : 'reauth')
+    ? (viewed?.status === 'BANNED' && !isManagedProductAccount(viewed) ? 'banned' : 'reauth')
     : null;
 
   const moveAccount = useCallback((step: -1 | 1) => {
@@ -346,14 +356,13 @@ export default function FloatLens() {
       return;
     }
     const kind = productRef.current;
-    if ((kind === 'cursor') !== isCursorAccount(viewed)) return;
+    if (isManagedProduct(kind) !== isManagedProductAccount(viewed)) return;
     if (!silent) {
       setRefreshing(true);
       setErrorText(null);
     }
     try {
-      if (kind === 'cursor') await desktopApi.refreshCursorQuota(viewed.id, true);
-      else await desktopApi.refreshQuota(viewed.id, true);
+      await actions.refreshQuota(kind, viewed.id, true);
     } catch (error) {
       if (!silent && productRef.current === kind) {
         setErrorText(accountErrorText(kind, error));
@@ -367,7 +376,7 @@ export default function FloatLens() {
             if (next?.status === 'SUSPENDED') {
               setErrorText(next.warning || '该账号需要重新授权后才能刷新额度');
             } else if (next?.status === 'SYNC_FAILED') {
-              setErrorText(next.warning || (kind === 'cursor' ? '这次没查清额度，请稍后重试。' : '额度同步失败，请稍后重试。'));
+              setErrorText(next.warning || (isManagedProduct(kind) ? '这次没查清额度，请稍后重试。' : '额度同步失败，请稍后重试。'));
             }
           }
         }
@@ -422,12 +431,11 @@ export default function FloatLens() {
       return;
     }
     const kind = productRef.current;
-    if ((kind === 'cursor') !== isCursorAccount(viewed)) return;
+    if (isManagedProduct(kind) !== isManagedProductAccount(viewed)) return;
     setSwitching(true);
     setErrorText(null);
     try {
-      if (kind === 'cursor') await desktopApi.switchCursorAccount(viewed.id);
-      else await desktopApi.switchAccount(viewed.id);
+      await actions.switchAccount(kind, viewed.id);
       setConfirmSwitch(false);
       if (productRef.current === kind) await loadAccounts();
     } catch (error) {
@@ -452,10 +460,10 @@ export default function FloatLens() {
       <div className="float-lens-shell app-drag" ref={shellRef}>
         <div className="float-lens-chrome">
           <div
-            className={`float-lens-mark${productLabel.length > 5 ? ' is-long' : ''}`}
+            className={`float-lens-mark${chromeMark.length > 5 ? ' is-long' : chromeMark.length <= 2 ? ' is-short' : ''}`}
             id="float-lens-mark"
           >
-            {productLabel.toUpperCase()}
+            {chromeMark}
           </div>
           <div className="float-lens-tools">
             <button
@@ -562,7 +570,7 @@ export default function FloatLens() {
                 <div className="float-lens-action">
                   {confirmSwitch ? (
                     <div className="float-lens-confirm" id="float-lens-confirm">
-                      <p>会关掉正在运行的官方 Cursor，再写入此账号。未保存的编辑可能会丢。</p>
+                      <p>会关掉正在运行的官方 {officialClientLabel(product)}，再写入此账号。未保存的编辑可能会丢。</p>
                       <div className="float-lens-confirm-row">
                         <button
                           className="float-lens-confirm-cancel"
@@ -591,7 +599,7 @@ export default function FloatLens() {
                       disabled={switching || !canSwitchAccount(viewed)}
                       title={!canSwitchAccount(viewed) ? blockedSwitchText(viewed) : '切到此账号'}
                       onClick={() => {
-                        if (product === 'cursor') {
+                        if (isManagedProduct(product)) {
                           setConfirmSwitch(true);
                           return;
                         }
@@ -602,7 +610,7 @@ export default function FloatLens() {
                       {switching
                         ? '切换中...'
                         : !canSwitchAccount(viewed)
-                          ? (viewed.status === 'BANNED' && !isCursorAccount(viewed) ? '账号已封号，无法切换' : '需重新授权后才能切换')
+                          ? (viewed.status === 'BANNED' && !isManagedProductAccount(viewed) ? '账号已封号，无法切换' : '需重新授权后才能切换')
                           : '切到此账号'}
                     </button>
                   )}
