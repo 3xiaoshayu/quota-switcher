@@ -32,9 +32,78 @@ function freshEngine(t) {
     engine.setSwitchRuntimeForTests();
     engine.setCursorRuntimeForTests();
     engine.setAntigravityRuntimeForTests();
+    engine.setSqliteNativeTimingForTests();
     fs.rmSync(root, { recursive: true, force: true });
   });
   return { engine, root };
+}
+
+function itemText(dbPath, key) {
+  const { asText, getItem, withVscdbSync } = require("../engine/sqlite-native");
+  return withVscdbSync(dbPath, { readOnly: true }, (db) => {
+    const value = getItem(db, key);
+    return value == null ? null : asText(value);
+  });
+}
+
+function putItem(dbPath, key, value) {
+  const { setItem, withVscdbSync } = require("../engine/sqlite-native");
+  withVscdbSync(dbPath, {}, (db) => {
+    setItem(db, key, value);
+  });
+}
+
+function holdExclusive(dbPath) {
+  const { DatabaseSync } = require("node:sqlite");
+  const locker = new DatabaseSync(dbPath, { timeout: 0 });
+  locker.exec("BEGIN EXCLUSIVE");
+  return locker;
+}
+
+function readEngineLogs(root) {
+  const logDir = path.join(root, "data", "logs");
+  if (!fs.existsSync(logDir)) return "";
+  return fs.readdirSync(logDir)
+    .filter((name) => /^app-\d{4}-\d{2}-\d{2}\.log$/.test(name))
+    .map((name) => fs.readFileSync(path.join(logDir, name), "utf8"))
+    .join("\n");
+}
+
+function applyImmediateLockTimeout(engine) {
+  engine.setSqliteNativeTimingForTests({
+    waitWritableTimeoutMs: 0,
+    waitWritableOpenTimeoutMs: 0,
+    switchTimeoutMs: 50,
+    writeTimeoutMs: 50,
+    busyRetries: 0,
+  });
+}
+
+function installVscdbIoSpies(t, dbPath) {
+  const needle = path.normalize(dbPath);
+  const originalRead = fs.readFileSync;
+  const originalCopy = fs.copyFileSync;
+  const originalCopyAsync = fs.promises.copyFile;
+  const hits = { read: 0, copy: 0 };
+  const matches = (target) => path.normalize(String(target || "")) === needle;
+  fs.readFileSync = function(target, ...rest) {
+    if (matches(target)) hits.read += 1;
+    return originalRead.call(this, target, ...rest);
+  };
+  fs.copyFileSync = function(src, dest, ...rest) {
+    if (matches(src) || matches(dest)) hits.copy += 1;
+    return originalCopy.call(this, src, dest, ...rest);
+  };
+  fs.promises.copyFile = async function(src, dest, ...rest) {
+    if (matches(src) || matches(dest)) hits.copy += 1;
+    return originalCopyAsync.call(this, src, dest, ...rest);
+  };
+  t.after(() => {
+    fs.readFileSync = originalRead;
+    fs.copyFileSync = originalCopy;
+    fs.promises.copyFile = originalCopyAsync;
+  });
+  return hits;
 }
 
 test("antigravity protobuf token topic round-trips access and refresh", () => {
@@ -175,12 +244,8 @@ test("antigravity switch writes only the oauth token item key", async (t) => {
   assert.equal(stored.access_token, "ya29.next");
   assert.equal(stored.refresh_token, "1//next");
   const { OAUTH_ITEM_KEY } = require("../engine/antigravity-db");
-  const initSqlJs = require("sql.js");
-  const SQL = await initSqlJs({ locateFile: (file) => path.join(path.dirname(require.resolve("sql.js")), file) });
-  const db = new SQL.Database(fs.readFileSync(dbPath));
-  const row = db.exec("SELECT key FROM ItemTable");
-  const keys = row[0].values.map((item) => item[0]);
-  db.close();
+  const { listKeys, withVscdbSync } = require("../engine/sqlite-native");
+  const keys = withVscdbSync(dbPath, { readOnly: true }, (db) => listKeys(db));
   assert.deepEqual(keys, [OAUTH_ITEM_KEY]);
   assert.equal(engine.currentAntigravityAcct().id, created.account.id);
 });
@@ -295,14 +360,14 @@ test("antigravity import keeps existing email when official store has no mailbox
   assert.equal(engine.listAntigravityAccts().length, 1);
 });
 
-test("antigravity list sync does not guess current while WAL is pending", async (t) => {
+test("antigravity official sync follows vscdb even when WAL is pending", async (t) => {
   const { engine, root } = freshEngine(t);
   const first = await engine.upsertAntigravityAccount({
     email: "keep@example.com",
     access_token: "ya29.keep",
     refresh_token: "1//keep",
   });
-  await engine.upsertAntigravityAccount({
+  const other = await engine.upsertAntigravityAccount({
     email: "other@example.com",
     access_token: "ya29.other",
     refresh_token: "1//other",
@@ -321,9 +386,14 @@ test("antigravity list sync does not guess current while WAL is pending", async 
     access_token: "ya29.other",
     refresh_token: "1//other",
   });
-  fs.writeFileSync(`${dbPath}-wal`, Buffer.alloc(64, 3));
-  const current = await engine.syncCurrentAntigravityFromOfficial();
-  assert.equal(current.id, first.account.id);
+  const { DatabaseSync } = require("node:sqlite");
+  const holder = new DatabaseSync(dbPath);
+  holder.exec("PRAGMA journal_mode=WAL");
+  holder.exec("PRAGMA wal_autocheckpoint=0");
+  holder.prepare("INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)").run("keep/extra", "x");
+  const current = await engine.syncCurrentAntigravityFromOfficial({ force: true });
+  assert.equal(current.id, other.account.id);
+  holder.close();
 });
 
 test("antigravity local import marks stalePossible when WAL is pending", async (t) => {
@@ -333,7 +403,11 @@ test("antigravity local import marks stalePossible when WAL is pending", async (
     access_token: "ya29.stale",
     refresh_token: "1//stale",
   });
-  fs.writeFileSync(`${dbPath}-wal`, Buffer.alloc(64, 3));
+  const { DatabaseSync } = require("node:sqlite");
+  const holder = new DatabaseSync(dbPath);
+  holder.exec("PRAGMA journal_mode=WAL");
+  holder.exec("PRAGMA wal_autocheckpoint=0");
+  holder.prepare("INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)").run("keep/extra", "x");
   engine.setAntigravityRuntimeForTests({
     vscdbPath: () => dbPath,
     execFile: async () => ({ stdout: "" }),
@@ -346,10 +420,32 @@ test("antigravity local import marks stalePossible when WAL is pending", async (
   });
   const imported = await engine.importLocalAntigravityAccount();
   assert.equal(imported.found, true);
+  assert.equal(engine.hasPendingWal(dbPath), true);
   assert.equal(imported.stalePossible, true);
+  holder.close();
 });
 
-test("antigravity switch refuses to overwrite vscdb while WAL is pending", async (t) => {
+test("antigravity auth write keeps unrelated vscdb rows and does not copy the file", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "ag-state.vscdb");
+  await engine.writeAntigravityAuth(dbPath, {
+    access_token: "ya29.old",
+    refresh_token: "1//old",
+  });
+  putItem(dbPath, "keep/extra", "stay");
+  const hits = installVscdbIoSpies(t, dbPath);
+  await engine.writeAntigravityAuth(dbPath, {
+    access_token: "ya29.next",
+    refresh_token: "1//next",
+  });
+  const stored = await engine.readAntigravityAuth(dbPath, { copyFirst: false });
+  assert.equal(stored.access_token, "ya29.next");
+  assert.equal(itemText(dbPath, "keep/extra"), "stay");
+  assert.equal(hits.read, 0);
+  assert.equal(hits.copy, 0);
+});
+
+test("antigravity switch writes the oauth row even when a leftover WAL file is present", async (t) => {
   const { engine, root } = freshEngine(t);
   const dbPath = path.join(root, "ag-wal.vscdb");
   const exePath = path.join(root, "Antigravity IDE.exe");
@@ -358,12 +454,50 @@ test("antigravity switch refuses to overwrite vscdb while WAL is pending", async
     access_token: "ya29.old",
     refresh_token: "1//old",
   });
-  const before = fs.readFileSync(dbPath);
-  fs.writeFileSync(`${dbPath}-wal`, Buffer.alloc(64, 7));
+  putItem(dbPath, "keep/extra", "stay");
+  const { DatabaseSync } = require("node:sqlite");
+  const walHolder = new DatabaseSync(dbPath);
+  walHolder.exec("PRAGMA journal_mode=WAL");
+  walHolder.exec("PRAGMA wal_autocheckpoint=0");
+  walHolder.prepare("INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)").run("keep/wal", "pending");
+  walHolder.close();
   const created = await engine.upsertAntigravityAccount({
     email: "wal@example.com",
     access_token: "ya29.wal",
     refresh_token: "1//wal",
+  });
+  engine.setAntigravityRuntimeForTests({
+    vscdbPath: () => dbPath,
+    exePath: () => exePath,
+    listProcesses: async () => [],
+    launch: () => true,
+    sleep: async () => {},
+  });
+  await engine.doAntigravitySwitch(engine.loadAntigravityAcct(created.account.id));
+  const stored = await engine.readAntigravityAuth(dbPath, { copyFirst: false });
+  assert.equal(stored.access_token, "ya29.wal");
+  assert.equal(itemText(dbPath, "keep/extra"), "stay");
+});
+
+test("antigravity switch refuses a locked vscdb and relaunches without rolling back", async (t) => {
+  const { engine, root } = freshEngine(t);
+  applyImmediateLockTimeout(engine);
+  const dbPath = path.join(root, "ag-busy.vscdb");
+  const exePath = path.join(root, "Antigravity IDE.exe");
+  fs.writeFileSync(exePath, "fake");
+  await engine.writeAntigravityAuth(dbPath, {
+    access_token: "ya29.old",
+    refresh_token: "1//old",
+  });
+  const locker = holdExclusive(dbPath);
+  t.after(() => {
+    try { locker.exec("ROLLBACK"); } catch {}
+    try { locker.close(); } catch {}
+  });
+  const created = await engine.upsertAntigravityAccount({
+    email: "busy@example.com",
+    access_token: "ya29.busy",
+    refresh_token: "1//busy",
   });
   const launched = [];
   engine.setAntigravityRuntimeForTests({
@@ -375,9 +509,56 @@ test("antigravity switch refuses to overwrite vscdb while WAL is pending", async
   });
   await assert.rejects(
     () => engine.doAntigravitySwitch(engine.loadAntigravityAcct(created.account.id)),
-    /登录库写完/,
+    /占用登录库/,
   );
-  assert.deepEqual(fs.readFileSync(dbPath), before);
+  try { locker.exec("ROLLBACK"); } catch {}
+  try { locker.close(); } catch {}
+  const stored = await engine.readAntigravityAuth(dbPath, { copyFirst: false });
+  assert.equal(stored.access_token, "ya29.old");
+  assert.deepEqual(launched, [exePath]);
+  assert.match(readEngineLogs(root), /Antigravity switch failed/);
+  assert.match(readEngineLogs(root), /antigravity_vscdb_busy|占用登录库/);
+});
+
+test("antigravity switch waits for a brief vscdb lock then writes", async (t) => {
+  const { engine, root } = freshEngine(t);
+  engine.setSqliteNativeTimingForTests({
+    waitWritableTimeoutMs: 2000,
+    waitWritablePollMs: 40,
+    waitWritableOpenTimeoutMs: 0,
+  });
+  const dbPath = path.join(root, "ag-wait.vscdb");
+  const exePath = path.join(root, "Antigravity IDE.exe");
+  fs.writeFileSync(exePath, "fake");
+  await engine.writeAntigravityAuth(dbPath, {
+    access_token: "ya29.old",
+    refresh_token: "1//old",
+  });
+  const locker = holdExclusive(dbPath);
+  t.after(() => {
+    try { locker.exec("ROLLBACK"); } catch {}
+    try { locker.close(); } catch {}
+  });
+  const created = await engine.upsertAntigravityAccount({
+    email: "wait@example.com",
+    access_token: "ya29.wait",
+    refresh_token: "1//wait",
+  });
+  const launched = [];
+  engine.setAntigravityRuntimeForTests({
+    vscdbPath: () => dbPath,
+    exePath: () => exePath,
+    listProcesses: async () => [],
+    launch: (target) => launched.push(target),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  });
+  setTimeout(() => {
+    try { locker.exec("ROLLBACK"); } catch {}
+    try { locker.close(); } catch {}
+  }, 120);
+  await engine.doAntigravitySwitch(engine.loadAntigravityAcct(created.account.id));
+  const stored = await engine.readAntigravityAuth(dbPath, { copyFirst: false });
+  assert.equal(stored.access_token, "ya29.wait");
   assert.deepEqual(launched, [exePath]);
 });
 
@@ -804,7 +985,7 @@ test("antigravity upsert keeps quota_error when no new windows arrive", async (t
   assert.equal(engine.loadAntigravityAcct(created.account.id).quota_error.code, "probe_failed");
 });
 
-test("antigravity official sync copies sqlite asynchronously and shares one pass", async (t) => {
+test("antigravity official sync reads sqlite in place and shares one pass", async (t) => {
   const { engine, root } = freshEngine(t);
   const kept = await engine.upsertAntigravityAccount({
     email: "keep@example.com",
@@ -817,8 +998,12 @@ test("antigravity official sync copies sqlite asynchronously and shares one pass
     refresh_token: "1//keep",
     expiry_timestamp: 99,
   });
+  let pathReads = 0;
   engine.setAntigravityRuntimeForTests({
-    vscdbPath: () => dbPath,
+    vscdbPath: () => {
+      pathReads += 1;
+      return dbPath;
+    },
     execFile: async () => ({ stdout: "" }),
     httpJson: async (url) => {
       if (String(url).includes("userinfo")) {
@@ -827,31 +1012,15 @@ test("antigravity official sync copies sqlite asynchronously and shares one pass
       throw new Error(`unexpected url ${url}`);
     },
   });
-  let asyncCopies = 0;
-  let syncCopies = 0;
-  const originalAsync = fs.promises.copyFile;
-  const originalSync = fs.copyFileSync;
-  fs.promises.copyFile = async (...args) => {
-    asyncCopies += 1;
-    return originalAsync.apply(fs.promises, args);
-  };
-  fs.copyFileSync = (...args) => {
-    if (String(args[1] || "").includes("antigravity-vscdb")) syncCopies += 1;
-    return originalSync(...args);
-  };
-  t.after(() => {
-    fs.promises.copyFile = originalAsync;
-    fs.copyFileSync = originalSync;
-  });
+  const hits = installVscdbIoSpies(t, dbPath);
   await Promise.all([
     engine.syncCurrentAntigravityFromOfficial(),
     engine.syncCurrentAntigravityFromOfficial(),
   ]);
-  const afterPair = asyncCopies;
   await engine.syncCurrentAntigravityFromOfficial();
-  assert.equal(syncCopies, 0);
-  assert.ok(afterPair >= 1);
-  assert.equal(asyncCopies, afterPair);
+  assert.equal(pathReads, 1);
+  assert.equal(hits.read, 0);
+  assert.equal(hits.copy, 0);
   assert.equal(engine.currentAntigravityAcct().id, kept.account.id);
 });
 

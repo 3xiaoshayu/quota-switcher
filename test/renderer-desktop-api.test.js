@@ -1024,7 +1024,9 @@ test("user-facing messages stay in Chinese", () => {
   assert.equal(toUserMessage("Cursor session cookie could not be built"), "这次没查清 Cursor 额度，请稍后重试");
   assert.equal(toUserMessage("Cursor usage response was not JSON"), "这次没查清 Cursor 额度，请稍后重试");
   assert.equal(toUserMessage("invalid_usage_json"), "这次没查清 Cursor 额度，请稍后重试");
-  assert.equal(toUserMessage("官方 Cursor 还没把登录库写完，请再试一次"), "官方 Cursor 还没把登录库写完，请再试一次");
+  assert.equal(toUserMessage("官方 Cursor 还在占用登录库，请关掉后再切"), "官方 Cursor 还在占用登录库，请关掉后再切");
+  assert.equal(toUserMessage("cursor_vscdb_busy"), "官方 Cursor 还在占用登录库，请关掉后再切");
+  assert.equal(toUserMessage("SQLITE_BUSY: database is locked"), "登录库正被占用，请关掉后再试");
   const { toCursorUserMessage } = module.exports;
   assert.equal(toCursorUserMessage("HTTP 401 account_disabled"), "Cursor 登录已失效，请重新授权");
   assert.equal(toCursorUserMessage("HTTP 401 account_deactivated"), "Cursor 登录已失效，请重新授权");
@@ -1429,7 +1431,8 @@ test("antigravity user messages never show 已封号 or Cursor quota copy", () =
   assert.equal(toAntigravityUserMessage("invalid_usage_json"), "这次没查清 Antigravity 额度，请稍后重试");
   assert.equal(toAntigravityUserMessage("Antigravity usage request failed: HTTP 500"), "这次没查清 Antigravity 额度，请稍后重试");
   assert.equal(toAntigravityUserMessage("Official Antigravity IDE did not exit: 4242"), "官方 Antigravity IDE 没能退出，请手动关掉后再切");
-  assert.equal(toAntigravityUserMessage("官方 Antigravity IDE 还没把登录库写完，请再试一次"), "官方 Antigravity IDE 还没把登录库写完，请再试一次");
+  assert.equal(toAntigravityUserMessage("官方 Antigravity IDE 还在占用登录库，请关掉后再切"), "官方 Antigravity IDE 还在占用登录库，请关掉后再切");
+  assert.equal(toAntigravityUserMessage("antigravity_vscdb_busy"), "官方 Antigravity IDE 还在占用登录库，请关掉后再切");
   assert.equal(toAntigravityUserMessage("Could not enumerate official Antigravity IDE processes: timeout"), "无法读取官方 Antigravity IDE 进程");
   assert.equal(toAntigravityUserMessage("Could not read the official Antigravity OAuth client"), "没有找到官方 Antigravity 的授权配置，网页授权暂时不可用。");
   assert.equal(toAntigravityUserMessage("antigravity_oauth_client_missing"), "没有找到官方 Antigravity 的授权配置，网页授权暂时不可用。");

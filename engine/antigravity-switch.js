@@ -1,7 +1,7 @@
 const fs = require("node:fs");
 const { ts } = require("./crypto-utils");
 const { getAntigravityRuntime } = require("./antigravity-runtime");
-const { writeAntigravityAuth, snapshotVscdb, restoreVscdbSnapshot, waitForWalToClear } = require("./antigravity-db");
+const { writeAntigravityAuth, snapshotVscdb, restoreVscdbSnapshot, waitForAntigravityVscdbWritable } = require("./antigravity-db");
 const {
   loadAntigravityAcct,
   saveAntigravityAcct,
@@ -13,6 +13,7 @@ const {
 } = require("./antigravity-storage");
 const { getAntigravityInstallationStatusAsync, assertOfficialAntigravityInstalled } = require("./antigravity-install");
 const { logInfo, logWarn, logError } = require("./logger");
+const { describeCaughtError } = require("./sqlite-native");
 
 async function waitForProcessesToExit(pids, timeoutMs) {
   const runtime = getAntigravityRuntime();
@@ -58,6 +59,11 @@ function injectToken(account) {
   };
 }
 
+function relaunchIfPossible(runtime, launchPath) {
+  if (!launchPath) return;
+  try { runtime.launch(launchPath); } catch {}
+}
+
 async function doAntigravitySwitch(account) {
   if (!account?.id || !String(account.id).startsWith("antigravity_")) {
     throw new Error("The target account is not an Antigravity account");
@@ -77,7 +83,7 @@ async function doAntigravitySwitch(account) {
     assertOfficialAntigravityInstalled();
   }
   const launchPath = install.exePath && fs.existsSync(install.exePath) ? install.exePath : null;
-  const snapshot = snapshotVscdb(dbPath);
+  let snapshot = null;
   let launched = false;
   let launchError = null;
   let wrote = false;
@@ -85,16 +91,8 @@ async function doAntigravitySwitch(account) {
 
   try {
     await killAntigravity();
-    if (typeof runtime.sleep === "function") await runtime.sleep(400);
-    const walSettled = await waitForWalToClear(dbPath, 2000, runtime.sleep);
-    if (!walSettled) {
-      if (launchPath) {
-        try { runtime.launch(launchPath); } catch {}
-      }
-      const error = new Error("官方 Antigravity IDE 还没把登录库写完，请再试一次");
-      error.code = "antigravity_vscdb_wal_pending";
-      throw error;
-    }
+    await waitForAntigravityVscdbWritable(dbPath, { sleep: runtime.sleep });
+    snapshot = await snapshotVscdb(dbPath);
     await writeAntigravityAuth(dbPath, injectToken(account));
     wrote = true;
     metaSnapshot = snapshotAntigravityMeta(account.id);
@@ -122,15 +120,18 @@ async function doAntigravitySwitch(account) {
       account: loadAntigravityAcct(account.id),
     };
   } catch (error) {
+    logError(`Antigravity switch failed wrote=${wrote} ${describeCaughtError(error)}`);
     if (wrote) {
       try { restoreVscdbSnapshot(snapshot); } catch (restoreError) {
-        logError(`Antigravity vscdb rollback failed: ${restoreError.message}`);
+        logError(`Antigravity vscdb rollback failed: ${describeCaughtError(restoreError)}`);
       }
       if (metaSnapshot) {
         try { restoreAntigravityMeta(metaSnapshot); } catch (restoreError) {
-          logError(`Antigravity account index rollback failed: ${restoreError.message}`);
+          logError(`Antigravity account index rollback failed: ${describeCaughtError(restoreError)}`);
         }
       }
+    } else {
+      relaunchIfPossible(runtime, launchPath);
     }
     throw error;
   }

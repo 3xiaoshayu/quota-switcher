@@ -120,8 +120,9 @@ already running may be interrupted.
 ## Switching Cursor is refused or rolls back
 
 - Finish unsaved work in official Cursor first. The switch closes that app.
-- If the manager says the login database is still being written, wait a moment
-  and retry. It will not overwrite `state.vscdb` while a WAL write is pending.
+- If the manager says the official app still holds the login database, close
+  that app and retry. Switching updates login keys in place and does not
+  rewrite the whole `state.vscdb` file.
 - If you are working inside official Cursor, finish or save that session
   first. The switch will close it.
 

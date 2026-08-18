@@ -175,8 +175,6 @@ let officialSyncInFlight = null;
 async function syncCurrentAntigravityFromOfficialUncached() {
   const existing = currentAntigravityAcct();
   const dbPath = getAntigravityRuntime().vscdbPath();
-  const walPending = hasPendingWal(dbPath);
-  if (walPending && existing) return existing;
   let local = null;
   try {
     local = await readAntigravityAuth(dbPath);

@@ -30,6 +30,7 @@ function freshEngine(t) {
     try { engine.cancelCursorOAuth(); } catch {}
     engine.setSwitchRuntimeForTests();
     engine.setCursorRuntimeForTests();
+    engine.setSqliteNativeTimingForTests();
     fs.rmSync(root, { recursive: true, force: true });
   });
   return { engine, root };
@@ -47,6 +48,74 @@ function cursorToken(email, suffix) {
     exp: Math.floor(Date.now() / 1000) + 3600,
     iat: Math.floor(Date.now() / 1000),
   });
+}
+
+function itemText(dbPath, key) {
+  const { asText, getItem, withVscdbSync } = require("../engine/sqlite-native");
+  return withVscdbSync(dbPath, { readOnly: true }, (db) => {
+    const value = getItem(db, key);
+    return value == null ? null : asText(value);
+  });
+}
+
+function putItem(dbPath, key, value) {
+  const { setItem, withVscdbSync } = require("../engine/sqlite-native");
+  withVscdbSync(dbPath, {}, (db) => {
+    setItem(db, key, value);
+  });
+}
+
+function holdExclusive(dbPath) {
+  const { DatabaseSync } = require("node:sqlite");
+  const locker = new DatabaseSync(dbPath, { timeout: 0 });
+  locker.exec("BEGIN EXCLUSIVE");
+  return locker;
+}
+
+function readEngineLogs(root) {
+  const logDir = path.join(root, "data", "logs");
+  if (!fs.existsSync(logDir)) return "";
+  return fs.readdirSync(logDir)
+    .filter((name) => /^app-\d{4}-\d{2}-\d{2}\.log$/.test(name))
+    .map((name) => fs.readFileSync(path.join(logDir, name), "utf8"))
+    .join("\n");
+}
+
+function applyImmediateLockTimeout(engine) {
+  engine.setSqliteNativeTimingForTests({
+    waitWritableTimeoutMs: 0,
+    waitWritableOpenTimeoutMs: 0,
+    switchTimeoutMs: 50,
+    writeTimeoutMs: 50,
+    busyRetries: 0,
+  });
+}
+
+function installVscdbIoSpies(t, dbPath) {
+  const needle = path.normalize(dbPath);
+  const originalRead = fs.readFileSync;
+  const originalCopy = fs.copyFileSync;
+  const originalCopyAsync = fs.promises.copyFile;
+  const hits = { read: 0, copy: 0 };
+  const matches = (target) => path.normalize(String(target || "")) === needle;
+  fs.readFileSync = function(target, ...rest) {
+    if (matches(target)) hits.read += 1;
+    return originalRead.call(this, target, ...rest);
+  };
+  fs.copyFileSync = function(src, dest, ...rest) {
+    if (matches(src) || matches(dest)) hits.copy += 1;
+    return originalCopy.call(this, src, dest, ...rest);
+  };
+  fs.promises.copyFile = async function(src, dest, ...rest) {
+    if (matches(src) || matches(dest)) hits.copy += 1;
+    return originalCopyAsync.call(this, src, dest, ...rest);
+  };
+  t.after(() => {
+    fs.readFileSync = originalRead;
+    fs.copyFileSync = originalCopy;
+    fs.promises.copyFile = originalCopyAsync;
+  });
+  return hits;
 }
 
 test("cursor accounts stay out of Codex list and switch", async (t) => {
@@ -111,7 +180,7 @@ test("cursor list sync marks the official login as current without switching", a
   assert.equal(engine.currentCursorAcct().id, created.account.id);
 });
 
-test("cursor list sync does not guess current while WAL is pending", async (t) => {
+test("cursor official sync follows vscdb even when WAL is pending", async (t) => {
   const { engine, root } = freshEngine(t);
   const dbPath = path.join(root, "state.vscdb");
   const first = await engine.upsertCursorAccount({
@@ -119,7 +188,7 @@ test("cursor list sync does not guess current while WAL is pending", async (t) =
     auth_id: "user_keep",
     access_token: cursorToken("keep@example.com", "keep"),
   });
-  await engine.upsertCursorAccount({
+  const other = await engine.upsertCursorAccount({
     email: "other@example.com",
     auth_id: "user_other",
     access_token: cursorToken("other@example.com", "other"),
@@ -136,12 +205,17 @@ test("cursor list sync does not guess current while WAL is pending", async (t) =
     "cursorAuth/cachedEmail": "other@example.com",
     "cursorAuth/authId": "user_other",
   });
-  fs.writeFileSync(`${dbPath}-wal`, Buffer.alloc(64, 3));
-  const current = await engine.syncCurrentCursorFromOfficial();
-  assert.equal(current.id, first.account.id);
+  const { DatabaseSync } = require("node:sqlite");
+  const holder = new DatabaseSync(dbPath);
+  holder.exec("PRAGMA journal_mode=WAL");
+  holder.exec("PRAGMA wal_autocheckpoint=0");
+  holder.prepare("INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)").run("keep/extra", "x");
+  const current = await engine.syncCurrentCursorFromOfficial({ force: true });
+  assert.equal(current.id, other.account.id);
+  holder.close();
 });
 
-test("cursor list sync can fill an empty current from a WAL checkpoint", async (t) => {
+test("cursor list sync can fill an empty current from official vscdb", async (t) => {
   const { engine, root } = freshEngine(t);
   const dbPath = path.join(root, "state.vscdb");
   const created = await engine.upsertCursorAccount({
@@ -154,7 +228,6 @@ test("cursor list sync can fill an empty current from a WAL checkpoint", async (
     "cursorAuth/cachedEmail": "fill@example.com",
     "cursorAuth/authId": "user_fill",
   });
-  fs.writeFileSync(`${dbPath}-wal`, Buffer.alloc(64, 3));
   engine.setCursorRuntimeForTests({ vscdbPath: () => dbPath });
   assert.equal(engine.currentCursorAcct(), null);
   const current = await engine.syncCurrentCursorFromOfficial();
@@ -366,7 +439,51 @@ test("cursor switch writes vscdb after close and rolls back on write failure", a
   assert.equal(engine.listAccts().length, 0);
 });
 
-test("cursor switch refuses to overwrite vscdb while WAL is pending", async (t) => {
+test("cursor auth write keeps unrelated vscdb rows and does not copy the file", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "cursor-state.vscdb");
+  await engine.writeCursorAuth(dbPath, {
+    "cursorAuth/accessToken": "old-token",
+    "cursorAuth/cachedEmail": "old@example.com",
+  });
+  putItem(dbPath, "keep/extra", "stay");
+  const hits = installVscdbIoSpies(t, dbPath);
+  await engine.writeCursorAuth(dbPath, {
+    "cursorAuth/accessToken": "new-token",
+    "cursorAuth/cachedEmail": "new@example.com",
+  });
+  const values = await engine.readCursorAuth(dbPath, { copyFirst: false });
+  assert.equal(values["cursorAuth/cachedEmail"], "new@example.com");
+  assert.equal(itemText(dbPath, "keep/extra"), "stay");
+  assert.equal(hits.read, 0);
+  assert.equal(hits.copy, 0);
+});
+
+test("cursor auth write leaves a large extra blob in place without copying the file", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "cursor-state.vscdb");
+  await engine.writeCursorAuth(dbPath, {
+    "cursorAuth/accessToken": "old-token",
+    "cursorAuth/cachedEmail": "old@example.com",
+  });
+  const blob = Buffer.alloc(4 * 1024 * 1024, 7);
+  putItem(dbPath, "keep/extra", blob);
+  const hits = installVscdbIoSpies(t, dbPath);
+  const started = Date.now();
+  await engine.writeCursorAuth(dbPath, {
+    "cursorAuth/accessToken": "new-token",
+    "cursorAuth/cachedEmail": "new@example.com",
+  });
+  const elapsed = Date.now() - started;
+  const values = await engine.readCursorAuth(dbPath, { copyFirst: false });
+  assert.equal(values["cursorAuth/cachedEmail"], "new@example.com");
+  assert.equal(itemText(dbPath, "keep/extra"), blob.toString("utf8"));
+  assert.equal(hits.read, 0);
+  assert.equal(hits.copy, 0);
+  assert.ok(elapsed < 2000, `writeCursorAuth took ${elapsed}ms`);
+});
+
+test("cursor switch writes login keys even when a leftover WAL file is present", async (t) => {
   const { engine, root } = freshEngine(t);
   const dbPath = path.join(root, "cursor-state.vscdb");
   const exePath = path.join(root, "Cursor.exe");
@@ -375,13 +492,52 @@ test("cursor switch refuses to overwrite vscdb while WAL is pending", async (t) 
     "cursorAuth/accessToken": "old-token",
     "cursorAuth/cachedEmail": "old@example.com",
   });
-  const before = fs.readFileSync(dbPath);
-  fs.writeFileSync(`${dbPath}-wal`, Buffer.alloc(64, 7));
+  putItem(dbPath, "keep/extra", "stay");
+  const { DatabaseSync } = require("node:sqlite");
+  const walHolder = new DatabaseSync(dbPath);
+  walHolder.exec("PRAGMA journal_mode=WAL");
+  walHolder.exec("PRAGMA wal_autocheckpoint=0");
+  walHolder.prepare("INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)").run("keep/wal", "pending");
+  walHolder.close();
   const created = await engine.upsertCursorAccount({
     email: "wal@example.com",
     auth_id: "user_wal",
     access_token: cursorToken("wal@example.com", "wal"),
     refresh_token: "refresh-wal",
+  });
+  engine.setCursorRuntimeForTests({
+    vscdbPath: () => dbPath,
+    cursorExePath: () => exePath,
+    listProcesses: async () => [],
+    launch: () => true,
+    sleep: async () => {},
+  });
+  await engine.doCursorSwitch(engine.loadCursorAcct(created.account.id));
+  const values = await engine.readCursorAuth(dbPath, { copyFirst: false });
+  assert.equal(values["cursorAuth/cachedEmail"], "wal@example.com");
+  assert.equal(itemText(dbPath, "keep/extra"), "stay");
+});
+
+test("cursor switch refuses a locked vscdb and relaunches without rolling back", async (t) => {
+  const { engine, root } = freshEngine(t);
+  applyImmediateLockTimeout(engine);
+  const dbPath = path.join(root, "cursor-state.vscdb");
+  const exePath = path.join(root, "Cursor.exe");
+  fs.writeFileSync(exePath, "fake");
+  await engine.writeCursorAuth(dbPath, {
+    "cursorAuth/accessToken": "old-token",
+    "cursorAuth/cachedEmail": "old@example.com",
+  });
+  const locker = holdExclusive(dbPath);
+  t.after(() => {
+    try { locker.exec("ROLLBACK"); } catch {}
+    try { locker.close(); } catch {}
+  });
+  const created = await engine.upsertCursorAccount({
+    email: "busy@example.com",
+    auth_id: "user_busy",
+    access_token: cursorToken("busy@example.com", "busy"),
+    refresh_token: "refresh-busy",
   });
   const launched = [];
   engine.setCursorRuntimeForTests({
@@ -393,15 +549,24 @@ test("cursor switch refuses to overwrite vscdb while WAL is pending", async (t) 
   });
   await assert.rejects(
     () => engine.doCursorSwitch(engine.loadCursorAcct(created.account.id)),
-    /登录库写完/,
+    /占用登录库/,
   );
-  assert.deepEqual(fs.readFileSync(dbPath), before);
-  assert.equal(engine.hasPendingWal(dbPath), true);
+  try { locker.exec("ROLLBACK"); } catch {}
+  try { locker.close(); } catch {}
+  const values = await engine.readCursorAuth(dbPath, { copyFirst: false });
+  assert.equal(values["cursorAuth/cachedEmail"], "old@example.com");
   assert.deepEqual(launched, [exePath]);
+  assert.match(readEngineLogs(root), /Cursor switch failed/);
+  assert.match(readEngineLogs(root), /cursor_vscdb_busy|占用登录库/);
 });
 
-test("cursor switch does not rollback a live vscdb after WAL refuse relaunch", async (t) => {
+test("cursor switch waits for a brief vscdb lock then writes", async (t) => {
   const { engine, root } = freshEngine(t);
+  engine.setSqliteNativeTimingForTests({
+    waitWritableTimeoutMs: 2000,
+    waitWritablePollMs: 40,
+    waitWritableOpenTimeoutMs: 0,
+  });
   const dbPath = path.join(root, "cursor-state.vscdb");
   const exePath = path.join(root, "Cursor.exe");
   fs.writeFileSync(exePath, "fake");
@@ -409,28 +574,67 @@ test("cursor switch does not rollback a live vscdb after WAL refuse relaunch", a
     "cursorAuth/accessToken": "old-token",
     "cursorAuth/cachedEmail": "old@example.com",
   });
-  fs.writeFileSync(`${dbPath}-wal`, Buffer.alloc(64, 7));
-  const created = await engine.upsertCursorAccount({
-    email: "wal-live@example.com",
-    auth_id: "user_wal_live",
-    access_token: cursorToken("wal-live@example.com", "wal_live"),
-    refresh_token: "refresh-wal-live",
+  const locker = holdExclusive(dbPath);
+  t.after(() => {
+    try { locker.exec("ROLLBACK"); } catch {}
+    try { locker.close(); } catch {}
   });
+  const created = await engine.upsertCursorAccount({
+    email: "wait@example.com",
+    auth_id: "user_wait",
+    access_token: cursorToken("wait@example.com", "wait"),
+    refresh_token: "refresh-wait",
+  });
+  const launched = [];
   engine.setCursorRuntimeForTests({
     vscdbPath: () => dbPath,
     cursorExePath: () => exePath,
     listProcesses: async () => [],
-    launch: () => {
-      fs.writeFileSync(dbPath, Buffer.from("cursor-rewrote-after-launch"));
-    },
-    sleep: async () => {},
+    launch: (target) => launched.push(target),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
-  await assert.rejects(
-    () => engine.doCursorSwitch(engine.loadCursorAcct(created.account.id)),
-    /登录库写完/,
-  );
-  assert.equal(fs.readFileSync(dbPath, "utf8"), "cursor-rewrote-after-launch");
-  assert.equal(engine.hasPendingWal(dbPath), true);
+  setTimeout(() => {
+    try { locker.exec("ROLLBACK"); } catch {}
+    try { locker.close(); } catch {}
+  }, 120);
+  await engine.doCursorSwitch(engine.loadCursorAcct(created.account.id));
+  const values = await engine.readCursorAuth(dbPath, { copyFirst: false });
+  assert.equal(values["cursorAuth/cachedEmail"], "wait@example.com");
+  assert.deepEqual(launched, [exePath]);
+});
+
+test("cursor switch IPC logs the failure", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const created = await engine.upsertCursorAccount({
+    email: "ipc-busy@example.com",
+    auth_id: "user_ipc_busy",
+    access_token: cursorToken("ipc-busy@example.com", "ipc_busy"),
+    refresh_token: "refresh-ipc-busy",
+  });
+  engine.doCursorSwitch = async () => {
+    const error = new Error("官方 Cursor 还在占用登录库，请关掉后再切");
+    error.code = "cursor_vscdb_busy";
+    throw error;
+  };
+  const handlers = new Map();
+  const electron = {
+    ipcMain: {
+      handle(channel, listener) {
+        handlers.set(channel, listener);
+      },
+    },
+    BrowserWindow: { getAllWindows: () => [] },
+    app: { getVersion: () => "0.1.0-beta.32", isPackaged: false },
+    shell: { async openExternal() {}, async openPath() { return ""; } },
+  };
+  delete require.cache[require.resolve("../src/main/ipc-handlers")];
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, { electron });
+  const result = await handlers.get("cursor:switch")({}, created.account.id);
+  assert.equal(result.success, false);
+  assert.match(String(result.error), /占用登录库/);
+  assert.match(readEngineLogs(root), /IPC cursor:switch failed/);
+  assert.match(readEngineLogs(root), /cursor_vscdb_busy|占用登录库/);
 });
 
 test("cursor switch clears leftover auth keys the target account does not have", async (t) => {
@@ -468,11 +672,17 @@ test("local cursor import marks stalePossible when WAL is pending", async (t) =>
     "cursorAuth/accessToken": cursorToken("stale@example.com", "stale"),
     "cursorAuth/cachedEmail": "stale@example.com",
   });
-  fs.writeFileSync(`${dbPath}-wal`, Buffer.alloc(64, 3));
+  const { DatabaseSync } = require("node:sqlite");
+  const holder = new DatabaseSync(dbPath);
+  holder.exec("PRAGMA journal_mode=WAL");
+  holder.exec("PRAGMA wal_autocheckpoint=0");
+  holder.prepare("INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)").run("keep/extra", "x");
   engine.setCursorRuntimeForTests({ vscdbPath: () => dbPath });
   const imported = await engine.importLocalCursorAccount();
   assert.equal(imported.found, true);
+  assert.equal(engine.hasPendingWal(dbPath), true);
   assert.equal(imported.stalePossible, true);
+  holder.close();
 });
 
 test("cursor switch writes even when Cursor.exe is missing", async (t) => {
@@ -830,7 +1040,7 @@ test("cursor upsert keeps quota_error when no new windows arrive", async (t) => 
   assert.equal(engine.loadCursorAcct(created.account.id).quota_error.code, "probe_failed");
 });
 
-test("cursor official sync copies sqlite asynchronously and shares one pass", async (t) => {
+test("cursor official sync reads sqlite in place and shares one pass", async (t) => {
   const { engine, root } = freshEngine(t);
   const kept = await engine.upsertCursorAccount({
     email: "keep@example.com",
@@ -844,31 +1054,21 @@ test("cursor official sync copies sqlite asynchronously and shares one pass", as
     "cursorAuth/cachedEmail": "keep@example.com",
     "cursorAuth/authId": "user_keep",
   });
-  engine.setCursorRuntimeForTests({ vscdbPath: () => dbPath });
-  let asyncCopies = 0;
-  let syncCopies = 0;
-  const originalAsync = fs.promises.copyFile;
-  const originalSync = fs.copyFileSync;
-  fs.promises.copyFile = async (...args) => {
-    asyncCopies += 1;
-    return originalAsync.apply(fs.promises, args);
-  };
-  fs.copyFileSync = (...args) => {
-    if (String(args[1] || "").includes("cursor-vscdb")) syncCopies += 1;
-    return originalSync(...args);
-  };
-  t.after(() => {
-    fs.promises.copyFile = originalAsync;
-    fs.copyFileSync = originalSync;
+  let pathReads = 0;
+  engine.setCursorRuntimeForTests({
+    vscdbPath: () => {
+      pathReads += 1;
+      return dbPath;
+    },
   });
+  const hits = installVscdbIoSpies(t, dbPath);
   await Promise.all([
     engine.syncCurrentCursorFromOfficial(),
     engine.syncCurrentCursorFromOfficial(),
   ]);
-  const afterPair = asyncCopies;
   await engine.syncCurrentCursorFromOfficial();
-  assert.equal(syncCopies, 0);
-  assert.ok(afterPair >= 1);
-  assert.equal(asyncCopies, afterPair);
+  assert.equal(pathReads, 1);
+  assert.equal(hits.read, 0);
+  assert.equal(hits.copy, 0);
   assert.equal(engine.currentCursorAcct().id, kept.account.id);
 });

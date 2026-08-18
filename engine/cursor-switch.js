@@ -1,10 +1,11 @@
 const fs = require("node:fs");
 const { ts } = require("./crypto-utils");
 const { getCursorRuntime } = require("./cursor-runtime");
-const { writeCursorAuth, snapshotVscdb, restoreVscdbSnapshot, waitForWalToClear } = require("./cursor-db");
+const { writeCursorAuth, snapshotVscdb, restoreVscdbSnapshot, waitForCursorVscdbWritable } = require("./cursor-db");
 const { loadCursorAcct, saveCursorAcct, currentCursorAcct, setCurrentCursorAccountId, upsertCursorIndex, snapshotCursorMeta, restoreCursorMeta } = require("./cursor-storage");
 const { getCursorInstallationStatusAsync } = require("./cursor-install");
 const { logInfo, logWarn, logError } = require("./logger");
+const { describeCaughtError } = require("./sqlite-native");
 
 async function waitForProcessesToExit(pids, timeoutMs) {
   const runtime = getCursorRuntime();
@@ -58,6 +59,11 @@ function injectValues(account) {
   return values;
 }
 
+function relaunchIfPossible(runtime, launchPath) {
+  if (!launchPath) return;
+  try { runtime.launch(launchPath); } catch {}
+}
+
 async function doCursorSwitch(account) {
   if (!account?.id || !String(account.id).startsWith("cursor_")) {
     throw new Error("The target account is not a Cursor account");
@@ -72,7 +78,7 @@ async function doCursorSwitch(account) {
   const dbPath = runtime.vscdbPath();
   const install = await getCursorInstallationStatusAsync();
   const launchPath = install.exePath && fs.existsSync(install.exePath) ? install.exePath : null;
-  const snapshot = snapshotVscdb(dbPath);
+  let snapshot = null;
   let launched = false;
   let launchError = null;
   let wrote = false;
@@ -80,16 +86,8 @@ async function doCursorSwitch(account) {
 
   try {
     await killCursor();
-    if (typeof runtime.sleep === "function") await runtime.sleep(400);
-    const walSettled = await waitForWalToClear(dbPath, 2000, runtime.sleep);
-    if (!walSettled) {
-      if (launchPath) {
-        try { runtime.launch(launchPath); } catch {}
-      }
-      const error = new Error("官方 Cursor 还没把登录库写完，请再试一次");
-      error.code = "cursor_vscdb_wal_pending";
-      throw error;
-    }
+    await waitForCursorVscdbWritable(dbPath, { sleep: runtime.sleep });
+    snapshot = await snapshotVscdb(dbPath);
     await writeCursorAuth(dbPath, injectValues(account));
     wrote = true;
     metaSnapshot = snapshotCursorMeta(account.id);
@@ -120,15 +118,18 @@ async function doCursorSwitch(account) {
       account: loadCursorAcct(account.id),
     };
   } catch (error) {
+    logError(`Cursor switch failed wrote=${wrote} ${describeCaughtError(error)}`);
     if (wrote) {
       try { restoreVscdbSnapshot(snapshot); } catch (restoreError) {
-        logError(`Cursor vscdb rollback failed: ${restoreError.message}`);
+        logError(`Cursor vscdb rollback failed: ${describeCaughtError(restoreError)}`);
       }
       if (metaSnapshot) {
         try { restoreCursorMeta(metaSnapshot); } catch (restoreError) {
-          logError(`Cursor account index rollback failed: ${restoreError.message}`);
+          logError(`Cursor account index rollback failed: ${describeCaughtError(restoreError)}`);
         }
       }
+    } else {
+      relaunchIfPossible(runtime, launchPath);
     }
     throw error;
   }

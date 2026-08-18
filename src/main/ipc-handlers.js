@@ -1,5 +1,9 @@
 const path = require("node:path");
+const { logError, sanitizeMessage } = require("../../engine/logger");
+const { describeCaughtError } = require("../../engine/sqlite-native");
 let engine = null;
+
+const SWITCH_CHANNELS = new Set(["cursor:switch", "antigravity:switch"]);
 
 function getEngine() {
     if (!engine) engine = require(path.resolve(__dirname, "..", "..", "engine"));
@@ -147,6 +151,9 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             try {
                 return await listener(event, ...args);
             } catch (error) {
+                if (SWITCH_CHANNELS.has(channel)) {
+                    logError(`IPC ${channel} failed ${sanitizeMessage(describeCaughtError(error))}`);
+                }
                 return fail(error?.message || error);
             }
         });

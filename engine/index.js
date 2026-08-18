@@ -23,6 +23,7 @@ const { cursorLoginFlow, cancelCursorOAuth, discardPendingCursorOAuth, getCursor
 const { getCursorInstallationStatus, getCursorInstallationStatusAsync, assertOfficialCursorInstalled } = require("./cursor-install");
 const { setCursorRuntimeForTests, setCursorOpenUrlHandler } = require("./cursor-runtime");
 const { readCursorAuth, writeCursorAuth, hasPendingWal, waitForWalToClear } = require("./cursor-db");
+const { setSqliteNativeTimingForTests } = require("./sqlite-native");
 const { listAntigravityAccts, loadAntigravityAcct, saveAntigravityAcct, currentAntigravityAcct, deleteAntigravityAcct, loadAntigravityIdx, setCurrentAntigravityAccountId } = require("./antigravity-storage");
 const { importLocalAntigravityAccount, upsertAntigravityAccount, accountFromAntigravityTokens, syncCurrentAntigravityFromOfficial, collapseDuplicateAntigravityAccounts, resetOfficialSyncCacheForTests: resetAntigravityOfficialSyncCacheForTests } = require("./antigravity-local");
 const { doAntigravitySwitch } = require("./antigravity-switch");
@@ -71,6 +72,7 @@ module.exports = {
   cursorLoginFlow, cancelCursorOAuth, discardPendingCursorOAuth, getCursorOAuthStatus, restorePendingCursorOAuth,
   getCursorInstallationStatus, getCursorInstallationStatusAsync, assertOfficialCursorInstalled,
   setCursorRuntimeForTests, setCursorOpenUrlHandler, readCursorAuth, writeCursorAuth, hasPendingWal, waitForWalToClear,
+  setSqliteNativeTimingForTests,
   listAntigravityAccts, loadAntigravityAcct, saveAntigravityAcct, currentAntigravityAcct, deleteAntigravityAcct, loadAntigravityIdx, setCurrentAntigravityAccountId,
   importLocalAntigravityAccount, upsertAntigravityAccount, accountFromAntigravityTokens, syncCurrentAntigravityFromOfficial, collapseDuplicateAntigravityAccounts, resetAntigravityOfficialSyncCacheForTests,
   doAntigravitySwitch, refreshAntigravityQuota, parseAntigravityUsage, refreshAntigravityToken, refreshAllAntigravityTokens,

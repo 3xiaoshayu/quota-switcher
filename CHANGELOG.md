@@ -7,6 +7,13 @@ release is published.
 
 ## Unreleased
 
+- Write Cursor and Antigravity logins as in-place SQLite updates, so a large
+  `state.vscdb` no longer blocks switching.
+- After closing the official app, wait until the login database accepts a
+  write lock, instead of a short sleep that left the file busy.
+- Record Cursor and Antigravity switch failures in the app log, including
+  the error code.
+
 ## [0.1.0-beta.31] - 2026-08-18
 
 - Let the Windows taskbar minimize and restore the main window and the

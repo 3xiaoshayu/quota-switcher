@@ -108,16 +108,16 @@ Switching a Cursor account:
 
 - requests a normal close for official Cursor and force-closes only matching
   processes that remain after a timeout;
-- refuses to overwrite `state.vscdb` while a WAL write is still pending;
-- writes the selected Cursor login into `state.vscdb`;
+- updates only the login keys in `state.vscdb` in place;
+- refuses the write if the official app still holds the login database;
 - relaunches official Cursor.
 
 Switching an Antigravity account:
 
 - requests a normal close for official Antigravity IDE and force-closes only
   matching processes that remain after a timeout;
-- refuses to overwrite `state.vscdb` while a WAL write is still pending;
 - replaces only the OAuth token item in `state.vscdb`;
+- refuses the write if the official app still holds the login database;
 - relaunches official Antigravity IDE.
 
 Phase 1 does not manage the legacy `Antigravity.exe` runtime and does not

@@ -83,15 +83,15 @@ Google 第三方登录存在风控讨论。第一期只把本机已登录的官�
 切 Cursor：
 
 - 先让官方 Cursor 退出
-- 登录库还在写盘时，不会硬盖
-- 把选中的号写进 `state.vscdb`
+- 只改 `state.vscdb` 里的登录键，不整文件覆盖
+- 官方还在占用登录库时不会写入
 - 再打开官方 Cursor
 
 切 Antigravity：
 
 - 先让官方 Antigravity IDE 退出
-- 登录库还在写盘时，不会硬盖
 - 只改 `state.vscdb` 里的 OAuth token 那一条
+- 官方还在占用登录库时不会写入
 - 再打开官方 Antigravity IDE
 - 第一期不管旧版 `Antigravity.exe`，也不多开实例
 

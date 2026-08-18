@@ -74,7 +74,8 @@ that is the state consumed by Codex. The manager creates `auth.json.bak` before
 replacing it during a switch.
 
 The active Cursor identity remains in official Cursor `state.vscdb`. The
-manager refuses to overwrite that file while a WAL write is still pending.
+manager updates only the login keys in place. A leftover WAL after Cursor has
+exited is applied by SQLite; a locked database still blocks the switch.
 
 ## Switching flow
 
@@ -93,12 +94,13 @@ Codex:
 Cursor:
 
 1. Close official Cursor and wait until matching processes exit.
-2. Refuse the write if `state.vscdb` still has a pending WAL.
-3. Snapshot the Cursor index, selected account, and current `state.vscdb`.
-4. Write the selected login, clear leftover keys the target account does not
-   have, and update the Cursor index.
-5. Relaunch official Cursor.
-6. Roll the index and login file back if post-write work fails.
+2. Wait until `state.vscdb` accepts a write lock, then snapshot the current
+   login keys (not a 400ms read-only open).
+3. Update those login keys in place, clear leftover keys the target account
+   does not have, and update the Cursor index.
+4. Relaunch official Cursor.
+5. Roll the index and login keys back if post-write work fails. Failures
+   before the write relaunch official Cursor and are written to the app log.
 
 The Codex switching path is used by both manual and automatic switching.
 The managed Codex projection contains an authentication fingerprint. A

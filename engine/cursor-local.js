@@ -157,8 +157,6 @@ let officialSyncInFlight = null;
 async function syncCurrentCursorFromOfficialUncached() {
   const existing = currentCursorAcct();
   const dbPath = getCursorRuntime().vscdbPath();
-  const walPending = hasPendingWal(dbPath);
-  if (walPending && existing) return existing;
   let values = null;
   try {
     values = await readCursorAuth(dbPath);
