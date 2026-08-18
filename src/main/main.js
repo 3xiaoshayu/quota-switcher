@@ -1,13 +1,20 @@
 const { app, BrowserWindow, dialog, safeStorage, screen, shell } = require("electron");
 const path = require("path");
-const fs = require("fs");
 const { registerIpcHandlers } = require("./ipc-handlers");
 const { createUpdateService } = require("./updater");
 const { createAppTray } = require("./tray");
 const { resolveAppIcon } = require("./app-icon");
 const { createFloatWindowController } = require("./float-window");
+const { applyAppUserModelId } = require("./taskbar-minimize");
+const {
+    MIN_MAIN_HEIGHT,
+    MIN_MAIN_WIDTH,
+    resolveMainWindowSize,
+} = require("./main-window-bounds");
 const { writeJsonAtomic } = require(path.resolve(__dirname, "..", "..", "engine", "atomic-file"));
 const { applyAppProxy, applyStartupProxyHint } = require(path.resolve(__dirname, "..", "..", "engine", "proxy-resolve"));
+
+applyAppUserModelId(app);
 
 let mainWindow = null;
 let appTray = null;
@@ -21,52 +28,6 @@ function trustWebContents(webContents) {
     if (!webContents || webContents.isDestroyed()) return;
     trustedSenderIds.add(webContents.id);
     webContents.once("destroyed", () => trustedSenderIds.delete(webContents.id));
-}
-
-function windowStatePath() {
-    return path.join(app.getPath("userData"), "window-state.json");
-}
-
-function loadWindowState() {
-    try {
-        const state = JSON.parse(fs.readFileSync(windowStatePath(), "utf8"));
-        if (!state || typeof state !== "object") return null;
-        const bounds = state.bounds;
-        const isMaximized = !!state.isMaximized;
-        if (!bounds
-            || ![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)
-            || bounds.width <= 0 || bounds.height <= 0) {
-            return { bounds: null, isMaximized };
-        }
-        // Display scaling can change between sessions; keep the window no
-        // larger than the primary work area.
-        const primaryArea = screen.getPrimaryDisplay().workArea;
-        const width = Math.min(bounds.width, primaryArea.width);
-        const height = Math.min(bounds.height, primaryArea.height);
-        // Require a grabbable strip on some display, not just a 1px sliver:
-        // the frameless window has no system menu to recover it otherwise.
-        const visible = screen.getAllDisplays().some((display) => {
-            const area = display.workArea;
-            const overlapX = Math.min(bounds.x + width, area.x + area.width) - Math.max(bounds.x, area.x);
-            const overlapY = Math.min(bounds.y + height, area.y + area.height) - Math.max(bounds.y, area.y);
-            return overlapX >= 200 && overlapY >= 100;
-        });
-        return { bounds: visible ? { x: bounds.x, y: bounds.y, width, height } : null, isMaximized };
-    } catch {
-        return null;
-    }
-}
-
-function saveWindowState(win, lastKnownMaximized) {
-    try {
-        // isMaximized() reports false for a minimized window even when it will
-        // restore to the maximized state, so rely on the tracked value there.
-        const maximized = win.isMinimized() ? !!lastKnownMaximized : win.isMaximized();
-        writeJsonAtomic(windowStatePath(), {
-            bounds: win.isMaximized() || win.isMinimized() ? win.getNormalBounds() : win.getBounds(),
-            isMaximized: maximized,
-        }, { backup: false });
-    } catch {}
 }
 
 function focusMainWindow() {
@@ -148,16 +109,16 @@ function startApplication() {
     }
 
     const updateService = createUpdateService({ app, BrowserWindow });
-    const savedWindowState = loadWindowState();
+    const launchSize = resolveMainWindowSize(screen.getPrimaryDisplay().workArea);
     const appIcon = resolveAppIcon();
     const win = new BrowserWindow({
-        width: savedWindowState?.bounds?.width || 1440,
-        height: savedWindowState?.bounds?.height || 900,
-        ...(savedWindowState?.bounds
-            ? { x: savedWindowState.bounds.x, y: savedWindowState.bounds.y }
-            : { center: true }),
-        minWidth: 1280, minHeight: 720,
-        frame: false,
+        width: launchSize.width,
+        height: launchSize.height,
+        center: true,
+        minWidth: MIN_MAIN_WIDTH,
+        minHeight: MIN_MAIN_HEIGHT,
+        frame: true,
+        titleBarStyle: "hidden",
         autoHideMenuBar: true,
         title: "Codex Account Manager",
         backgroundColor: "#131315",
@@ -169,12 +130,7 @@ function startApplication() {
         },
     });
     mainWindow = win;
-    if (savedWindowState?.isMaximized) win.maximize();
-    let lastKnownMaximized = !!savedWindowState?.isMaximized;
-    win.on("maximize", () => { lastKnownMaximized = true; });
-    win.on("unmaximize", () => { lastKnownMaximized = false; });
     win.on("close", (event) => {
-        saveWindowState(win, lastKnownMaximized);
         if (!isQuitting) {
             event.preventDefault();
             win.hide();
@@ -205,6 +161,8 @@ function startApplication() {
         trustedSenderIds,
         floatWindow,
         showMainWindow: focusMainWindow,
+        minimizeMainWindow: () => mainWindow?.minimize(),
+        mainWindow: win,
         onUiReady: startStartupHousekeeping,
     });
     trustWebContents(win.webContents);
@@ -226,6 +184,10 @@ function startApplication() {
     win.webContents.on("will-redirect", guardNavigation);
 
     win.once("ready-to-show", () => {
+        const size = resolveMainWindowSize(screen.getPrimaryDisplay().workArea);
+        if (typeof win.unmaximize === "function") win.unmaximize();
+        if (typeof win.setSize === "function") win.setSize(size.width, size.height);
+        if (typeof win.center === "function") win.center();
         win.show();
         updateService.startAutoCheck();
         setTimeout(startStartupHousekeeping, 5000);
@@ -262,7 +224,9 @@ if (!hasSingleInstanceLock) {
 } else {
     app.commandLine.appendSwitch("disable-quic");
     app.commandLine.appendSwitch("disable-http3");
-    app.on("second-instance", focusMainWindow);
+    app.on("second-instance", () => {
+        focusMainWindow();
+    });
     app.on("before-quit", () => {
         isQuitting = true;
         if (floatWindow) {

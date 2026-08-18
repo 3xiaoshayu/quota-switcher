@@ -428,6 +428,75 @@ test("dashboard product changes sync the float product and auto-open once", () =
   assert.doesNotMatch(source, /!String\(account\.id\)\.startsWith\('cursor_'\)/);
 });
 
+test("float window is created as a system-minimizable hidden-titlebar window", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "float-window-"));
+  const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
+  let createdOpts = null;
+  class FakeWindow {
+    constructor(opts) {
+      createdOpts = opts;
+      this.bounds = { x: opts.x, y: opts.y, width: opts.width, height: opts.height };
+      this.destroyed = false;
+      this.visible = false;
+      this.url = "";
+      this.webContents = {
+        setWindowOpenHandler() {},
+        on() {},
+        once() {},
+        getURL: () => "",
+        isLoadingMainFrame: () => true,
+      };
+    }
+    isDestroyed() { return this.destroyed; }
+    getBounds() { return { ...this.bounds }; }
+    setBounds(next) { this.bounds = { ...this.bounds, ...next }; }
+    setSize() {}
+    setResizable() {}
+    setMinimumSize() {}
+    setMaximumSize() {}
+    setMenuBarVisibility() {}
+    setBackgroundColor() {}
+    setHasShadow() {}
+    setAlwaysOnTop() {}
+    setSkipTaskbar() {}
+    setTitle() {}
+    isVisible() { return this.visible; }
+    isMinimized() { return false; }
+    restore() {}
+    moveTop() {}
+    show() { this.visible = true; }
+    hide() { this.visible = false; }
+    focus() {}
+    once() {}
+    loadFile() { return Promise.resolve(); }
+    on() {}
+    removeAllListeners() {}
+    destroy() { this.destroyed = true; }
+  }
+
+  const controller = createFloatWindowController({
+    app: { getPath: () => dir },
+    BrowserWindow: FakeWindow,
+    screen: {
+      getDisplayNearestPoint: () => ({ workArea }),
+      getPrimaryDisplay: () => ({ workArea }),
+    },
+    trustWebContents() {},
+    rendererHtml: "index.html",
+    preloadPath: "preload.js",
+    iconPath: "icon.ico",
+    isQuitting: () => true,
+    writeJsonAtomic() {},
+  });
+  controller.show();
+  assert.equal(createdOpts.frame, true);
+  assert.equal(createdOpts.titleBarStyle, "hidden");
+  assert.equal(createdOpts.minimizable, true);
+  assert.equal(createdOpts.transparent, true);
+  assert.equal(createdOpts.backgroundColor, "#00000000");
+  controller.destroy();
+});
+
 test("float lens footer does not crash while accounts are loading", () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "src", "renderer-react", "components", "FloatLens.tsx"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "..", "src", "renderer-react", "components", "FloatLens.css"), "utf8");

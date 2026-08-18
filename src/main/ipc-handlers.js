@@ -196,6 +196,10 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     });
 
     handle("window:minimize", (event) => {
+        if (typeof services.minimizeMainWindow === "function") {
+            services.minimizeMainWindow();
+            return ok(true);
+        }
         BrowserWindow.fromWebContents(event.sender)?.minimize();
         return ok(true);
     });

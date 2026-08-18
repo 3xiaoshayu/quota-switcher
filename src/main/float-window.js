@@ -156,9 +156,22 @@ function createFloatWindowController(options) {
         else win.setAlwaysOnTop(false);
     };
 
+    const applyFloatTaskbarIdentity = (win) => {
+        if (!win) return;
+        if (typeof win.setAppDetails === "function") {
+            win.setAppDetails({
+                appId: "com.3xiaoshayu.codex-account-manager.float",
+                relaunchDisplayName: floatWindowTitle(activeProduct),
+                relaunchCommand: process.execPath,
+            });
+        }
+        if (typeof win.setSkipTaskbar === "function") win.setSkipTaskbar(false);
+    };
+
     const notifyProduct = (win) => {
         if (!win || win.isDestroyed() || !win.webContents) return;
         if (typeof win.setTitle === "function") win.setTitle(floatWindowTitle(activeProduct));
+        applyFloatTaskbarIdentity(win);
         if (typeof win.webContents.send === "function") {
             win.webContents.send("float:product", activeProduct);
         }
@@ -175,7 +188,7 @@ function createFloatWindowController(options) {
         const saved = loadFloatState(app.getPath("userData"));
         win.setBounds(resolveBounds(saved));
         alwaysOnTop = true;
-        if (typeof win.setSkipTaskbar === "function") win.setSkipTaskbar(false);
+        applyFloatTaskbarIdentity(win);
         applyOnTop(win, true);
         if (typeof win.isMinimized === "function" && win.isMinimized()) win.restore();
         win.show();
@@ -220,15 +233,16 @@ function createFloatWindowController(options) {
             height: bounds.height,
             x: bounds.x,
             y: bounds.y,
-            frame: false,
+            frame: true,
+            titleBarStyle: "hidden",
             transparent: true,
             backgroundColor: "#00000000",
             hasShadow: false,
             roundedCorners: false,
-            skipTaskbar: true,
+            skipTaskbar: false,
             resizable: false,
             maximizable: false,
-            minimizable: false,
+            minimizable: true,
             fullscreenable: false,
             autoHideMenuBar: true,
             show: false,
