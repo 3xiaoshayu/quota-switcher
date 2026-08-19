@@ -83,13 +83,13 @@ function createHost() {
   const api = createTaskbarHost({
     BrowserWindow,
     iconPath: "icon.ico",
-    title: "Codex Account Manager",
+    title: "Quota Switcher",
   });
   const main = createFakeWindow({
     width: 1440,
     height: 900,
     skipTaskbar: true,
-    title: "Codex Account Manager",
+    title: "Quota Switcher",
   });
   api.attachMain(main);
   return { api, host: api.host, main, constructed };
