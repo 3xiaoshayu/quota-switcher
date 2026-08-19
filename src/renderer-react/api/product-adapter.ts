@@ -170,6 +170,5 @@ export function productActions() {
 }
 
 export function floatChromeMark(product: ProductKind): string {
-  if (product === 'antigravity') return 'AG';
   return productById(product).label.toUpperCase();
 }

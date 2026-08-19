@@ -18,6 +18,18 @@ body.float-lens-root,
   user-select: none;
 }
 
+.float-lens button {
+  outline: none;
+}
+
+.float-lens button:focus {
+  outline: none;
+}
+
+.float-lens button:focus-visible {
+  box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.48);
+}
+
 .float-lens-shell {
   position: relative;
   display: flex;
@@ -27,7 +39,7 @@ body.float-lens-root,
   overflow: hidden;
   border-radius: 22px;
   background:
-    linear-gradient(180deg, rgba(36, 36, 38, 0.96), rgba(19, 19, 21, 0.94));
+    linear-gradient(180deg, rgba(32, 32, 34, 0.98), rgba(20, 20, 22, 0.97));
   box-shadow:
     0 2px 4px rgba(0, 0, 0, 0.35),
     0 8px 16px rgba(0, 0, 0, 0.26),
@@ -68,19 +80,28 @@ body.float-lens-root,
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 12px 0;
+  padding: 8px 10px 0;
 }
 
 .float-lens-mark {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
   padding-left: 4px;
-  color: var(--color-label-3);
-  font-size: 10px;
-  font-weight: 700;
+  color: var(--color-label-2);
+  font-size: 11px;
+  font-weight: 600;
   letter-spacing: 0.34em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .float-lens-mark.is-long {
   letter-spacing: 0.2em;
+}
+
+.float-lens-mark.is-full {
+  letter-spacing: 0.1em;
 }
 
 .float-lens-mark.is-short {
@@ -124,27 +145,66 @@ body.float-lens-root,
   min-height: 0;
   flex-direction: column;
   align-items: center;
-  padding: 4px 18px 8px;
+  padding: 2px 16px 4px;
 }
 
 .float-lens-dial {
   position: relative;
-  width: 188px;
-  height: 188px;
+  width: 156px;
+  height: 156px;
+}
+
+.float-lens-dial::before {
+  content: "";
+  position: absolute;
+  inset: 22px;
+  border-radius: 999px;
+  pointer-events: none;
+  background: radial-gradient(
+    circle at 50% 40%,
+    color-mix(in srgb, var(--dial-glow, transparent) 22%, transparent),
+    transparent 68%
+  );
+}
+
+.float-lens-dial.is-rest::before {
+  background: radial-gradient(circle at 50% 40%, rgba(255, 255, 255, 0.05), transparent 68%);
 }
 
 .float-lens-pair {
   display: flex;
   width: 100%;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  gap: 10px;
+  gap: 18px;
+}
+
+.float-lens-dial-col {
+  display: flex;
+  width: 112px;
+  flex-direction: column;
+  align-items: center;
+}
+
+.float-lens-dial-caption {
+  max-width: 112px;
+  margin-top: 6px;
+  color: var(--color-label-3);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.float-lens-pair:has(.float-lens-dial-col) + .float-lens-identity {
+  margin-top: 10px;
 }
 
 .float-lens-dial svg {
   display: block;
-  width: 188px;
-  height: 188px;
+  width: 156px;
+  height: 156px;
 }
 
 .float-lens-dial.is-pair,
@@ -177,6 +237,24 @@ body.float-lens-root,
   inset: 14px;
 }
 
+.float-lens-dial.is-pair::after {
+  inset: 16px;
+}
+
+.float-lens-dial.is-pair.is-nested .float-lens-readout-value {
+  font-size: 20px;
+  letter-spacing: -0.04em;
+}
+
+.float-lens-dial.is-pair.is-nested .float-lens-readout-value.is-empty-text {
+  font-size: 12px;
+}
+
+.float-lens-dial.is-pair.is-nested::after,
+.float-lens-dial.is-pair.is-nested .float-lens-sweep {
+  inset: 26px;
+}
+
 .float-lens-dial-arc {
   transition: stroke-dashoffset 0.7s cubic-bezier(0.22, 1, 0.36, 1), stroke 0.3s ease;
 }
@@ -192,29 +270,37 @@ body.float-lens-root,
 }
 
 .float-lens-readout-value {
-  font-size: 42px;
-  font-weight: 650;
+  font-size: 35px;
+  font-weight: 600;
   letter-spacing: -0.06em;
-  line-height: 0.95;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
 }
 
 .float-lens-readout-value.is-empty-text {
-  font-size: 22px;
+  max-width: 118px;
+  font-size: 16px;
+  font-weight: 600;
   letter-spacing: 0;
+  line-height: 1.3;
+  text-align: center;
+  white-space: normal;
 }
 
 .float-lens-readout-value.is-empty-text.is-long {
-  max-width: 104px;
-  font-size: 16px;
-  line-height: 1.25;
+  max-width: 124px;
+  font-size: 15px;
+  line-height: 1.3;
   text-align: center;
 }
 
 .float-lens-readout-unit {
-  margin-left: 1px;
-  color: rgba(235, 235, 245, 0.62);
-  font-size: 0.42em;
+  margin-left: 2px;
+  color: var(--color-label-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  vertical-align: 0.42em;
 }
 
 .float-lens-readout-label {
@@ -226,16 +312,17 @@ body.float-lens-root,
 }
 
 .float-lens-readout-label.is-empty {
-  max-width: 96px;
+  max-width: 92px;
   margin-top: 0;
   text-align: center;
   line-height: 1.35;
   letter-spacing: 0.02em;
+  white-space: normal;
 }
 
 .float-lens-sweep {
   position: absolute;
-  inset: 18px;
+  inset: 15px;
   border-radius: 999px;
   pointer-events: none;
   background: conic-gradient(from 0deg, transparent 0 72%, rgba(255, 255, 255, 0.18) 84%, transparent 96%);
@@ -263,34 +350,56 @@ body.float-lens-root,
 }
 
 .float-lens-name {
+  display: flex;
   max-width: 100%;
+  align-items: baseline;
+  justify-content: center;
   overflow: hidden;
   color: var(--color-label);
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: -0.02em;
-  text-overflow: ellipsis;
+  line-height: 1.35;
   white-space: nowrap;
   user-select: text;
   -webkit-user-select: text;
 }
 
-.float-lens-pills {
+.float-lens-name-local {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.float-lens-name-domain {
+  flex-shrink: 0;
+  color: var(--color-label-3);
+  font-weight: 500;
+}
+
+.float-lens-pills,
+.float-lens-meta {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: center;
-  gap: 6px;
-  margin-top: 8px;
+  gap: 4px 0;
+  margin-top: 6px;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .float-lens-plan {
-  padding: 3px 8px;
-  border-radius: 999px;
-  background: var(--color-fill);
+  max-width: 100%;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--color-label-2);
-  font-size: 10px;
-  font-weight: 650;
+  font-size: 11px;
+  font-weight: 600;
   letter-spacing: 0.02em;
+  line-height: 1.35;
+  white-space: nowrap;
 }
 
 .float-lens-plan.is-status {
@@ -298,10 +407,20 @@ body.float-lens-root,
 }
 
 .float-lens-reset {
-  margin-top: 8px;
+  flex-basis: 100%;
+  margin-top: 4px;
   color: var(--color-label-3);
   font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+  white-space: normal;
   font-variant-numeric: tabular-nums;
+}
+
+.float-lens-plan + .float-lens-plan::before {
+  content: "·";
+  margin: 0 8px;
+  color: var(--color-label-3);
 }
 
 .float-lens-pager {
@@ -309,21 +428,29 @@ body.float-lens-root,
   width: 100%;
   align-items: center;
   justify-content: space-between;
-  margin-top: 14px;
+  margin-top: 8px;
 }
 
 .float-lens-nav {
   display: inline-flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 2px;
+  flex-shrink: 0;
+  gap: 0;
+}
+
+.float-lens-nav .float-lens-icon {
+  width: 28px;
+  height: 28px;
 }
 
 .float-lens-count {
-  min-width: 52px;
+  min-width: 48px;
   color: var(--color-label-2);
   font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.08em;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
@@ -332,12 +459,16 @@ body.float-lens-root,
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--color-fill);
   color: var(--color-label-3);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .float-lens-state.is-live {
+  background: rgba(48, 209, 88, 0.12);
   color: var(--color-ok);
 }
 
@@ -351,9 +482,9 @@ body.float-lens-root,
 .float-lens-action {
   display: flex;
   width: 100%;
-  min-height: 40px;
+  min-height: 36px;
   align-items: center;
-  margin-top: 10px;
+  margin-top: 8px;
 }
 
 .float-lens-confirm {
@@ -411,18 +542,22 @@ body.float-lens-root,
 .float-lens-switch {
   display: inline-flex;
   width: 100%;
-  height: 36px;
+  min-height: 36px;
+  height: auto;
   align-items: center;
   justify-content: center;
   gap: 6px;
+  padding: 8px 10px;
   border: 0;
   border-radius: 11px;
   background: rgba(10, 132, 255, 0.16);
   color: var(--color-accent-hi);
   font-size: 12px;
   font-weight: 650;
+  line-height: 1.35;
   cursor: pointer;
-  white-space: nowrap;
+  white-space: normal;
+  text-align: center;
 }
 
 .float-lens-switch:hover:not(:disabled) {
@@ -438,7 +573,7 @@ body.float-lens-root,
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 10px 10px;
+  padding: 0 8px 8px;
 }
 
 .float-lens-error {

@@ -7,6 +7,7 @@ import {
   hasDesktopBridge,
   canRefreshQuota,
   canSwitchAccount,
+  antigravityQuotaFamilies,
   hideStaleQuota,
   isManagedProductAccount,
   lensQuotaWindows,
@@ -21,17 +22,36 @@ import { previewAccountsForLens } from '../data/mockData';
 import { isActiveProduct, readStoredProduct } from '../data/products';
 import './FloatLens.css';
 
-const RING_SIZE = 188;
+const RING_SIZE = 156;
 const RING_CENTER = RING_SIZE / 2;
-const OUTER_RADIUS = 78;
-const INNER_RADIUS = 62;
+const OUTER_RADIUS = 65;
+const INNER_RADIUS = 51;
 const PAIR_SIZE = 112;
 const PAIR_CENTER = PAIR_SIZE / 2;
 const PAIR_RADIUS = 44;
+const PAIR_NEST_OUTER_RADIUS = 42;
+const PAIR_NEST_OUTER_WIDTH = 5;
+const PAIR_NEST_INNER_RADIUS = 30;
+const PAIR_NEST_INNER_WIDTH = 3;
 const SILENT_REFRESH_MS = 60_000;
 
 function hasFill(percent: number | null | undefined): boolean {
   return percent != null && Number.isFinite(percent) && percent > 0;
+}
+
+function pickViewedId(accounts: AccountQuota[], current: string | null | undefined): string | null {
+  if (current && accounts.some((account) => account.id === current)) return current;
+  const live = accounts.find((account) => account.isCurrent);
+  return live?.id || accounts[0]?.id || null;
+}
+
+function tighterRemaining(weekly: number | null | undefined, fiveHour: number | null | undefined): number | null {
+  const week = weekly ?? null;
+  const hourly = fiveHour ?? null;
+  if (week == null && hourly == null) return null;
+  if (week == null) return hourly;
+  if (hourly == null) return week;
+  return Math.min(week, hourly);
 }
 
 function ringLength(radius: number): number {
@@ -83,6 +103,13 @@ function tokenRemainLine(text: string | null | undefined): string {
   return value;
 }
 
+function splitEmail(email: string | null | undefined): { local: string; domain: string } {
+  const value = String(email || '').trim();
+  const at = value.lastIndexOf('@');
+  if (at <= 0 || at === value.length - 1) return { local: value, domain: '' };
+  return { local: value.slice(0, at), domain: value.slice(at) };
+}
+
 function QuotaDial({
   size = 'hero',
   weekly,
@@ -90,7 +117,7 @@ function QuotaDial({
   heroPercent,
   heroLabel,
   emptyKind,
-  preview,
+  nest = false,
   spinning,
 }: {
   size?: 'hero' | 'pair';
@@ -99,33 +126,51 @@ function QuotaDial({
   heroPercent: number | null;
   heroLabel: string;
   emptyKind: 'reauth' | 'banned' | null;
-  preview: boolean;
+  nest?: boolean;
   spinning: boolean;
 }) {
   const isPair = size === 'pair';
+  const showInner = fiveHour != null || nest;
+  const nested = showInner;
   const box = isPair ? PAIR_SIZE : RING_SIZE;
   const center = isPair ? PAIR_CENTER : RING_CENTER;
-  const showInner = !isPair && fiveHour != null;
-  const outerRadius = isPair ? PAIR_RADIUS : (showInner ? OUTER_RADIUS : 74);
-  const outerWidth = isPair ? 7 : (showInner ? 8 : 10);
+  const outerRadius = isPair
+    ? (nested ? PAIR_NEST_OUTER_RADIUS : PAIR_RADIUS)
+    : (nested ? OUTER_RADIUS : 61);
+  const outerWidth = isPair
+    ? (nested ? PAIR_NEST_OUTER_WIDTH : 7)
+    : (nested ? 8 : 10);
+  const innerRadius = isPair ? PAIR_NEST_INNER_RADIUS : INNER_RADIUS;
+  const innerWidth = isPair ? PAIR_NEST_INNER_WIDTH : 5;
   const outerLength = ringLength(outerRadius);
-  const innerLength = ringLength(INNER_RADIUS);
-  const outerFill = weekly ?? heroPercent;
+  const innerLength = ringLength(innerRadius);
+  const outerFill = nested ? weekly : (weekly ?? heroPercent);
   const rest = !hasFill(heroPercent);
-  return (
+  const captionBelow = isPair && nested;
+  const glow = quotaStroke(heroPercent);
+  const discRadius = Math.max(16, (nested ? innerRadius : outerRadius) - (nested ? innerWidth : outerWidth) - 5);
+  const dial = (
     <div
-      className={`float-lens-dial${isPair ? ' is-pair' : ''}${rest ? ' is-rest' : ''}`}
-      style={isPair && heroPercent != null ? { '--dial-tone': quotaStroke(heroPercent) } as CSSProperties : undefined}
+      className={`float-lens-dial${isPair ? ' is-pair' : ''}${captionBelow ? ' is-nested' : ''}${rest ? ' is-rest' : ''}`}
+      style={{
+        ...(heroPercent != null ? { '--dial-glow': glow } : {}),
+        ...(isPair && !captionBelow && heroPercent != null ? { '--dial-tone': glow } : {}),
+      } as CSSProperties}
     >
       <svg viewBox={`0 0 ${box} ${box}`} aria-hidden="true">
         <circle
           cx={center}
           cy={center}
+          r={discRadius}
+          fill="rgba(255,255,255,0.03)"
+        />
+        <circle
+          cx={center}
+          cy={center}
           r={outerRadius}
           fill="none"
-          stroke="rgba(255,255,255,0.10)"
+          stroke="rgba(255,255,255,0.13)"
           strokeWidth={outerWidth}
-          strokeDasharray={preview ? '3 7' : undefined}
           strokeLinecap="round"
         />
         {hasFill(outerFill) ? (
@@ -141,6 +186,7 @@ function QuotaDial({
             strokeDasharray={outerLength}
             strokeDashoffset={arcOffset(outerRadius, outerFill)}
             transform={`rotate(-90 ${center} ${center})`}
+            opacity={nested ? 0.72 : 1}
           />
         ) : null}
         {showInner ? (
@@ -148,10 +194,10 @@ function QuotaDial({
             <circle
               cx={center}
               cy={center}
-              r={INNER_RADIUS}
+              r={innerRadius}
               fill="none"
-              stroke="rgba(255,255,255,0.06)"
-              strokeWidth="5"
+              stroke="rgba(255,255,255,0.10)"
+              strokeWidth={innerWidth}
               strokeLinecap="round"
             />
             {hasFill(fiveHour) ? (
@@ -159,13 +205,13 @@ function QuotaDial({
                 className="float-lens-dial-arc"
                 cx={center}
                 cy={center}
-                r={INNER_RADIUS}
+                r={innerRadius}
                 fill="none"
                 stroke={quotaStroke(fiveHour)}
-                strokeWidth="5"
+                strokeWidth={innerWidth}
                 strokeLinecap="round"
                 strokeDasharray={innerLength}
-                strokeDashoffset={arcOffset(INNER_RADIUS, fiveHour)}
+                strokeDashoffset={arcOffset(innerRadius, fiveHour)}
                 transform={`rotate(-90 ${center} ${center})`}
               />
             ) : null}
@@ -175,9 +221,13 @@ function QuotaDial({
       <div className={`float-lens-sweep${spinning ? ' is-on' : ''}`} />
       <div className="float-lens-readout">
         {heroPercent == null ? (
-          isPair ? (
+          isPair && !captionBelow ? (
             <div className="float-lens-readout-label is-empty">{heroLabel}</div>
-          ) : null
+          ) : captionBelow ? null : (
+            <div className={`float-lens-readout-value is-empty-text${heroLabel.length > 4 ? ' is-long' : ''}`}>
+              {emptyKind === 'banned' ? '已封号' : emptyKind === 'reauth' ? '需重新授权' : heroLabel}
+            </div>
+          )
         ) : (
           <>
             <div className={`float-lens-readout-value${rest ? ' is-rest' : ''}${heroPercent === 0 ? ' is-empty-text' : ''}`}>
@@ -188,10 +238,19 @@ function QuotaDial({
                 </>
               )}
             </div>
-            <div className="float-lens-readout-label">{heroLabel}</div>
+            {captionBelow ? null : (
+              <div className="float-lens-readout-label">{heroLabel}</div>
+            )}
           </>
         )}
       </div>
+    </div>
+  );
+  if (!captionBelow) return dial;
+  return (
+    <div className="float-lens-dial-col">
+      {dial}
+      <div className="float-lens-dial-caption">{heroLabel}</div>
     </div>
   );
 }
@@ -210,36 +269,64 @@ export default function FloatLens() {
   const shellRef = useRef<HTMLDivElement | null>(null);
   const productRef = useRef(product);
   productRef.current = product;
+  const cacheRef = useRef<Partial<Record<ProductKind, { accounts: AccountQuota[]; viewedId: string | null }>>>({});
+  const cacheProductRef = useRef(product);
   const productLabel = productName(product);
   const chromeMark = floatChromeMark(product);
   const actions = productActions();
 
+  if (cacheProductRef.current !== product) {
+    cacheProductRef.current = product;
+    const cached = cacheRef.current[product];
+    if (cached) {
+      setAccounts(cached.accounts);
+      setViewedId(cached.viewedId);
+      setLoading(false);
+    } else {
+      setAccounts([]);
+      setViewedId(null);
+      setLoading(true);
+    }
+    setConfirmSwitch(false);
+    setErrorText(null);
+    setRefreshing(false);
+    setSwitching(false);
+  }
+
   const applyProduct = useCallback((next: ProductKind) => {
     setProduct((current) => (current === next ? current : next));
+  }, []);
+
+  const applyAccounts = useCallback((kind: ProductKind, nextAccounts: AccountQuota[]) => {
+    setAccounts(nextAccounts);
+    setViewedId((current) => {
+      const nextId = pickViewedId(nextAccounts, current);
+      cacheRef.current[kind] = { accounts: nextAccounts, viewedId: nextId };
+      return nextId;
+    });
   }, []);
 
   const loadAccounts = useCallback(async () => {
     const kind = productRef.current;
     if (!hasDesktopBridge()) {
       const previewAccounts = previewAccountsForLens(kind);
-      setAccounts(previewAccounts);
-      setViewedId((current) => {
-        if (current && previewAccounts.some((account) => account.id === current)) return current;
-        const live = previewAccounts.find((account) => account.isCurrent);
-        return live?.id || previewAccounts[0]?.id || null;
-      });
+      applyAccounts(kind, previewAccounts);
       setLoading(false);
       return previewAccounts;
     }
     try {
       const snapshot = await desktopApi.loadFloatAccounts(kind);
       if (productRef.current !== kind) return;
-      setAccounts(snapshot.accounts);
-      setViewedId((current) => {
-        if (current && snapshot.accounts.some((account) => account.id === current)) return current;
-        const live = snapshot.accounts.find((account) => account.isCurrent);
-        return live?.id || snapshot.accounts[0]?.id || null;
-      });
+      applyAccounts(kind, snapshot.accounts);
+      if (kind === 'antigravity' || kind === 'cursor') {
+        const refresh = kind === 'antigravity'
+          ? desktopApi.loadAntigravityState()
+          : desktopApi.loadCursorState();
+        void refresh.then((fresh) => {
+          if (productRef.current !== kind) return;
+          applyAccounts(kind, fresh.accounts);
+        }).catch(() => {});
+      }
       return snapshot.accounts;
     } catch (error) {
       if (productRef.current !== kind) return;
@@ -247,7 +334,7 @@ export default function FloatLens() {
     } finally {
       if (productRef.current === kind) setLoading(false);
     }
-  }, []);
+  }, [applyAccounts]);
 
   useEffect(() => {
     document.documentElement.classList.add('float-lens-root');
@@ -259,16 +346,6 @@ export default function FloatLens() {
       document.getElementById('root')?.classList.remove('float-lens-root');
     };
   }, []);
-
-  useEffect(() => {
-    setConfirmSwitch(false);
-    setErrorText(null);
-    setRefreshing(false);
-    setSwitching(false);
-    setAccounts([]);
-    setViewedId(null);
-    setLoading(true);
-  }, [product]);
 
   useEffect(() => {
     void loadAccounts();
@@ -316,9 +393,27 @@ export default function FloatLens() {
   const resetLine = hero.key === 'fiveHour' ? innerReset : (outerReset || innerReset);
   const tokenLine = isManagedProduct(product) && !hideQuota && !hideFailedQuota ? tokenRemainLine(viewed?.tokenValidity) : '';
   const caption = tokenLine || (!hideQuota && !hideFailedQuota ? resetLine : '');
-  const showPair = isManagedProduct(product) && !hideQuota;
+  const showPair = product === 'antigravity'
+    ? !!viewed
+    : isManagedProduct(product) && !hideQuota;
+  const pairDials = showPair && viewed && product === 'antigravity'
+    ? antigravityQuotaFamilies(viewed).map((family) => {
+      const weekly = hideQuota || hideFailedQuota ? null : family.weekly.remaining;
+      const fiveHour = hideQuota || hideFailedQuota ? null : family.fiveHour.remaining;
+      return {
+        weekly,
+        fiveHour,
+        heroPercent: tighterRemaining(weekly, fiveHour),
+        heroLabel: family.title,
+      };
+    })
+    : [
+      { weekly: outerValue, fiveHour: null as number | null, heroPercent: outerValue, heroLabel: windows.outerLabel },
+      { weekly: innerValue, fiveHour: null as number | null, heroPercent: innerValue, heroLabel: windows.innerLabel },
+    ];
   const planBadge = viewed ? planBadgeText(viewed) : '';
   const statusBadge = viewed ? statusBadgeText(viewed) : null;
+  const emailParts = splitEmail(viewed?.email);
   const emptyKind = hideQuota
     ? (viewed?.status === 'BANNED' && !isManagedProductAccount(viewed) ? 'banned' : 'reauth')
     : null;
@@ -326,10 +421,13 @@ export default function FloatLens() {
   const moveAccount = useCallback((step: -1 | 1) => {
     if (accounts.length <= 1 || viewedIndex < 0) return;
     const next = (viewedIndex + step + accounts.length) % accounts.length;
-    setViewedId(accounts[next].id);
+    const nextId = accounts[next].id;
+    setViewedId(nextId);
+    const cached = cacheRef.current[product];
+    if (cached) cacheRef.current[product] = { ...cached, viewedId: nextId };
     setConfirmSwitch(false);
     setErrorText(null);
-  }, [accounts, viewedIndex]);
+  }, [accounts, viewedIndex, product]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -460,7 +558,7 @@ export default function FloatLens() {
       <div className="float-lens-shell app-drag" ref={shellRef}>
         <div className="float-lens-chrome">
           <div
-            className={`float-lens-mark${chromeMark.length > 5 ? ' is-long' : chromeMark.length <= 2 ? ' is-short' : ''}`}
+            className={`float-lens-mark${chromeMark.length > 8 ? ' is-full' : chromeMark.length > 5 ? ' is-long' : chromeMark.length <= 2 ? ' is-short' : ''}`}
             id="float-lens-mark"
           >
             {chromeMark}
@@ -490,26 +588,19 @@ export default function FloatLens() {
             <>
               {showPair ? (
                 <div className="float-lens-pair" id="float-lens-pair">
-                  <QuotaDial
-                    size="pair"
-                    weekly={outerValue}
-                    fiveHour={null}
-                    heroPercent={outerValue}
-                    heroLabel={windows.outerLabel}
-                    emptyKind={null}
-                    preview={!isCurrent}
-                    spinning={refreshing}
-                  />
-                  <QuotaDial
-                    size="pair"
-                    weekly={innerValue}
-                    fiveHour={null}
-                    heroPercent={innerValue}
-                    heroLabel={windows.innerLabel}
-                    emptyKind={null}
-                    preview={!isCurrent}
-                    spinning={refreshing}
-                  />
+                  {pairDials.map((dial) => (
+                    <QuotaDial
+                      key={dial.heroLabel}
+                      size="pair"
+                      weekly={dial.weekly}
+                      fiveHour={dial.fiveHour}
+                      heroPercent={dial.heroPercent}
+                      heroLabel={dial.heroLabel}
+                      emptyKind={null}
+                      nest={product === 'antigravity'}
+                      spinning={refreshing}
+                    />
+                  ))}
                 </div>
               ) : (
                 <QuotaDial
@@ -518,22 +609,22 @@ export default function FloatLens() {
                   heroPercent={hero.percent}
                   heroLabel={hero.label}
                   emptyKind={emptyKind}
-                  preview={!isCurrent}
                   spinning={refreshing}
                 />
               )}
 
               <div className="float-lens-identity" title={viewed.email}>
-                <div className="float-lens-name">{viewed.email}</div>
-                <div className="float-lens-pills">
-                  <div className="float-lens-plan">{planBadge}</div>
-                  {statusBadge ? <div className="float-lens-plan is-status">{statusBadge}</div> : null}
+                <div className="float-lens-name">
+                  <span className="float-lens-name-local">{emailParts.local}</span>
+                  {emailParts.domain ? (
+                    <span className="float-lens-name-domain">{emailParts.domain}</span>
+                  ) : null}
                 </div>
-                {caption ? (
-                  <div className="float-lens-reset">
-                    {caption}
-                  </div>
-                ) : null}
+                <div className="float-lens-meta">
+                  {planBadge ? <div className="float-lens-plan">{planBadge}</div> : null}
+                  {statusBadge ? <div className="float-lens-plan is-status">{statusBadge}</div> : null}
+                  {caption ? <div className="float-lens-reset">{caption}</div> : null}
+                </div>
               </div>
 
               <div className="float-lens-pager">

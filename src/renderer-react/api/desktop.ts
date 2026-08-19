@@ -1784,17 +1784,23 @@ export const desktopApi = {
 
   async loadFloatAccounts(product: ProductKind = 'codex') {
     if (product === 'antigravity') {
-      const snapshot = await desktopApi.loadAntigravityState();
+      const snapshot = await desktopApi.loadAntigravityState({ skipOfficialSync: true });
       return {
         accounts: snapshot.accounts,
         currentAccount: snapshot.currentAccount,
       };
     }
     if (product === 'cursor') {
-      const snapshot = await desktopApi.loadCursorState();
+      const api = bridge();
+      const [accountsResponse, currentResponse] = await Promise.all([
+        captureResponse(() => api.listCursorAccounts({ skipOfficialSync: true }), 'Read Cursor accounts'),
+        captureResponse(() => api.getCurrentCursorAccount({ skipOfficialSync: true }), 'Read current Cursor account'),
+      ]);
+      const rawAccounts = expectData(accountsResponse, 'Read Cursor accounts') || [];
+      const currentAccount = optionalData(currentResponse, null);
       return {
-        accounts: snapshot.accounts,
-        currentAccount: snapshot.currentAccount,
+        accounts: rawAccounts.map((account) => mapCursorAccountForUi(account, currentAccount)),
+        currentAccount,
       };
     }
     const api = bridge();

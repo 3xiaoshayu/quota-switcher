@@ -7,6 +7,15 @@ release is published.
 
 ## Unreleased
 
+## [0.1.0-beta.33] - 2026-08-19
+
+- Keep Antigravity on paired Gemini / Claude 与 GPT rings in the float,
+  including reauth and unclear-quota cards, instead of a single Codex ring.
+- Load Antigravity float accounts from the local store first so switching
+  products feels as fast as Codex and Cursor.
+- Keep unauthorized float cards readable: status, remaining time, and the
+  switch label no longer clip.
+
 ## [0.1.0-beta.32] - 2026-08-18
 
 - Write Cursor and Antigravity logins as in-place SQLite updates, so a large
