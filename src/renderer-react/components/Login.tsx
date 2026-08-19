@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { Mail, Shield, ShieldCheck, User, ArrowRight, Activity, X } from 'lucide-react';
 import { desktopApi, hasDesktopBridge } from '../api/desktop';
 import appIcon from '../assets/app-icon.png';
+import { APP_DISPLAY_NAME } from '../brand';
 
 interface LoginProps {
   onLogin: (email: string) => void;
@@ -81,7 +82,7 @@ export default function Login({ onLogin, userEmail, appVersion = '0.1.0', showDe
             id="login-icon-box"
           />
           <h1 className="text-[26px] font-semibold tracking-tight text-label" id="login-title">
-            账号管理器
+            {APP_DISPLAY_NAME}
           </h1>
           <p className="text-[13px] text-label-2 mt-2" id="login-subtitle">
             多账号额度监控与切换
@@ -186,7 +187,7 @@ export default function Login({ onLogin, userEmail, appVersion = '0.1.0', showDe
 
         <div className="mt-8 text-center" id="login-footer-credits">
           <p className="text-[11px] text-label-3">
-            Codex Account Manager {appVersion.startsWith('v') ? appVersion : `v${appVersion}`}
+            {APP_DISPLAY_NAME} {appVersion.startsWith('v') ? appVersion : `v${appVersion}`}
           </p>
         </div>
       </motion.div>

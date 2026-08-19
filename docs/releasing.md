@@ -49,7 +49,7 @@ git push origin main
 Create an annotated tag that exactly matches `package.json`:
 
 ```powershell
-git tag -a v<version> -m "Codex Account Manager v<version>"
+git tag -a v<version> -m "Quota Switcher v<version>"
 git push origin v<version>
 ```
 
@@ -64,8 +64,8 @@ The Release workflow:
 
 ## Expected assets
 
-- `Codex-Account-Manager-Setup-<version>-x64.exe`
-- `Codex-Account-Manager-<version>-x64.zip`
+- `Quota-Switcher-Setup-<version>-x64.exe`
+- `Quota-Switcher-<version>-x64.zip`
 - installer `.blockmap`
 - `latest.yml`
 - `SHA256SUMS.txt`

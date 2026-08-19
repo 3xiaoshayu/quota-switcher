@@ -1,5 +1,5 @@
 appId: com.3xiaoshayu.codex-account-manager
-productName: Codex Account Manager
+productName: Quota Switcher
 copyright: Copyright © 2026
 
 # Ship only the languages the interface actually uses; the full Chromium
@@ -23,7 +23,7 @@ win:
     - target: zip
       arch: [x64]
   icon: resources/icon.ico
-  artifactName: "Codex-Account-Manager-${version}-${arch}.${ext}"
+  artifactName: "Quota-Switcher-${version}-${arch}.${ext}"
 
 nsis:
   oneClick: false
@@ -40,13 +40,13 @@ nsis:
     - zh_CN
     - en_US
   language: 2052
-  uninstallDisplayName: Codex Account Manager
+  uninstallDisplayName: Quota Switcher
   installerSidebar: installerSidebar.bmp
   uninstallerSidebar: installerSidebar.bmp
   installerHeader: installerHeader.bmp
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  artifactName: "Codex-Account-Manager-Setup-${version}-${arch}.${ext}"
+  artifactName: "Quota-Switcher-Setup-${version}-${arch}.${ext}"
 
 publish:
   provider: github

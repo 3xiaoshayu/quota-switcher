@@ -2,7 +2,7 @@
 
 [简体中文](privacy.md)
 
-Codex Account Manager is local-first. It does not operate a project-owned
+Quota Switcher is local-first. It does not operate a project-owned
 backend, telemetry pipeline, advertising service, or cross-device account sync.
 
 ## Local data

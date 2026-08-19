@@ -70,8 +70,8 @@ async function makeSidebar() {
       <rect width="${sidebarWidth}" height="${sidebarHeight}" fill="${dark}"/>
       <rect width="${sidebarWidth}" height="${sidebarHeight}" fill="url(#glow)"/>
       <rect width="3" height="${sidebarHeight}" fill="url(#rail)"/>
-      <text x="82" y="198" text-anchor="middle" font-family="Segoe UI" font-size="14" font-weight="600" fill="#f5f5f7">Codex</text>
-      <text x="82" y="218" text-anchor="middle" font-family="Segoe UI" font-size="11" fill="#86868b">Account Manager</text>
+      <text x="82" y="198" text-anchor="middle" font-family="Segoe UI" font-size="14" font-weight="600" fill="#f5f5f7">Quota</text>
+      <text x="82" y="218" text-anchor="middle" font-family="Segoe UI" font-size="11" fill="#86868b">Switcher</text>
     </svg>
   `);
 

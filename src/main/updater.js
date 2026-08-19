@@ -1,3 +1,5 @@
+const { APP_DISPLAY_NAME, APP_GITHUB_URL } = require("../../engine/app-brand");
+
 function getReleaseChannel(version) {
   return String(version || "").includes("-") ? "beta" : "stable";
 }
@@ -13,11 +15,11 @@ function createUpdateService({ app, BrowserWindow }) {
   }
 
   const appInfo = {
-    name: "Codex Account Manager",
+    name: APP_DISPLAY_NAME,
     version: app.getVersion(),
     releaseChannel: getReleaseChannel(app.getVersion()),
     isPackaged: app.isPackaged,
-    repository: "https://github.com/3xiaoshayu/codex-account-manager",
+    repository: APP_GITHUB_URL,
   };
 
   const updateEnabled = !!autoUpdater && app.isPackaged && appInfo.releaseChannel === "stable";

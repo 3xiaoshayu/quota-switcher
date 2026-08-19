@@ -2,7 +2,8 @@
 
 const APP_USER_MODEL_ID = "com.3xiaoshayu.codex-account-manager";
 const SURFACE_APP_USER_MODEL_ID = `${APP_USER_MODEL_ID}.surface`;
-const HOST_TITLE = "Codex Account Manager";
+const { APP_DISPLAY_NAME } = require("../../engine/app-brand");
+const HOST_TITLE = APP_DISPLAY_NAME;
 const MAIN_NATIVE_TITLE = "\u200b";
 
 function applyHostTaskbarIdentity(win) {

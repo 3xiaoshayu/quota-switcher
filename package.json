@@ -2,7 +2,7 @@
   "name": "codex-account-manager",
   "version": "1.0.1",
   "private": true,
-  "description": "Several Codex, Cursor, and Antigravity accounts, one Windows window. Quotas and switching stay on this PC.",
+  "description": "Quota Switcher for Codex, Cursor, and Antigravity accounts on Windows. Quotas and switching stay on this PC.",
   "main": "src/main/main.js",
   "scripts": {
     "start": "npm run renderer:build && electron .",
@@ -36,6 +36,7 @@
     "url": "https://github.com/3xiaoshayu/codex-account-manager/issues"
   },
   "keywords": [
+    "quota-switcher",
     "codex",
     "cursor",
     "openai",

@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-Codex Account Manager includes or depends on the following open-source
+Quota Switcher includes or depends on the following open-source
 software. This notice does not replace the license files distributed by those
 projects.
 

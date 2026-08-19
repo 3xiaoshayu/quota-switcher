@@ -1,11 +1,14 @@
 # Changelog
 
-All notable changes to Codex Account Manager are documented here.
+All notable changes to Quota Switcher are documented here.
 
 The project follows [Semantic Versioning](https://semver.org/) once a stable
 release is published.
 
 ## Unreleased
+
+- Rename the app to Quota Switcher in the window, sidebar, installer, and docs.
+  Account data still lives in `%USERPROFILE%\.codex-switch`.
 
 ## [1.0.1] - 2026-08-19
 

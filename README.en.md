@@ -1,6 +1,6 @@
 <div align="center">
 
-# Codex Account Manager
+# Quota Switcher
 
 Several Codex, Cursor, and Antigravity accounts, one Windows window.
 
@@ -69,7 +69,7 @@ A common community reference is
 Tauri + Rust project. This app is not a replacement for it. The goal here is a
 solid **Windows vault, switch transaction, and three-product window**.
 
-| Area | Codex Account Manager |
+| Area | Quota Switcher |
 | --- | --- |
 | Codex switch | Snapshot the official login, managed projection, and index first; roll the whole transaction back if a later step fails. It does not write `auth.json` first and hope to repair afterwards. |
 | Windows secrets | Current-user DPAPI via Electron `safeStorage`. Another Windows user or another PC generally cannot decrypt them. |
@@ -126,7 +126,7 @@ Windows 10 or 11 (x64). Codex needs the official Microsoft Store Codex app.
 Cursor needs official Cursor. Antigravity needs official Antigravity IDE. You
 can use any subset on its own.
 
-1. Open [Releases](https://github.com/3xiaoshayu/codex-account-manager/releases) and download `Codex-Account-Manager-Setup-<version>-x64.exe`
+1. Open [Releases](https://github.com/3xiaoshayu/codex-account-manager/releases) and download `Quota-Switcher-Setup-<version>-x64.exe`
 2. Install and open it
 3. Pick Codex, Cursor, or Antigravity in the sidebar, then use the matching
    **导入本机已登录** action, or **打开网页授权**
@@ -137,7 +137,7 @@ The ZIP also runs; data still lives in your user profile. Upgrading from
 `1.0.x` builds can be checked from inside the app.
 
 ```powershell
-Get-FileHash ".\Codex-Account-Manager-Setup-<version>-x64.exe" -Algorithm SHA256
+Get-FileHash ".\Quota-Switcher-Setup-<version>-x64.exe" -Algorithm SHA256
 ```
 
 Compare that with `SHA256SUMS.txt` from the same release.

@@ -9,6 +9,7 @@ import {
   productById,
 } from '../data/products';
 import appIcon from '../assets/app-icon.png';
+import { APP_DISPLAY_NAME } from '../brand';
 import iconCodex from '../assets/products/codex.png';
 import iconCursor from '../assets/products/cursor.png';
 import iconAntigravity from '../assets/products/antigravity.png';
@@ -223,7 +224,7 @@ export default function Sidebar({
             id="sidebar-avatar-wrapper"
           />
           <div className="flex flex-col select-none" id="sidebar-profile-text">
-            <span className="font-semibold text-label text-[13px]">Account Manager</span>
+            <span className="font-semibold text-label text-[13px]">{APP_DISPLAY_NAME}</span>
             <span className="flex items-center gap-1.5 text-[11px] text-label-3 mt-0.5">
               <span className={`w-1.5 h-1.5 rounded-full ${
                 daemonState.status === 'Running'

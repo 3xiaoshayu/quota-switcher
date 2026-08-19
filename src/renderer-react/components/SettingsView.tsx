@@ -20,6 +20,7 @@ import {
 import { AccountQuota, SystemSettings, DaemonState, ProductKind } from '../types';
 import { lastCheckCaption, tokenStatusChip } from '../api/desktop';
 import { PRODUCTS, productById, type ProductDefinition } from '../data/products';
+import { APP_DISPLAY_NAME } from '../brand';
 
 function productListCaption(labels: string[]) {
   if (labels.length <= 1) return labels[0] || '';
@@ -503,7 +504,7 @@ export default function SettingsView({
           </div>
           <div className="flex flex-col" id="footer-banner-titles">
             <span className="font-bold text-label text-sm tracking-wide font-sans">
-              Codex Account Manager {settings.version.startsWith('v') ? settings.version : `v${settings.version}`}
+              {APP_DISPLAY_NAME} {settings.version.startsWith('v') ? settings.version : `v${settings.version}`}
             </span>
             <span className="text-xs text-label-2 mt-1">
               本地优先的 Codex / Cursor / Antigravity 账号管理工具。

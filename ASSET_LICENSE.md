@@ -6,8 +6,8 @@ different notice is stated.
 ## Application icon
 
 `resources/icon.png`, `resources/icon.ico`, `resources/installerSidebar.bmp`,
-and `resources/installerHeader.bmp` are distributed as part of Codex Account
-Manager and may be used in builds of this project. The project name and icon
+and `resources/installerHeader.bmp` are distributed as part of Quota Switcher
+and may be used in builds of this project. The project name and icon
 do not imply affiliation with or endorsement by OpenAI.
 
 ## Product marks

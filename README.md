@@ -1,6 +1,6 @@
 <div align="center">
 
-# Codex Account Manager
+# Quota Switcher
 
 多个 Codex、Cursor 和 Antigravity 账号，一个窗口里照看。
 
@@ -46,7 +46,7 @@ Antigravity 第一期只接官方 **Antigravity IDE**：导入本机、网页授
 
 社区里常被提到的参考是 [Cockpit Tools](https://github.com/jlcodes99/cockpit-tools)。那是 Tauri + Rust 做的，做得认真。我们不是要取代它，而是把 **Windows 本机保险柜、切号事务、三家账号** 做扎实。
 
-| 点 | Codex Account Manager |
+| 点 | Quota Switcher |
 | --- | --- |
 | Codex 切号 | 先快照官方登录、管理器投影和账号索引；后面任一步失败就整段回滚，不是先写完 `auth.json` 再想办法补救 |
 | Windows 凭证 | 当前用户 DPAPI（Electron `safeStorage`），换 Windows 用户或换电脑一般解不开 |
@@ -99,7 +99,7 @@ Antigravity 第一期只接官方 **Antigravity IDE**：导入本机、网页授
 
 Windows 10 / 11（x64）。管 Codex 需要微软商店里的官方 Codex，管 Cursor 需要本机装着官方 Cursor，管 Antigravity 需要本机装着官方 Antigravity IDE。可以只用其中几个。
 
-1. 打开 [Releases](https://github.com/3xiaoshayu/codex-account-manager/releases)，下载 `Codex-Account-Manager-Setup-<版本>-x64.exe`
+1. 打开 [Releases](https://github.com/3xiaoshayu/codex-account-manager/releases)，下载 `Quota-Switcher-Setup-<版本>-x64.exe`
 2. 安装并打开
 3. 侧栏选 Codex、Cursor 或 Antigravity，点对应的「导入本机已登录」，也可以「打开网页授权」
 4. 回来就能看到卡片和额度
@@ -107,7 +107,7 @@ Windows 10 / 11（x64）。管 Codex 需要微软商店里的官方 Codex，管 
 ZIP 解压也能用，数据还是写在用户目录。从 `0.1.0-beta.*` 升到 1.0.0 需要手动装一次；装好正式版之后，后续 `1.0.x` 可以在应用里检查更新。
 
 ```powershell
-Get-FileHash ".\Codex-Account-Manager-Setup-<版本>-x64.exe" -Algorithm SHA256
+Get-FileHash ".\Quota-Switcher-Setup-<版本>-x64.exe" -Algorithm SHA256
 ```
 
 和同一条 Release 里的 `SHA256SUMS.txt` 对一下。

@@ -13,6 +13,7 @@ const {
 } = require("./main-window-bounds");
 const { writeJsonAtomic } = require(path.resolve(__dirname, "..", "..", "engine", "atomic-file"));
 const { applyAppProxy, applyStartupProxyHint } = require(path.resolve(__dirname, "..", "..", "engine", "proxy-resolve"));
+const { APP_DISPLAY_NAME } = require(path.resolve(__dirname, "..", "..", "engine", "app-brand"));
 
 applyAppUserModelId(app);
 
@@ -73,7 +74,7 @@ function startApplication() {
     const eng = require("../../engine");
     if (!safeStorage.isEncryptionAvailable()) {
         dialog.showErrorBox(
-            "Codex Account Manager",
+            APP_DISPLAY_NAME,
             "Windows 凭据保护不可用，账号 Token 无法安全保存。应用将退出。",
         );
         app.quit();
@@ -133,7 +134,7 @@ function startApplication() {
         frame: true,
         titleBarStyle: "hidden",
         autoHideMenuBar: true,
-        title: "Codex Account Manager",
+        title: APP_DISPLAY_NAME,
         backgroundColor: "#131315",
         show: false,
         icon: appIcon,
@@ -225,7 +226,7 @@ function reportStartupFailure(error) {
     console.error("Startup failed:", error);
     try {
         dialog.showErrorBox(
-            "Codex Account Manager",
+            APP_DISPLAY_NAME,
             `应用启动失败：${error?.message || error}`,
         );
     } catch {}

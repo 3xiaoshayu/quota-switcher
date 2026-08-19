@@ -19,9 +19,9 @@ function assertFile(file) {
 if (!fs.existsSync(dist)) fail("Missing dist directory. Run the release build first.");
 
 const expected = [
-  `Codex-Account-Manager-${pkg.version}-x64.zip`,
-  `Codex-Account-Manager-Setup-${pkg.version}-x64.exe`,
-  `Codex-Account-Manager-Setup-${pkg.version}-x64.exe.blockmap`,
+  `Quota-Switcher-${pkg.version}-x64.zip`,
+  `Quota-Switcher-Setup-${pkg.version}-x64.exe`,
+  `Quota-Switcher-Setup-${pkg.version}-x64.exe.blockmap`,
   "latest.yml",
 ];
 

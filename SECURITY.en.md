@@ -2,7 +2,7 @@
 
 [简体中文](SECURITY.md)
 
-Codex Account Manager handles OAuth credentials and modifies the local Codex,
+Quota Switcher handles OAuth credentials and modifies the local Codex,
 Cursor, and Antigravity authentication state. Security reports are treated as
 a priority.
 
