@@ -24,7 +24,7 @@
 
 ## 这是什么
 
-**1.0.0 第一正式版。** 侧栏切换 **Codex** / **Cursor** / **Antigravity**。每个账号一张卡片，剩多少额度一眼能看完。要换号时，由它去改官方客户端的登录。账号只存在这台电脑上，用 Windows 当前用户加密，不会上传。
+**2.0.0 是 Quota Switcher 的正式起点。** 侧栏切换 **Codex** / **Cursor** / **Antigravity**。每个账号一张卡片，剩多少额度一眼能看完。要换号时，由它去改官方客户端的登录。账号只存在这台电脑上，用 Windows 当前用户加密，不会上传。从 1.0.x 升上来时，仓库地址和账号目录不变。
 
 它不会给你加额度。自动切号只换 Codex。Cursor 和 Antigravity 可以看、可以切，但不会自动换。
 
@@ -34,7 +34,7 @@ Antigravity 第一期只接官方 **Antigravity IDE**：导入本机、网页授
 
 **Codex** — 看 5 小时和周额度。可以「导入本机已登录的 Codex」，也可以「打开网页授权」。换号会写进微软商店版 Codex。额度不够时，后台按你设的线换号；关掉窗口也不会停。
 
-**Cursor** — 看套餐、Auto 和 API。可以「导入本机已登录的 Cursor」，或「打开网页授权」，写进官方 Cursor。本机当前登录的那个号，会标成当前账号。
+**Cursor** — 看套餐、Auto + Composer Usage 和 API Usage。可以「导入本机已登录的 Cursor」，或「打开网页授权」，写进官方 Cursor。本机当前登录的那个号，会标成当前账号。
 
 **Antigravity** — 看套餐/积分和主要模型剩余。可以「导入本机已登录的 Antigravity」，或走 Google 网页授权，写进官方 Antigravity IDE。
 
@@ -104,7 +104,7 @@ Windows 10 / 11（x64）。管 Codex 需要微软商店里的官方 Codex，管 
 3. 侧栏选 Codex、Cursor 或 Antigravity，点对应的「导入本机已登录」，也可以「打开网页授权」
 4. 回来就能看到卡片和额度
 
-ZIP 解压也能用，数据还是写在用户目录。从 `0.1.0-beta.*` 升到 1.0.0 需要手动装一次；装好正式版之后，后续 `1.0.x` 可以在应用里检查更新。
+ZIP 解压也能用，数据还是写在用户目录。从 `1.0.x` 升到 2.0.0 需要装一次本版 Setup，桌面快捷方式才会改成 Quota Switcher；装好之后，后续 `2.0.x` 可以在应用里检查更新。
 
 ```powershell
 Get-FileHash ".\Quota-Switcher-Setup-<版本>-x64.exe" -Algorithm SHA256

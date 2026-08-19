@@ -12,10 +12,13 @@ locally built installer as an official release asset.
 - `x.y.z`: stable release. Packaged builds may check GitHub for later stable
   updates.
 
-`1.0.0` is the first stable release. The Windows installer is still unsigned,
+`1.0.0` was the first stable build under the previous name. `2.0.0` is the
+first Quota Switcher product release. The Windows installer is still unsigned,
 so keep the unknown-publisher warning and SHA-256 check in user-facing notes.
-A packaged `0.1.0-beta.*` build will not jump to `1.0.0` by itself; that Setup
-must be installed once. Later `1.0.x` builds can use the in-app updater.
+A packaged `1.0.x` build will not rename the desktop shortcut by itself; the
+2.0.0 Setup must be installed once. Later `2.0.x` builds can use the in-app
+updater. The GitHub repo, Windows app id, and `%USERPROFILE%\.codex-switch`
+path stay the same.
 
 ## Prepare a release
 

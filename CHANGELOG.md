@@ -7,8 +7,25 @@ release is published.
 
 ## Unreleased
 
-- Rename the app to Quota Switcher in the window, sidebar, installer, and docs.
-  Account data still lives in `%USERPROFILE%\.codex-switch`.
+## [2.0.0] - 2026-08-20
+
+Quota Switcher's first product release. The GitHub repo, Windows app id, and
+`%USERPROFILE%\.codex-switch` data path are unchanged, so 1.0.x installs can
+upgrade in place and keep their accounts.
+
+- Ship the visible name Quota Switcher in the window, sidebar, installer,
+  tray, and docs. Desktop and Start menu shortcuts pick up the new name after
+  this Setup is installed once.
+- Replace the stiff sidebar title with the signed wordmark. Daemon status stays
+  in Settings, not under the name.
+- Show Cursor quota as Auto + Composer Usage and API Usage on account cards and
+  the quota overview. The float lens stays Auto / API.
+- Speed up Antigravity switching, keep weekly-only free quotas honest, and
+  avoid fake 5-hour bars.
+- The installer is still unsigned. Download only from GitHub Releases and check
+  SHA-256.
+- 1.0.x builds do not rename the desktop shortcut by themselves. Install this
+  Setup once; later `2.0.x` updates can arrive in the app.
 
 ## [1.0.1] - 2026-08-19
 

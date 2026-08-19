@@ -26,11 +26,12 @@ Several Codex, Cursor, and Antigravity accounts, one Windows window.
 
 ## What this is
 
-**1.0.0 is the first stable release.** The sidebar switches **Codex** /
-**Cursor** / **Antigravity**. One card per account, remaining quota at a
-glance. When you switch, it updates the official client's login. Accounts stay
-on this PC and are encrypted for the current Windows user. Nothing is uploaded
-to us.
+**2.0.0 is the first Quota Switcher product release.** The sidebar switches
+**Codex** / **Cursor** / **Antigravity**. One card per account, remaining quota
+at a glance. When you switch, it updates the official client's login. Accounts
+stay on this PC and are encrypted for the current Windows user. Nothing is
+uploaded to us. Upgrading from 1.0.x keeps the same GitHub repo and account
+folder.
 
 It cannot raise anyone's limits. Auto-switch only moves between your saved
 Codex accounts. Cursor and Antigravity can show usage and switch by hand; they
@@ -48,9 +49,9 @@ sign in through the browser. A switch writes the official Microsoft Store
 Codex app. When usage is low, a background worker switches at the line you
 set. Closing the window does not stop it.
 
-**Cursor** — plan, Auto, and API. Import the local login or sign in through
-the browser, then write official Cursor. The official current login is marked
-as current.
+**Cursor** — plan, Auto + Composer Usage, and API Usage. Import the local login
+or sign in through the browser, then write official Cursor. The official
+current login is marked as current.
 
 **Antigravity** — plan/credits and primary model remaining. Import the local
 Antigravity IDE login or sign in with Google, then write official Antigravity
@@ -133,8 +134,8 @@ can use any subset on its own.
 4. The cards and quotas should be there when you come back
 
 The ZIP also runs; data still lives in your user profile. Upgrading from
-`0.1.0-beta.*` to 1.0.0 needs a manual Setup install. After that, later
-`1.0.x` builds can be checked from inside the app.
+`1.0.x` to 2.0.0 needs this Setup once so the desktop shortcut becomes Quota
+Switcher. After that, later `2.0.x` builds can be checked from inside the app.
 
 ```powershell
 Get-FileHash ".\Quota-Switcher-Setup-<version>-x64.exe" -Algorithm SHA256
