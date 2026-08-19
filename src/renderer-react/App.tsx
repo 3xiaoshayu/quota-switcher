@@ -37,6 +37,7 @@ import {
   summarizeRefreshAllResults,
   formatTokenCheckMessage,
   QUOTA_AUTO_SYNC_MIN_GAP_MS,
+  withCurrentFlag,
 } from './api/desktop';
 import { logTypeLabel, toUserMessage } from './api/user-messages';
 import {
@@ -338,6 +339,14 @@ function DashboardApp() {
     if (current === 'antigravity') setAntigravityAccounts(apply);
     else if (current === 'cursor') setCursorAccounts(apply);
     else setCodexAccounts(apply);
+  }, []);
+
+  const applyCurrentAccountBadge = useCallback((kind: ProductKind | undefined, currentId: string | null | undefined) => {
+    if (!kind || !currentId) return;
+    const apply = (prev: AccountQuota[]) => withCurrentFlag(prev, currentId);
+    if (kind === 'antigravity') setAntigravityAccounts(apply);
+    else if (kind === 'cursor') setCursorAccounts(apply);
+    else if (kind === 'codex') setCodexAccounts(apply);
   }, []);
 
   const applyCursorState = useCallback((snapshot: Awaited<ReturnType<typeof desktopApi.loadCursorState>>) => {
@@ -653,7 +662,7 @@ function DashboardApp() {
       if (patchTimer) window.clearTimeout(patchTimer);
       patchTimer = window.setTimeout(() => {
         patchTimer = null;
-        if (!disposed) void loadDashboardState(false);
+        if (!disposed) void loadDashboardState(false, { skipOfficialSync: true });
       }, 150);
     };
 
@@ -684,7 +693,10 @@ function DashboardApp() {
         addToast(state.message || '官方 Codex 登录状态已变更。', 'warning', 'codex');
       },
       onQuotaUpdated: () => schedulePatchReload(),
-      onAccountUpdated: () => schedulePatchReload(),
+      onAccountUpdated: (payload) => {
+        if (payload?.current) applyCurrentAccountBadge(payload.product, payload.account?.id);
+        schedulePatchReload();
+      },
     });
 
     return () => {
@@ -694,7 +706,7 @@ function DashboardApp() {
       window.clearInterval(syncTimer);
       unsubscribe();
     };
-  }, [addLogEntry, addToast, isAuthenticated, loadDashboardState, queueQuotaAutoSync]);
+  }, [addLogEntry, addToast, applyCurrentAccountBadge, isAuthenticated, loadDashboardState, queueQuotaAutoSync]);
 
   const reportOAuthFinished = useCallback((status: DesktopOAuthStatus, source: ProductKind | 'auto' = 'auto') => {
     if (status.pending) return;
@@ -1347,7 +1359,8 @@ function DashboardApp() {
       try {
         const result = await runAccountOperation(id, () => actions.switchAccount(kind, id, isCurrent)) as { launched?: boolean; launchError?: string | null } | undefined;
         setSessionSwitchCount(count => count + 1);
-        const snapshot = await loadDashboardState(false);
+        applyCurrentAccountBadge(kind, id);
+        const snapshot = await loadDashboardState(false, { skipOfficialSync: true });
         if (snapshot && !isManagedProduct(kind)) queueQuotaAutoSync(snapshot.accounts);
         if (productRef.current !== kind) return;
         if (isManagedProduct(kind) && result?.launchError) {

@@ -220,9 +220,9 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             try { window.webContents.send(channel, payload); } catch {}
         }
     };
-    const emitAccountUpdated = (product, account) => {
+    const emitAccountUpdated = (product, account, extra = {}) => {
         if (!account) return;
-        try { broadcast("account:updated", { product, account }); } catch {}
+        try { broadcast("account:updated", { product, account, ...extra }); } catch {}
     };
     const emitQuotaUpdated = (product, account) => {
         if (!account) return;
@@ -467,7 +467,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             if (!account) return fail("Account does not exist");
                 const result = await eng.doCursorSwitch(account);
                 const publicResult = publicCursorAccount(result.account);
-                emitAccountUpdated("cursor", publicResult);
+                emitAccountUpdated("cursor", publicResult, { current: true });
                 return ok({
                     ...result,
                     account: publicResult,
@@ -664,7 +664,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             if (!account) return fail("Account does not exist");
             const result = await eng.doAntigravitySwitch(account);
             const publicResult = publicAntigravityAccount(result.account);
-            emitAccountUpdated("antigravity", publicResult);
+            emitAccountUpdated("antigravity", publicResult, { current: true });
             return ok({
                 ...result,
                 account: publicResult,

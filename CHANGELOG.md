@@ -7,6 +7,17 @@ release is published.
 
 ## Unreleased
 
+## [1.0.1] - 2026-08-19
+
+- Restore the target Cursor profile, team session, and usage identity after a
+  switch, and clear leftover team cache so a Pro account is not left on the
+  previous team's session.
+- Close Cursor and write the login database in one pass so switching is faster
+  without changing the result.
+- Flip the current badge on account cards and the float lens as soon as the
+  switch succeeds, instead of waiting on a later official-login scan. A scan
+  that started before the switch can no longer put the previous account back.
+
 ## [1.0.0] - 2026-08-19
 
 First stable release after the `0.1.0-beta` series.

@@ -1,6 +1,6 @@
 const { ts, jwtPayload, buildCursorId } = require("./crypto-utils");
 const { getCursorRuntime } = require("./cursor-runtime");
-const { readCursorAuth, hasPendingWal } = require("./cursor-db");
+const { readCursorAuth, readCursorSessionState, hasPendingWal, finiteTeamId } = require("./cursor-db");
 const {
   loadCursorAcct,
   saveCursorAcct,
@@ -13,6 +13,135 @@ const {
 const { extraIdentityIds, foldDuplicateAccounts, mergePreservedQuota, pickIdentityKeeper, usableAuthId, usableEmail } = require("./account-identity");
 const { withAccountLock, withAccountLocks } = require("./operation-locks");
 const { logInfo, logWarn } = require("./logger");
+
+const CURSOR_UI_KEYS = [
+  "cursorAuth/cachedSignUpType",
+  "cursorAuth/cachedTeam",
+  "cursorAuth/cachedScopedProfile",
+  "cursor.customize.userDisplayNameCache",
+];
+
+function pickCursorUi(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const ui = {};
+  for (const key of CURSOR_UI_KEYS) {
+    const value = String(raw[key] || "").trim();
+    if (value) ui[key] = value;
+  }
+  return Object.keys(ui).length ? ui : null;
+}
+
+function cursorUiFromValues(values) {
+  return pickCursorUi(values);
+}
+
+function mergeCursorUi(existing, incoming) {
+  const left = pickCursorUi(existing);
+  const right = pickCursorUi(incoming);
+  if (!left && !right) return null;
+  return { ...(left || {}), ...(right || {}) };
+}
+
+function stubScopedProfile(account) {
+  const email = String(account?.email || "").trim();
+  const displayName = email.includes("@") ? email.slice(0, email.indexOf("@")) : email;
+  if (!displayName) return "";
+  return JSON.stringify({ displayName });
+}
+
+function applyCursorUiToValues(account, values) {
+  const ui = pickCursorUi(account?.cursor_ui) || {};
+  for (const key of CURSOR_UI_KEYS) {
+    if (ui[key]) values[key] = ui[key];
+  }
+  if (!String(values["cursorAuth/cachedScopedProfile"] || "").trim()) {
+    const stub = stubScopedProfile(account);
+    if (stub) values["cursorAuth/cachedScopedProfile"] = stub;
+  }
+  return values;
+}
+
+function parseJsonValue(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function teamFromCursorUi(ui) {
+  const parsed = parseJsonValue(ui?.["cursorAuth/cachedTeam"] || "");
+  const teamId = finiteTeamId(parsed?.teamId);
+  if (teamId == null) return null;
+  return { teamId, name: String(parsed?.name || "").trim() };
+}
+
+function mergeCursorSession(existing, incoming) {
+  if (!incoming || typeof incoming !== "object") return existing || null;
+  if (!existing || typeof existing !== "object") return { ...incoming };
+  if (incoming.teamId == null && existing.teamId != null) {
+    return { ...incoming, ...existing, membershipType: incoming.membershipType || existing.membershipType };
+  }
+  return { ...existing, ...incoming };
+}
+
+function sessionFromAccount(account) {
+  const captured = account?.cursor_session && typeof account.cursor_session === "object"
+    ? account.cursor_session
+    : {};
+  const team = teamFromCursorUi(account?.cursor_ui);
+  const teamId = finiteTeamId(captured.teamId ?? team?.teamId);
+  const teamIds = Array.isArray(captured.teamIds)
+    ? captured.teamIds.map(finiteTeamId).filter((id) => id != null)
+    : (teamId != null ? [teamId] : []);
+  return {
+    teamId,
+    teamIds,
+    membershipType: captured.membershipType || account?.plan_type || null,
+    isEnterprise: captured.isEnterprise === true,
+    adminTeamId: captured.adminTeamId || (teamId != null ? String(teamId) : null),
+    adminAuthId: captured.adminAuthId || null,
+    adminCached: captured.adminCached || null,
+  };
+}
+
+function persistOfficialCursorState(values, session) {
+  let account = persistCursorUiFromValues(values);
+  if (!account) {
+    const local = authFromLocalValues(values);
+    if (!local) return null;
+    const match = listCursorAccts().find((item) => sameCursorIdentity(item, {
+      email: local.email,
+      auth_id: local.authId,
+    }));
+    account = match ? loadCursorAcct(match.id) : null;
+  }
+  if (!account) return null;
+  if (session && typeof session === "object") {
+    account.cursor_session = mergeCursorSession(account.cursor_session, session);
+    saveCursorAcct(account);
+    upsertCursorIndex(account);
+  }
+  return account;
+}
+
+function persistCursorUiFromValues(values) {
+  const ui = cursorUiFromValues(values);
+  if (!ui) return null;
+  const local = authFromLocalValues(values);
+  if (!local) return null;
+  const match = listCursorAccts().find((account) => sameCursorIdentity(account, {
+    email: local.email,
+    auth_id: local.authId,
+  }));
+  if (!match) return null;
+  const account = loadCursorAcct(match.id);
+  if (!account) return null;
+  account.cursor_ui = mergeCursorUi(account.cursor_ui, ui);
+  saveCursorAcct(account);
+  upsertCursorIndex(account);
+  return account;
+}
 
 function authFromLocalValues(values) {
   const accessToken = String(values?.["cursorAuth/accessToken"] || "").trim();
@@ -104,6 +233,8 @@ function accountFromCursorTokens(tokens, existing = null) {
     }),
     created_at: existing?.created_at || now,
     last_used: existing?.last_used || now,
+    cursor_ui: mergeCursorUi(existing?.cursor_ui, tokens.cursor_ui),
+    cursor_session: mergeCursorSession(existing?.cursor_session, tokens.cursor_session),
   };
 }
 
@@ -137,14 +268,21 @@ async function importLocalCursorAccount() {
   if (!local) {
     return { found: false, account: null, stalePossible };
   }
-  const result = await upsertCursorAccount({
+  const imported = {
     email: local.email,
     auth_id: local.authId,
     access_token: local.accessToken,
     refresh_token: local.refreshToken,
     plan_type: local.planType,
     subscription_status: local.subscriptionStatus,
-  });
+  };
+  const ui = cursorUiFromValues(values);
+  if (ui) imported.cursor_ui = ui;
+  try {
+    const session = await readCursorSessionState(dbPath);
+    if (session) imported.cursor_session = session;
+  } catch {}
+  const result = await upsertCursorAccount(imported);
   setCurrentCursorAccountId(result.account.id);
   logInfo(`Imported local Cursor account ${result.account.email}`);
   return { found: true, stalePossible, ...result };
@@ -153,55 +291,92 @@ async function importLocalCursorAccount() {
 const OFFICIAL_SYNC_TTL_MS = 1500;
 let lastOfficialSyncAt = 0;
 let officialSyncInFlight = null;
+let officialCursorGeneration = 0;
+let officialSyncInFlightGeneration = -1;
+
+function invalidateCursorOfficialSync() {
+  officialCursorGeneration += 1;
+  lastOfficialSyncAt = Date.now();
+}
 
 async function syncCurrentCursorFromOfficialUncached() {
+  const generation = officialCursorGeneration;
   const existing = currentCursorAcct();
   const dbPath = getCursorRuntime().vscdbPath();
   let values = null;
+  let session = null;
   try {
     values = await readCursorAuth(dbPath);
+    session = await readCursorSessionState(dbPath);
   } catch {
-    return existing;
+    return currentCursorAcct() || existing;
   }
+  if (generation !== officialCursorGeneration) return currentCursorAcct() || existing;
   const local = authFromLocalValues(values);
-  if (!local) return existing;
+  if (!local) return currentCursorAcct() || existing;
   return withAccountLock("__cursor_switch__", async () => {
+    if (generation !== officialCursorGeneration) return currentCursorAcct();
     const current = currentCursorAcct();
     const match = listCursorAccts().find((account) => sameCursorIdentity(account, {
       email: local.email,
       auth_id: local.authId,
     }));
-    if (match && current?.id !== match.id) {
-      setCurrentCursorAccountId(match.id);
+    if (match) {
+      persistOfficialCursorState(values, session);
+      if (current?.id !== match.id) {
+        setCurrentCursorAccountId(match.id);
+      }
     }
     return currentCursorAcct();
   });
 }
 
 async function syncCurrentCursorFromOfficial(options = {}) {
-  if (options.force !== true && officialSyncInFlight) return officialSyncInFlight;
+  if (
+    options.force !== true
+    && officialSyncInFlight
+    && officialSyncInFlightGeneration === officialCursorGeneration
+  ) {
+    return officialSyncInFlight;
+  }
   if (options.force !== true && lastOfficialSyncAt && (Date.now() - lastOfficialSyncAt) < OFFICIAL_SYNC_TTL_MS) {
     return currentCursorAcct();
   }
-  officialSyncInFlight = (async () => {
+  const generation = officialCursorGeneration;
+  const pending = (async () => {
     try {
       return await syncCurrentCursorFromOfficialUncached();
     } finally {
-      lastOfficialSyncAt = Date.now();
-      officialSyncInFlight = null;
+      if (officialSyncInFlight === pending) {
+        lastOfficialSyncAt = Date.now();
+        officialSyncInFlight = null;
+      }
     }
   })();
-  return officialSyncInFlight;
+  officialSyncInFlightGeneration = generation;
+  officialSyncInFlight = pending;
+  return pending;
 }
 
 function resetOfficialSyncCacheForTests() {
   lastOfficialSyncAt = 0;
   officialSyncInFlight = null;
+  officialCursorGeneration = 0;
+  officialSyncInFlightGeneration = -1;
 }
 
 module.exports = {
+  CURSOR_UI_KEYS,
   authFromLocalValues,
   sameCursorIdentity,
+  cursorUiFromValues,
+  mergeCursorUi,
+  applyCursorUiToValues,
+  persistCursorUiFromValues,
+  persistOfficialCursorState,
+  invalidateCursorOfficialSync,
+  sessionFromAccount,
+  mergeCursorSession,
   accountFromCursorTokens,
   upsertCursorAccount,
   importLocalCursorAccount,

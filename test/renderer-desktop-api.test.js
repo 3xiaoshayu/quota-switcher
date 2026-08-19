@@ -1658,3 +1658,23 @@ test("antigravity preserved quota_error after upsert stays 这次没查清", () 
   assert.equal(cursorEmptyQuotaText(mapped), "这次没查清");
   assert.notEqual(cursorEmptyQuotaText(mapped), "暂无此项");
 });
+
+test("withCurrentFlag only moves the current badge", () => {
+  const { withCurrentFlag } = loadDesktopExports(bridge());
+  const next = withCurrentFlag([
+    { id: "tam", email: "tam@example.com", isCurrent: true },
+    { id: "chr", email: "chr@example.com", isCurrent: false },
+  ], "chr");
+  assert.equal(next[0].isCurrent, false);
+  assert.equal(next[1].isCurrent, true);
+  assert.equal(next[1].email, "chr@example.com");
+});
+
+test("cursor switch UI flips current without waiting on official sync", () => {
+  const app = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "App.tsx"), "utf8");
+  const handlers = fs.readFileSync(path.join(projectRoot, "src", "main", "ipc-handlers.js"), "utf8");
+  assert.match(app, /applyCurrentAccountBadge\(kind, id\)/);
+  assert.match(app, /loadDashboardState\(false, \{ skipOfficialSync: true \}\)/);
+  assert.match(app, /payload\?\.current\) applyCurrentAccountBadge\(payload\.product, payload\.account\?\.id\)/);
+  assert.match(handlers, /emitAccountUpdated\("cursor", publicResult, \{ current: true \}\)/);
+});

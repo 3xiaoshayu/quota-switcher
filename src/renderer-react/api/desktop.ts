@@ -271,7 +271,7 @@ interface DesktopBridge {
   onUpdateStatus?: (cb: (payload: DesktopUpdateStatus) => void) => () => void;
   onAuthConflict?: (cb: (payload: DesktopAuthState) => void) => () => void;
   onQuotaUpdated?: (cb: (payload: { product?: ProductKind; account?: DesktopAccount | null; quota?: DesktopQuota | null }) => void) => () => void;
-  onAccountUpdated?: (cb: (payload: { product?: ProductKind; account?: DesktopAccount | null }) => void) => () => void;
+  onAccountUpdated?: (cb: (payload: { product?: ProductKind; account?: DesktopAccount | null; current?: boolean }) => void) => () => void;
 }
 
 declare global {
@@ -1033,6 +1033,16 @@ function warningForUi(account: DesktopAccount, status: AccountQuota['status'], q
 
 function displayName(email: string): string {
   return email.includes('@') ? email.split('@')[0] : email;
+}
+
+export function withCurrentFlag<T extends { id: string; isCurrent?: boolean }>(
+  accounts: T[],
+  currentId: string | null | undefined,
+): T[] {
+  return accounts.map((account) => ({
+    ...account,
+    isCurrent: !!currentId && account.id === currentId,
+  }));
 }
 
 export function mapAccountForUi(
@@ -2156,7 +2166,7 @@ export const desktopApi = {
     onAuthConflict?: (state: DesktopAuthState) => void;
     onFloatProduct?: (product: ProductKind) => void;
     onQuotaUpdated?: (payload: { product?: ProductKind; account?: DesktopAccount | null; quota?: DesktopQuota | null }) => void;
-    onAccountUpdated?: (payload: { product?: ProductKind; account?: DesktopAccount | null }) => void;
+    onAccountUpdated?: (payload: { product?: ProductKind; account?: DesktopAccount | null; current?: boolean }) => void;
   }) {
     const api = getBridge();
     if (!api) return () => {};

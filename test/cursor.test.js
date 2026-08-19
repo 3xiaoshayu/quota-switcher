@@ -65,6 +65,13 @@ function putItem(dbPath, key, value) {
   });
 }
 
+const APPLICATION_USER_KEY = "src.vs.platform.reactivestorage.browser.reactiveStorageServiceImpl.persistentStorage.applicationUser";
+
+function applicationUser(dbPath) {
+  const raw = itemText(dbPath, APPLICATION_USER_KEY);
+  return raw ? JSON.parse(raw) : null;
+}
+
 function holdExclusive(dbPath) {
   const { DatabaseSync } = require("node:sqlite");
   const locker = new DatabaseSync(dbPath, { timeout: 0 });
@@ -155,9 +162,38 @@ test("local vscdb import reads token and email then upserts", async (t) => {
   assert.equal(imported.account.email, "local@example.com");
   assert.equal(imported.account.plan_type, "pro");
   assert.equal(imported.account.banned, false);
+  assert.equal(imported.account.cursor_ui, null);
   assert.equal(imported.stalePossible, false);
   assert.equal(engine.currentCursorAcct().id, imported.account.id);
   assert.equal(engine.listAccts().length, 0);
+});
+
+test("local vscdb import keeps official profile and team cache on the account", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "state.vscdb");
+  await engine.writeCursorAuth(dbPath, {
+    "cursorAuth/accessToken": cursorToken("local@example.com", "local"),
+    "cursorAuth/cachedEmail": "local@example.com",
+    "cursorAuth/refreshToken": "refresh-local",
+    "cursorAuth/authId": "user_local",
+    "cursorAuth/cachedTeam": JSON.stringify({ teamId: 4, name: "Local Team" }),
+    "cursorAuth/cachedScopedProfile": JSON.stringify({
+      displayName: "Local Name",
+      pictureUrl: "https://example.com/local.png",
+    }),
+  });
+  engine.setCursorRuntimeForTests({
+    vscdbPath: () => dbPath,
+  });
+  const imported = await engine.importLocalCursorAccount();
+  assert.deepEqual(JSON.parse(imported.account.cursor_ui["cursorAuth/cachedTeam"]), {
+    teamId: 4,
+    name: "Local Team",
+  });
+  assert.deepEqual(JSON.parse(imported.account.cursor_ui["cursorAuth/cachedScopedProfile"]), {
+    displayName: "Local Name",
+    pictureUrl: "https://example.com/local.png",
+  });
 });
 
 test("cursor list sync marks the official login as current without switching", async (t) => {
@@ -179,6 +215,33 @@ test("cursor list sync marks the official login as current without switching", a
   const current = await engine.syncCurrentCursorFromOfficial();
   assert.equal(current.id, created.account.id);
   assert.equal(engine.currentCursorAcct().id, created.account.id);
+});
+
+test("cursor official sync captures profile cache without switching", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "state.vscdb");
+  const created = await engine.upsertCursorAccount({
+    email: "sync@example.com",
+    auth_id: "user_sync",
+    access_token: cursorToken("sync@example.com", "sync"),
+    refresh_token: "refresh-sync",
+  });
+  await engine.writeCursorAuth(dbPath, {
+    "cursorAuth/accessToken": cursorToken("sync@example.com", "sync"),
+    "cursorAuth/cachedEmail": "sync@example.com",
+    "cursorAuth/authId": "user_sync",
+    "cursorAuth/cachedScopedProfile": JSON.stringify({
+      displayName: "Sync Name",
+      pictureUrl: "https://example.com/sync.png",
+    }),
+  });
+  engine.setCursorRuntimeForTests({ vscdbPath: () => dbPath });
+  await engine.syncCurrentCursorFromOfficial({ force: true });
+  const stored = engine.loadCursorAcct(created.account.id);
+  assert.deepEqual(JSON.parse(stored.cursor_ui["cursorAuth/cachedScopedProfile"]), {
+    displayName: "Sync Name",
+    pictureUrl: "https://example.com/sync.png",
+  });
 });
 
 test("cursor official sync follows vscdb even when WAL is pending", async (t) => {
@@ -410,12 +473,16 @@ test("cursor switch writes vscdb after close and rolls back on write failure", a
   });
 
   let listed = [{ name: "Cursor.exe", pid: 4242, executablePath: exePath }];
+  let listCalls = 0;
   const closed = [];
   const launched = [];
   engine.setCursorRuntimeForTests({
     vscdbPath: () => dbPath,
     cursorExePath: () => exePath,
-    listProcesses: async () => listed,
+    listProcesses: async () => {
+      listCalls += 1;
+      return listed;
+    },
     gracefulClose: async (pid) => {
       closed.push(pid);
       listed = [];
@@ -433,11 +500,251 @@ test("cursor switch writes vscdb after close and rolls back on write failure", a
   assert.equal(switched.launched, true);
   assert.deepEqual(closed, [4242]);
   assert.deepEqual(launched, [exePath]);
+  assert.ok(listCalls <= 2, `listProcesses called ${listCalls} times`);
+  assert.match(readEngineLogs(root), /Cursor switch timings kill=\d+ms writable=\d+ms write=\d+ms/);
   const values = await engine.readCursorAuth(dbPath, { copyFirst: false });
   assert.equal(values["cursorAuth/cachedEmail"], "next@example.com");
   assert.equal(values["cursor.email"], "next@example.com");
+  assert.equal(values["cursorAuth/userId"], "user_next");
+  assert.equal(values["cursorAuth/authId"], "user_next");
+  assert.equal(values["cursorAuth/stripeMembershipAuthId"], "auth0|user_next");
+  assert.equal(values["glass.lastSignedInAuthId"], "auth0|user_next");
   assert.equal(engine.currentCursorAcct().id, created.account.id);
   assert.equal(engine.listAccts().length, 0);
+});
+
+test("cursor switch clears leftover team and display-name cache from the previous login", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "cursor-state.vscdb");
+  const exePath = path.join(root, "Cursor.exe");
+  fs.writeFileSync(exePath, "fake");
+  await engine.writeCursorAuth(dbPath, {
+    "cursorAuth/accessToken": "old-token",
+    "cursorAuth/cachedEmail": "old@example.com",
+    "cursorAuth/authId": "user_old",
+    "cursorAuth/userId": "user_old",
+  });
+  putItem(dbPath, "cursorAuth/cachedTeam", JSON.stringify({ teamId: 1, name: "Old Team" }));
+  putItem(dbPath, "cursorAuth/cachedScopedProfile", JSON.stringify({ displayName: "Old Name" }));
+  putItem(dbPath, "cursor.customize.userDisplayNameCache", "Old Display");
+  const created = await engine.upsertCursorAccount({
+    email: "next@example.com",
+    auth_id: "user_next",
+    access_token: cursorToken("next@example.com", "next"),
+    refresh_token: "refresh-next",
+  });
+  engine.setCursorRuntimeForTests({
+    vscdbPath: () => dbPath,
+    cursorExePath: () => exePath,
+    listProcesses: async () => [],
+    launch: () => true,
+    sleep: async () => {},
+  });
+
+  await engine.doCursorSwitch(engine.loadCursorAcct(created.account.id));
+  const values = await engine.readCursorAuth(dbPath, { copyFirst: false });
+  assert.equal(values["cursorAuth/cachedEmail"], "next@example.com");
+  assert.equal(values["cursorAuth/userId"], "user_next");
+  assert.equal(itemText(dbPath, "cursorAuth/cachedTeam"), null);
+  assert.deepEqual(JSON.parse(itemText(dbPath, "cursorAuth/cachedScopedProfile")), {
+    displayName: "next",
+  });
+  assert.equal(itemText(dbPath, "cursor.customize.userDisplayNameCache"), null);
+});
+
+test("cursor switch clears leftover team id from application storage", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "cursor-state.vscdb");
+  const exePath = path.join(root, "Cursor.exe");
+  fs.writeFileSync(exePath, "fake");
+  await engine.writeCursorAuth(dbPath, {
+    "cursorAuth/accessToken": "old-token",
+    "cursorAuth/cachedEmail": "old@example.com",
+    "cursorAuth/authId": "user_old",
+  });
+  putItem(dbPath, APPLICATION_USER_KEY, JSON.stringify({
+    membershipType: "enterprise",
+    isEnterprise: false,
+    aiSettings: { teamId: 29782437, teamIds: [29782437], modelName: "keep-me" },
+  }));
+  putItem(dbPath, "adminSettings.cachedTeamId", "29782437");
+  putItem(dbPath, "adminSettings.cachedAuthId", "auth0|user_old");
+  const created = await engine.upsertCursorAccount({
+    email: "next@example.com",
+    auth_id: "user_next",
+    access_token: cursorToken("next@example.com", "next"),
+    refresh_token: "refresh-next",
+    plan_type: "pro",
+  });
+  engine.setCursorRuntimeForTests({
+    vscdbPath: () => dbPath,
+    cursorExePath: () => exePath,
+    listProcesses: async () => [],
+    launch: () => true,
+    sleep: async () => {},
+  });
+
+  await engine.doCursorSwitch(engine.loadCursorAcct(created.account.id));
+  const stored = applicationUser(dbPath);
+  assert.equal(stored.aiSettings.teamId, undefined);
+  assert.deepEqual(stored.aiSettings.teamIds, []);
+  assert.equal(stored.aiSettings.modelName, "keep-me");
+  assert.equal(stored.membershipType, "pro");
+  assert.equal(itemText(dbPath, "adminSettings.cachedTeamId"), null);
+  assert.equal(itemText(dbPath, "adminSettings.cachedAuthId"), null);
+});
+
+test("cursor switch writes the target team id into application storage", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "cursor-state.vscdb");
+  const exePath = path.join(root, "Cursor.exe");
+  fs.writeFileSync(exePath, "fake");
+  await engine.writeCursorAuth(dbPath, {
+    "cursorAuth/accessToken": "old-token",
+    "cursorAuth/cachedEmail": "old@example.com",
+    "cursorAuth/authId": "user_old",
+  });
+  putItem(dbPath, APPLICATION_USER_KEY, JSON.stringify({
+    membershipType: "enterprise",
+    isEnterprise: false,
+    aiSettings: { teamId: 29782437, teamIds: [29782437], modelName: "keep-me" },
+  }));
+  putItem(dbPath, "adminSettings.cachedTeamId", "29782437");
+  const created = await engine.upsertCursorAccount({
+    email: "next@example.com",
+    auth_id: "user_next",
+    access_token: cursorToken("next@example.com", "next"),
+    refresh_token: "refresh-next",
+    plan_type: "enterprise",
+    cursor_ui: {
+      "cursorAuth/cachedTeam": JSON.stringify({ teamId: 29626437, name: "Next Team" }),
+      "cursorAuth/cachedScopedProfile": JSON.stringify({ displayName: "Next Name" }),
+    },
+  });
+  engine.setCursorRuntimeForTests({
+    vscdbPath: () => dbPath,
+    cursorExePath: () => exePath,
+    listProcesses: async () => [],
+    launch: () => true,
+    sleep: async () => {},
+  });
+
+  await engine.doCursorSwitch(engine.loadCursorAcct(created.account.id));
+  const stored = applicationUser(dbPath);
+  assert.equal(stored.aiSettings.teamId, 29626437);
+  assert.deepEqual(stored.aiSettings.teamIds, [29626437]);
+  assert.equal(stored.aiSettings.modelName, "keep-me");
+  assert.equal(itemText(dbPath, "adminSettings.cachedTeamId"), "29626437");
+  assert.deepEqual(JSON.parse(itemText(dbPath, "cursorAuth/cachedTeam")), {
+    teamId: 29626437,
+    name: "Next Team",
+  });
+});
+
+test("cursor switch restores the target account profile cache instead of the previous login", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "cursor-state.vscdb");
+  const exePath = path.join(root, "Cursor.exe");
+  fs.writeFileSync(exePath, "fake");
+  await engine.writeCursorAuth(dbPath, {
+    "cursorAuth/accessToken": "old-token",
+    "cursorAuth/cachedEmail": "old@example.com",
+    "cursorAuth/authId": "user_old",
+  });
+  putItem(dbPath, "cursorAuth/cachedTeam", JSON.stringify({ teamId: 1, name: "Old Team" }));
+  putItem(dbPath, "cursorAuth/cachedScopedProfile", JSON.stringify({
+    displayName: "Old Name",
+    pictureUrl: "https://example.com/old.png",
+  }));
+  const created = await engine.upsertCursorAccount({
+    email: "next@example.com",
+    auth_id: "user_next",
+    access_token: cursorToken("next@example.com", "next"),
+    refresh_token: "refresh-next",
+    cursor_ui: {
+      "cursorAuth/cachedTeam": JSON.stringify({ teamId: 9, name: "Next Team" }),
+      "cursorAuth/cachedScopedProfile": JSON.stringify({
+        displayName: "Next Name",
+        pictureUrl: "https://example.com/next.png",
+      }),
+      "cursor.customize.userDisplayNameCache": "Next Display",
+    },
+  });
+  engine.setCursorRuntimeForTests({
+    vscdbPath: () => dbPath,
+    cursorExePath: () => exePath,
+    listProcesses: async () => [],
+    launch: () => true,
+    sleep: async () => {},
+  });
+
+  await engine.doCursorSwitch(engine.loadCursorAcct(created.account.id));
+  assert.deepEqual(JSON.parse(itemText(dbPath, "cursorAuth/cachedTeam")), {
+    teamId: 9,
+    name: "Next Team",
+  });
+  assert.deepEqual(JSON.parse(itemText(dbPath, "cursorAuth/cachedScopedProfile")), {
+    displayName: "Next Name",
+    pictureUrl: "https://example.com/next.png",
+  });
+  assert.equal(itemText(dbPath, "cursor.customize.userDisplayNameCache"), "Next Display");
+});
+
+test("cursor switch captures the leaving account profile and restores it on return", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "cursor-state.vscdb");
+  const exePath = path.join(root, "Cursor.exe");
+  fs.writeFileSync(exePath, "fake");
+  const leaving = await engine.upsertCursorAccount({
+    email: "old@example.com",
+    auth_id: "user_old",
+    access_token: cursorToken("old@example.com", "old"),
+    refresh_token: "refresh-old",
+  });
+  await engine.writeCursorAuth(dbPath, {
+    "cursorAuth/accessToken": cursorToken("old@example.com", "old"),
+    "cursorAuth/cachedEmail": "old@example.com",
+    "cursorAuth/authId": "user_old",
+  });
+  putItem(dbPath, "cursorAuth/cachedTeam", JSON.stringify({ teamId: 1, name: "Old Team" }));
+  putItem(dbPath, "cursorAuth/cachedScopedProfile", JSON.stringify({
+    displayName: "Old Name",
+    pictureUrl: "https://example.com/old.png",
+  }));
+  const next = await engine.upsertCursorAccount({
+    email: "next@example.com",
+    auth_id: "user_next",
+    access_token: cursorToken("next@example.com", "next"),
+    refresh_token: "refresh-next",
+  });
+  engine.setCursorRuntimeForTests({
+    vscdbPath: () => dbPath,
+    cursorExePath: () => exePath,
+    listProcesses: async () => [],
+    launch: () => true,
+    sleep: async () => {},
+  });
+
+  await engine.doCursorSwitch(engine.loadCursorAcct(next.account.id));
+  const storedLeaving = engine.loadCursorAcct(leaving.account.id);
+  assert.deepEqual(JSON.parse(storedLeaving.cursor_ui["cursorAuth/cachedTeam"]), {
+    teamId: 1,
+    name: "Old Team",
+  });
+  assert.deepEqual(JSON.parse(storedLeaving.cursor_ui["cursorAuth/cachedScopedProfile"]), {
+    displayName: "Old Name",
+    pictureUrl: "https://example.com/old.png",
+  });
+
+  await engine.doCursorSwitch(engine.loadCursorAcct(leaving.account.id));
+  assert.deepEqual(JSON.parse(itemText(dbPath, "cursorAuth/cachedTeam")), {
+    teamId: 1,
+    name: "Old Team",
+  });
+  assert.deepEqual(JSON.parse(itemText(dbPath, "cursorAuth/cachedScopedProfile")), {
+    displayName: "Old Name",
+    pictureUrl: "https://example.com/old.png",
+  });
 });
 
 test("cursor auth write keeps unrelated vscdb rows and does not copy the file", async (t) => {
@@ -1005,6 +1312,27 @@ test("cursor default exe path does not query running processes", () => {
   }
 });
 
+test("cursor process listing uses Get-Process instead of a full Win32_Process scan", async () => {
+  const { defaultListProcesses } = require("../engine/cursor-runtime");
+  let command = "";
+  const processes = await defaultListProcesses(async (_file, args) => {
+    command = String(args[args.length - 1] || "");
+    return {
+      stdout: JSON.stringify({
+        Name: "Cursor.exe",
+        ProcessId: 4242,
+        ParentProcessId: 0,
+        ExecutablePath: "E:\\\\cursor\\\\cursor\\\\Cursor.exe",
+      }),
+    };
+  });
+  assert.match(command, /Get-Process/);
+  assert.doesNotMatch(command, /Get-CimInstance/);
+  assert.equal(processes.length, 1);
+  assert.equal(processes[0].pid, 4242);
+  assert.equal(processes[0].name, "Cursor.exe");
+});
+
 test("cursor unknown email does not bridge two mailboxes", () => {
   const { groupByIdentity } = require("../engine/account-identity");
   const { sameCursorIdentity } = require("../engine/cursor-local");
@@ -1072,4 +1400,61 @@ test("cursor official sync reads sqlite in place and shares one pass", async (t)
   assert.equal(hits.read, 0);
   assert.equal(hits.copy, 0);
   assert.equal(engine.currentCursorAcct().id, kept.account.id);
+});
+
+test("cursor official sync in flight does not revert current after switch", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "cursor-state.vscdb");
+  const exePath = path.join(root, "Cursor.exe");
+  fs.writeFileSync(exePath, "fake");
+  const first = await engine.upsertCursorAccount({
+    email: "old@example.com",
+    auth_id: "user_old",
+    access_token: cursorToken("old@example.com", "old"),
+    refresh_token: "refresh-old",
+  });
+  await engine.writeCursorAuth(dbPath, {
+    "cursorAuth/accessToken": cursorToken("old@example.com", "old"),
+    "cursorAuth/cachedEmail": "old@example.com",
+    "cursorAuth/authId": "user_old",
+  });
+  engine.setCursorRuntimeForTests({
+    vscdbPath: () => dbPath,
+    cursorExePath: () => exePath,
+    listProcesses: async () => [],
+    launch: () => true,
+    sleep: async () => {},
+  });
+  await engine.doCursorSwitch(engine.loadCursorAcct(first.account.id));
+  const next = await engine.upsertCursorAccount({
+    email: "next@example.com",
+    auth_id: "user_next",
+    access_token: cursorToken("next@example.com", "next"),
+    refresh_token: "refresh-next",
+  });
+
+  const { readVscdbItemRowsLocal } = require("../engine/sqlite-native");
+  let releaseRead;
+  const gate = new Promise((resolve) => { releaseRead = resolve; });
+  let capturedEmail = "";
+  engine.setSqliteReadTransport(async (target, keys, options) => {
+    const rows = await readVscdbItemRowsLocal(target, keys, options);
+    const raw = rows["cursorAuth/cachedEmail"];
+    if (raw) capturedEmail = Buffer.from(raw, "base64").toString("utf8").trim();
+    await gate;
+    return rows;
+  });
+  t.after(() => engine.setSqliteReadTransport(null));
+
+  const syncing = engine.syncCurrentCursorFromOfficial({ force: true });
+  const started = Date.now();
+  while (!capturedEmail && Date.now() - started < 2000) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(capturedEmail, "old@example.com");
+  await engine.doCursorSwitch(engine.loadCursorAcct(next.account.id));
+  assert.equal(engine.currentCursorAcct().id, next.account.id);
+  releaseRead();
+  await syncing;
+  assert.equal(engine.currentCursorAcct().id, next.account.id);
 });

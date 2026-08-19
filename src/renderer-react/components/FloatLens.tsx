@@ -16,6 +16,7 @@ import {
   quotaStroke,
   statusTextForAccount,
   STATUS_TEXT,
+  withCurrentFlag,
 } from '../api/desktop';
 import { floatChromeMark, isManagedProduct, officialClientLabel, productActions, productLabel as productName, toProductUserMessage } from '../api/product-adapter';
 import { previewAccountsForLens } from '../data/mockData';
@@ -360,6 +361,20 @@ export default function FloatLens() {
     return desktopApi.subscribe({
       onDaemonTick: () => { void loadAccounts(); },
       onAutoSwitch: () => { void loadAccounts(); },
+      onAccountUpdated: (payload) => {
+        if (payload?.product !== productRef.current) return;
+        if (payload?.current && payload.account?.id) {
+          const currentId = payload.account.id;
+          setAccounts((prev) => {
+            const next = withCurrentFlag(prev, currentId);
+            cacheRef.current[productRef.current] = { accounts: next, viewedId: currentId };
+            return next;
+          });
+          setViewedId(currentId);
+          return;
+        }
+        void loadAccounts();
+      },
       onFloatProduct: (next) => {
         if (isActiveProduct(next)) applyProduct(next);
       },

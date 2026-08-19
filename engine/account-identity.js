@@ -125,6 +125,12 @@ function absorbIdentitySource(keeper, source) {
     keeper.token_generation = source.token_generation;
   }
   if (!usableEmail(keeper.email) && usableEmail(source.email)) keeper.email = source.email;
+  if (source?.cursor_ui && typeof source.cursor_ui === "object") {
+    keeper.cursor_ui = { ...(keeper.cursor_ui || {}), ...source.cursor_ui };
+  }
+  if (source?.cursor_session && typeof source.cursor_session === "object") {
+    keeper.cursor_session = { ...(keeper.cursor_session || {}), ...source.cursor_session };
+  }
   if (!hasQuotaData(keeper) && hasQuotaData(source)) {
     keeper.quota = source.quota;
     keeper.quota_error = source.quota_error;

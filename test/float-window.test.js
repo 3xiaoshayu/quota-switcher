@@ -570,6 +570,9 @@ test("float lens antigravity load skips official sync and restores product cache
   assert.match(desktop, /async loadFloatAccounts\(product: ProductKind = 'codex'\) \{\s*if \(product === 'antigravity'\) \{\s*const snapshot = await desktopApi\.loadAntigravityState\(\{ skipOfficialSync: true \}\);/);
   assert.match(desktop, /listCursorAccounts\(\{ skipOfficialSync: true \}\)/);
   assert.match(desktop, /getCurrentCursorAccount\(\{ skipOfficialSync: true \}\)/);
+  assert.match(source, /onAccountUpdated: \(payload\) => \{/);
+  assert.match(source, /payload\?\.current && payload\.account\?\.id/);
+  assert.match(source, /withCurrentFlag\(prev, currentId\)/);
   assert.match(source, /setLoading\(false\);\s*\} else \{\s*setAccounts\(\[\]\)/);
 });
 

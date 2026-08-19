@@ -49,7 +49,7 @@ function parseRunningCursorExe(output) {
   return null;
 }
 
-const RUNNING_CURSOR_COMMAND = "$p = Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'Cursor.exe' -and $_.ExecutablePath } | Select-Object -First 1 -ExpandProperty ExecutablePath; if ($p) { $p } else { '' }";
+const RUNNING_CURSOR_COMMAND = "$p = Get-Process -Name 'Cursor' -ErrorAction SilentlyContinue | Where-Object { $_.Path } | Select-Object -First 1 -ExpandProperty Path; if ($p) { $p } else { '' }";
 
 function findRunningCursorExe() {
   try {
@@ -104,33 +104,36 @@ function isCursorProcess(item) {
   return true;
 }
 
+const LIST_CURSOR_PROCESSES_COMMAND = [
+  "$ErrorActionPreference = 'SilentlyContinue'",
+  "$rows = @(Get-Process -Name 'Cursor','electron' -ErrorAction SilentlyContinue | ForEach-Object { [pscustomobject]@{ Name = ($_.ProcessName + '.exe'); ProcessId = $_.Id; ParentProcessId = 0; ExecutablePath = $_.Path } })",
+  "if ($rows.Count -eq 0) { '[]' } else { @($rows) | ConvertTo-Json -Compress }",
+].join("; ");
+
+function mapListedProcess(item) {
+  const name = item.Name || item.name;
+  const executablePath = item.ExecutablePath || item.executablePath || null;
+  return {
+    name,
+    pid: Number(item.ProcessId ?? item.pid),
+    parentPid: Number(item.ParentProcessId ?? item.parentPid) || 0,
+    executablePath,
+  };
+}
+
 async function defaultListProcesses(runCommand = execFileAsync) {
-  const script = [
-    "$items = Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('Cursor.exe','electron.exe') }",
-    "$cursor = @($items | Where-Object { $_.Name -eq 'Cursor.exe' -or ($_.Name -eq 'electron.exe' -and (($_.ExecutablePath -like '*\\Cursor\\*') -or ($_.ExecutablePath -like '*\\cursor\\*'))) })",
-    "$ids = New-Object 'System.Collections.Generic.HashSet[int]'",
-    "$cursor | ForEach-Object { [void]$ids.Add([int]$_.ProcessId) }",
-    "do { $changed = $false; foreach ($item in $items) { if ($ids.Contains([int]$item.ParentProcessId) -and -not $ids.Contains([int]$item.ProcessId)) { [void]$ids.Add([int]$item.ProcessId); $changed = $true } } } while ($changed)",
-    "@($items | Where-Object { $ids.Contains([int]$_.ProcessId) } | ForEach-Object { [pscustomobject]@{ Name = $_.Name; ProcessId = $_.ProcessId; ParentProcessId = $_.ParentProcessId; ExecutablePath = $_.ExecutablePath } }) | ConvertTo-Json -Compress",
-  ].join("; ");
   try {
-    const { stdout } = await runCommand("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    const { stdout } = await runCommand("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", LIST_CURSOR_PROCESSES_COMMAND], {
       encoding: "utf8",
       windowsHide: true,
-      timeout: 10000,
+      timeout: 8000,
     });
     const output = String(stdout || "").trim();
-    if (!output) return [];
+    if (!output || output === "[]") return [];
     const parsed = JSON.parse(output);
-    return (Array.isArray(parsed) ? parsed : [parsed]).map((item) => ({
-      name: item.Name,
-      pid: Number(item.ProcessId),
-      parentPid: Number(item.ParentProcessId),
-      executablePath: item.ExecutablePath || null,
-    })).filter((item) => Number.isInteger(item.pid) && item.pid > 0 && isCursorProcess({
-      name: item.Name || item.name,
-      executablePath: item.ExecutablePath || item.executablePath,
-    }));
+    return (Array.isArray(parsed) ? parsed : [parsed])
+      .map(mapListedProcess)
+      .filter((item) => Number.isInteger(item.pid) && item.pid > 0 && isCursorProcess(item));
   } catch (error) {
     const wrapped = new Error(`Could not enumerate official Cursor processes: ${error.message}`, { cause: error });
     wrapped.code = "cursor_process_enumeration_failed";
@@ -218,6 +221,7 @@ module.exports = {
   defaultCursorExeCandidates,
   firstExistingCursorExe,
   findRunningCursorExeAsync,
+  defaultListProcesses,
   isCursorProcess,
   launchCursor,
 };
