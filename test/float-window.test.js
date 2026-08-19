@@ -420,9 +420,10 @@ test("dashboard product changes sync the float product and auto-open once", () =
   assert.match(source, /localOAuth\?\.pending && !incomingOAuth\.pending && incomingOAuth\.status === 'idle'/);
   assert.match(source, /if \(productRef\.current !== kind\) return;/);
   assert.match(source, /actions\.refreshQuota\(kind, account\.id, false\)/);
-  assert.match(source, /didOpenQuotaSync/);
+  assert.doesNotMatch(source, /didOpenQuotaSync/);
+  assert.match(source, /queueQuotaAutoSync/);
   assert.match(source, /actions\.refreshAllQuotas\(kind\)/);
-  assert.match(source, /\(\['codex', 'cursor', 'antigravity'\] as ProductKind\[\]\)/);
+  assert.doesNotMatch(source, /\(\['codex', 'cursor', 'antigravity'\] as ProductKind\[\]\)/);
   assert.match(source, /\.\.\.\(snapshot\.cursorAccounts \|\| \[\]\)/);
   assert.match(source, /\.\.\.\(snapshot\.antigravityAccounts \|\| \[\]\)/);
   assert.doesNotMatch(source, /!String\(account\.id\)\.startsWith\('cursor_'\)/);
@@ -570,4 +571,12 @@ test("float lens antigravity load skips official sync and restores product cache
   assert.match(desktop, /listCursorAccounts\(\{ skipOfficialSync: true \}\)/);
   assert.match(desktop, /getCurrentCursorAccount\(\{ skipOfficialSync: true \}\)/);
   assert.match(source, /setLoading\(false\);\s*\} else \{\s*setAccounts\(\[\]\)/);
+});
+
+test("float renderer is loaded through a dynamic import", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "src", "renderer-react", "main.tsx"), "utf8");
+  assert.match(source, /import\('\.\/components\/FloatLens'\)/);
+  assert.match(source, /import\('\.\/App'\)/);
+  assert.doesNotMatch(source, /import App from/);
+  assert.doesNotMatch(source, /import FloatLens from/);
 });

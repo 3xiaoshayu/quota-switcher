@@ -282,8 +282,8 @@ export const INITIAL_SETTINGS: SystemSettings = {
   clientDetected: true,
   cursorDetected: true,
   antigravityDetected: true,
-  updateChannel: 'Beta Channel',
-  version: '0.1.0-beta.29',
+  updateChannel: 'Stable Channel',
+  version: '1.0.0',
   latestStatus: 'Up to date',
 };
 

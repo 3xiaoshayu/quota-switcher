@@ -4,7 +4,7 @@ const { extractErrorCode } = require("./http-client");
 const { getAntigravityRuntime } = require("./antigravity-runtime");
 const { readOfficialOauthClient } = require("./antigravity-oauth-client");
 const { listAntigravityAccts, loadAntigravityAcct, saveAntigravityAcct, upsertAntigravityIndex } = require("./antigravity-storage");
-const { withAccountLocks } = require("./operation-locks");
+const { withAccountLock, mapLimit } = require("./operation-locks");
 const { logInfo, logWarn } = require("./logger");
 
 function parseJsonBody(body) {
@@ -84,6 +84,15 @@ async function refreshAntigravityToken(account, options = {}) {
     };
   }
   const force = options.force === true;
+  const observedGeneration = options.observedGeneration;
+  if (
+    observedGeneration != null
+    && Number(account.token_generation || 0) > Number(observedGeneration)
+    && account.tokens.access_token
+    && !antigravityAccessExpired(account)
+  ) {
+    return { ok: true, skipped: true, account };
+  }
   if (!force && account.tokens.access_token && !antigravityAccessExpired(account)) {
     return { ok: true, skipped: true, account };
   }
@@ -141,30 +150,39 @@ async function fetchGoogleUserInfo(accessToken) {
 }
 
 async function refreshAllAntigravityTokens(force = false) {
-  const results = [];
-  for (const listed of listAntigravityAccts()) {
-    await withAccountLocks(["__antigravity_switch__", listed.id], async () => {
+  const listedAccounts = listAntigravityAccts();
+  const results = await mapLimit(listedAccounts, 5, async (listed) => {
+    return withAccountLock(listed.id, async () => {
       const account = loadAntigravityAcct(listed.id) || listed;
-      if (!account?.tokens?.refresh_token) {
-        results.push({
+      if (account.requires_reauth) {
+        return {
           email: account.email,
           ok: false,
           skipped: true,
           reauthRequired: true,
-        });
-        return;
+        };
       }
-      const result = await refreshAntigravityToken(account, { force: !!force });
-      results.push({
+      if (!account?.tokens?.refresh_token) {
+        return {
+          email: account.email,
+          ok: false,
+          skipped: true,
+          reauthRequired: true,
+        };
+      }
+      const result = await refreshAntigravityToken(account, {
+        force: !!force,
+        observedGeneration: listed.token_generation,
+      });
+      return {
         email: account.email,
         ok: !!result.ok,
         skipped: !!result.skipped,
         error: result.error,
         reauthRequired: !!result.reauthRequired || (!result.ok && (!!result.skipped || /重新授权|refresh token|Google/i.test(String(result.error || "")))),
-      });
+      };
     });
-    await new Promise((resolve) => setTimeout(resolve, 150));
-  }
+  });
   return { results };
 }
 

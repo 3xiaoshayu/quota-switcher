@@ -60,10 +60,14 @@ function jwtExp(tok) {
   return p && p.exp ? Number(p.exp) : null;
 }
 
+function isExpiryStale(exp, now = ts()) {
+  const value = Number(exp);
+  if (!Number.isFinite(value) || value <= 0) return true;
+  return value < now + TOKEN_SKEW_SEC;
+}
+
 function isTokenExpired(accessToken) {
-  const exp = jwtExp(accessToken);
-  if (!exp) return true;
-  return exp < ts() + TOKEN_SKEW_SEC;
+  return isExpiryStale(jwtExp(accessToken));
 }
 
 function authClaim(token) {
@@ -95,6 +99,6 @@ function extractChatgptOrganizationId(token) {
 
 module.exports = {
   b64url, sha256hex, codeChallenge, ts, tsIso, buildId, buildCursorId, buildAntigravityId,
-  jwtPayload, jwtExp, isTokenExpired, extractChatgptAccountId, extractChatgptOrganizationId,
+  jwtPayload, jwtExp, isExpiryStale, isTokenExpired, extractChatgptAccountId, extractChatgptOrganizationId,
   extractCursorWorkosUserId,
 };

@@ -9,6 +9,7 @@ const {
   getItem,
   setItem,
   ensureItemTable,
+  readVscdbItemRows,
 } = require("./sqlite-native");
 const {
   decodeItemTableValue,
@@ -64,10 +65,9 @@ function tokenFromRaw(raw) {
 
 async function readAntigravityAuth(dbPath, options = {}) {
   void options.copyFirst;
-  if (!dbPath || !fs.existsSync(dbPath)) return null;
-  return withVscdb(dbPath, { readOnly: true, labels: SQLITE_LABELS }, (db) => {
-    return tokenFromRaw(getItem(db, OAUTH_ITEM_KEY));
-  });
+  const rows = await readVscdbItemRows(dbPath, [OAUTH_ITEM_KEY], { labels: SQLITE_LABELS });
+  if (!rows) return null;
+  return tokenFromRaw(rows[OAUTH_ITEM_KEY] ? Buffer.from(rows[OAUTH_ITEM_KEY], "base64") : null);
 }
 
 async function writeAntigravityAuth(dbPath, token, options = {}) {

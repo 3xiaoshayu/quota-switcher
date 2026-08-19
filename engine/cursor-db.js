@@ -1,6 +1,5 @@
 const fs = require("node:fs");
 const {
-  asText,
   withVscdb,
   snapshotItems,
   restoreItems,
@@ -8,8 +7,8 @@ const {
   getSqliteNativeTiming,
   deleteItem,
   setItem,
-  getItem,
   ensureItemTable,
+  readVscdbItemRows,
 } = require("./sqlite-native");
 
 const AUTH_KEYS = [
@@ -55,15 +54,13 @@ async function waitForCursorVscdbWritable(dbPath, options = {}) {
 
 async function readCursorAuth(dbPath, options = {}) {
   void options.copyFirst;
-  if (!dbPath || !fs.existsSync(dbPath)) return null;
-  return withVscdb(dbPath, { readOnly: true, labels: SQLITE_LABELS }, (db) => {
-    const values = {};
-    for (const key of AUTH_KEYS) {
-      const value = getItem(db, key);
-      if (value != null) values[key] = asText(value).trim();
-    }
-    return values;
-  });
+  const rows = await readVscdbItemRows(dbPath, AUTH_KEYS, { labels: SQLITE_LABELS });
+  if (!rows) return null;
+  const values = {};
+  for (const key of AUTH_KEYS) {
+    if (rows[key] != null) values[key] = Buffer.from(rows[key], "base64").toString("utf8").trim();
+  }
+  return values;
 }
 
 async function writeCursorAuth(dbPath, values, options = {}) {

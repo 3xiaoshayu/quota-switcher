@@ -2,15 +2,15 @@
 
 [简体中文](SECURITY.md)
 
-Codex Account Manager handles OAuth credentials and modifies the local Codex
-and Cursor authentication state. Security reports are treated as a priority.
+Codex Account Manager handles OAuth credentials and modifies the local Codex,
+Cursor, and Antigravity authentication state. Security reports are treated as
+a priority.
 
 ## Supported versions
 
 | Version | Security fixes |
 | --- | --- |
 | Latest stable release | Supported |
-| Latest prerelease | Supported during beta |
 | Older releases | Not supported |
 
 ## Report a vulnerability
@@ -41,6 +41,7 @@ requested and appropriate.
 - `%USERPROFILE%\.codex\auth.json` contains the active Codex credential state.
 - `%USERPROFILE%\.codex\auth.json.bak` may contain the previous credential state.
 - `%APPDATA%\Cursor\User\globalStorage\state.vscdb` contains the official Cursor login.
+- `%APPDATA%\Antigravity IDE\User\globalStorage\state.vscdb` contains the official Antigravity login.
 
 Never attach these files or directories to an issue. Emails in screenshots
 are fine. Strip callback URLs, tokens, and authorization headers from logs.
@@ -54,8 +55,8 @@ are fine. Strip callback URLs, tokens, and authorization headers from logs.
   or against a machine administrator.
 - The application relies on upstream OpenAI, ChatGPT, Cursor, GitHub, Electron,
   and Windows security properties.
-- Unsigned prerelease installers can trigger SmartScreen and must be verified
-  against the release checksum.
+- Unsigned installers can trigger SmartScreen and must be verified against the
+  release checksum.
 
 See [docs/privacy.md](docs/privacy.md) (Chinese) or
 [docs/privacy.en.md](docs/privacy.en.md) for local data and network behavior.

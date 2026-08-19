@@ -3,7 +3,7 @@ const { ts, jwtPayload, isTokenExpired } = require("./crypto-utils");
 const { extractErrorCode } = require("./http-client");
 const { getCursorRuntime } = require("./cursor-runtime");
 const { listCursorAccts, loadCursorAcct, saveCursorAcct, upsertCursorIndex } = require("./cursor-storage");
-const { withAccountLock, withAccountLocks } = require("./operation-locks");
+const { withAccountLock, mapLimit } = require("./operation-locks");
 const { logInfo, logWarn } = require("./logger");
 
 function markCursorReauth(account, reason) {
@@ -42,6 +42,15 @@ async function refreshCursorToken(account, options = {}) {
     };
   }
   const force = options.force === true;
+  const observedGeneration = options.observedGeneration;
+  if (
+    observedGeneration != null
+    && Number(account.token_generation || 0) > Number(observedGeneration)
+    && account.tokens.access_token
+    && !isTokenExpired(account.tokens.access_token)
+  ) {
+    return { ok: true, skipped: true, account };
+  }
   if (!force && account.tokens.access_token && !isTokenExpired(account.tokens.access_token)) {
     return { ok: true, skipped: true, account };
   }
@@ -111,30 +120,39 @@ async function fetchCursorUserMeta(account) {
 }
 
 async function refreshAllCursorTokens(force = false) {
-  const results = [];
-  for (const listed of listCursorAccts()) {
-    await withAccountLocks(["__cursor_switch__", listed.id], async () => {
+  const listedAccounts = listCursorAccts();
+  const results = await mapLimit(listedAccounts, 5, async (listed) => {
+    return withAccountLock(listed.id, async () => {
       const account = loadCursorAcct(listed.id) || listed;
-      if (!account?.tokens?.refresh_token) {
-        results.push({
+      if (account.requires_reauth) {
+        return {
           email: account.email,
           ok: false,
           skipped: true,
           reauthRequired: true,
-        });
-        return;
+        };
       }
-      const result = await refreshCursorToken(account, { force: !!force });
-      results.push({
+      if (!account?.tokens?.refresh_token) {
+        return {
+          email: account.email,
+          ok: false,
+          skipped: true,
+          reauthRequired: true,
+        };
+      }
+      const result = await refreshCursorToken(account, {
+        force: !!force,
+        observedGeneration: listed.token_generation,
+      });
+      return {
         email: account.email,
         ok: !!result.ok,
         skipped: !!result.skipped,
         error: result.error,
         reauthRequired: !!result.reauthRequired || (!result.ok && (!!result.skipped || /重新授权|refresh token/i.test(String(result.error || "")))),
-      });
+      };
     });
-    await new Promise((resolve) => setTimeout(resolve, 150));
-  }
+  });
   return { results };
 }
 

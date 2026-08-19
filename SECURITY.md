@@ -2,14 +2,13 @@
 
 [English](SECURITY.en.md)
 
-这个应用会保存登录，也会改本机官方 Codex / Cursor 的登录。安全报告会优先看。
+这个应用会保存登录，也会改本机官方 Codex / Cursor / Antigravity 的登录。安全报告会优先看。
 
 ## 哪些版本还管
 
 | 版本 | 是否修补 |
 | --- | --- |
 | 最新正式版 | 管 |
-| 最新预发布 | Beta 期间管 |
 | 更早的版本 | 不管 |
 
 ## 怎么报告
@@ -36,6 +35,7 @@
 - `%USERPROFILE%\.codex\auth.json`：官方 Codex 正在用的登录
 - `%USERPROFILE%\.codex\auth.json.bak`：上一份 Codex 登录
 - `%APPDATA%\Cursor\User\globalStorage\state.vscdb`：官方 Cursor 登录
+- `%APPDATA%\Antigravity IDE\User\globalStorage\state.vscdb`：官方 Antigravity 登录
 
 不要把这些目录或文件附到 Issue。截图可以带邮箱。日志里的回调、token、授权头请先抹掉。
 

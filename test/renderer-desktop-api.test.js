@@ -1505,6 +1505,68 @@ test("first-paint cursor and antigravity lists can skip official sync", async ()
   assert.deepEqual(calls.find((item) => item[0] === "antigravity:current")[1], { skipOfficialSync: true });
 });
 
+test("desktop snapshot replaces the dashboard fanout when the bridge provides it", async () => {
+  const calls = [];
+  const { desktopApi } = loadDesktopExports(bridge({
+    getDesktopSnapshot: (options) => {
+      calls.push(options);
+      return ok({
+        accounts: [{
+          id: "one",
+          email: "one@example.com",
+          plan_type: "plus",
+          token_status: {
+            accessAvailable: true,
+            refreshAvailable: true,
+            expired: false,
+            timeLeft: 3600,
+          },
+        }],
+        currentAccount: null,
+        cursorAccounts: [],
+        currentCursorAccount: null,
+        antigravityAccounts: [],
+        currentAntigravityAccount: null,
+        daemon: { running: false, syncIntervalMinutes: 1 },
+        config: {
+          enabled: false,
+          primary_threshold: 20,
+          secondary_threshold: 30,
+          account_scope_mode: "all",
+          selected_account_ids: [],
+          sync_interval_minutes: 1,
+        },
+        oauthStatus: { status: "idle", pending: false },
+        cursorOAuthStatus: { status: "idle", pending: false },
+        antigravityOAuthStatus: { status: "idle", pending: false },
+        authState: { status: "aligned", requiresResolution: false },
+      });
+    },
+    listAccounts: () => {
+      throw new Error("fanout listAccounts should not run");
+    },
+  }));
+  const bundle = await desktopApi.loadDesktopSnapshot({ skipOfficialSync: true });
+  assert.deepEqual(calls, [{ skipOfficialSync: true }]);
+  assert.equal(bundle.dashboard.accounts[0].email, "one@example.com");
+  assert.equal(bundle.cursor.accounts.length, 0);
+  assert.equal(bundle.antigravity.accounts.length, 0);
+});
+
+test("renderer dashboard state lives in a useSyncExternalStore desktop store", () => {
+  const store = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "state", "desktop-store.ts"), "utf8");
+  const app = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "App.tsx"), "utf8");
+  assert.match(store, /useSyncExternalStore/);
+  assert.match(store, /codexAccounts/);
+  assert.match(store, /cursorAccounts/);
+  assert.match(store, /antigravityAccounts/);
+  assert.match(store, /oauthStatus/);
+  assert.match(store, /daemonState/);
+  assert.doesNotMatch(store, /from ['\"]zustand['\"]/);
+  assert.match(app, /useDesktopStore/);
+  assert.match(app, /from '\.\/state\/desktop-store'/);
+});
+
 function loadProductAdapter() {
   const desktop = loadDesktopExports(bridge());
   const userMessages = loadUserMessages();

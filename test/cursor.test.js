@@ -88,6 +88,7 @@ function applyImmediateLockTimeout(engine) {
     switchTimeoutMs: 50,
     writeTimeoutMs: 50,
     busyRetries: 0,
+    readBusyRetries: 0,
   });
 }
 

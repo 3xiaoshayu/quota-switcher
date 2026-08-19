@@ -1,3 +1,5 @@
+const path = require("node:path");
+
 const accountLocks = new Map();
 
 async function withLock(key, task) {
@@ -34,4 +36,25 @@ function withAccountLocks(ids, task) {
   return run(0);
 }
 
-module.exports = { withAccountLock, withAccountLocks };
+function withPathLock(filePath, task) {
+  return withLock(`path:${path.resolve(String(filePath || ""))}`, task);
+}
+
+async function mapLimit(items, limit, mapper) {
+  const list = Array.from(items || []);
+  const concurrency = Math.max(1, Math.min(Number(limit) || 1, list.length || 1));
+  if (!list.length) return [];
+  const results = new Array(list.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(concurrency, list.length) }, async () => {
+    while (next < list.length) {
+      const index = next;
+      next += 1;
+      results[index] = await mapper(list[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+module.exports = { withAccountLock, withAccountLocks, withPathLock, withLock, mapLimit };

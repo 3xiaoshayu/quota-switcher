@@ -6,7 +6,8 @@ const { resolveLiveProxy, invalidateLiveProxy, hostLooksPoisoned, applySignature
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 
-let sharedProxyAgent = null;
+const agentsBySignature = new Map();
+let httpJsonTransport = null;
 
 function tooLargeError() {
   const error = new Error("响应过大");
@@ -77,95 +78,45 @@ function buildNetworkFailure(url, attempts) {
   return new Error(`网络请求失败 (${host})。详情：${details}`);
 }
 
-function toHeaderObject(headers) {
-  const out = {};
-  if (!headers || typeof headers.forEach !== "function") return out;
-  headers.forEach((value, key) => {
-    out[key] = value;
-  });
-  return out;
+function agentCacheKey(signature, protocol) {
+  return `${protocol || "https:"}|${signature?.proxyUrl || "__direct__"}`;
 }
 
-async function resolveProxyForUrl(url) {
-  const signature = await resolveLiveProxy(url);
-  return signature.proxyUrl || "";
+function getAgentForSignature(signature = null, protocol = "https:") {
+  const key = agentCacheKey(signature, protocol);
+  const hit = agentsBySignature.get(key);
+  if (hit) return hit;
+  const proxyUrl = signature?.proxyUrl || "";
+  const keepAlive = { keepAlive: true, maxSockets: 8 };
+  const agent = proxyUrl
+    ? new ProxyAgent({ getProxyForUrl: () => proxyUrl, keepAlive: true })
+    : protocol === "http:"
+      ? new http.Agent(keepAlive)
+      : new https.Agent(keepAlive);
+  agentsBySignature.set(key, agent);
+  return agent;
 }
 
-function getProxyAgent() {
-  if (!sharedProxyAgent) {
-    sharedProxyAgent = new ProxyAgent({ getProxyForUrl: resolveProxyForUrl });
+function resetHttpAgentsForTests() {
+  for (const agent of agentsBySignature.values()) {
+    try { if (typeof agent.destroy === "function") agent.destroy(); } catch {}
   }
-  return sharedProxyAgent;
+  agentsBySignature.clear();
 }
 
-async function readResponseUtf8Capped(response, maxBytes = MAX_JSON_BODY_BYTES) {
-  const declared = Number(response.headers?.get?.("content-length"));
-  if (Number.isFinite(declared) && declared > maxBytes) {
-    if (typeof response.body?.cancel === "function") {
-      try { await response.body.cancel(); } catch { /* already closed */ }
-    }
-    throw tooLargeError();
-  }
-  if (response.body && typeof response.body.getReader === "function") {
-    const reader = response.body.getReader();
-    const chunks = [];
-    let total = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const size = value ? value.byteLength : 0;
-      total += size;
-      if (total > maxBytes) {
-        try { await reader.cancel(); } catch { /* already closed */ }
-        throw tooLargeError();
-      }
-      if (value) chunks.push(Buffer.from(value));
-    }
-    return concatUtf8Capped(chunks, maxBytes);
-  }
-  const text = await response.text();
-  if (Buffer.byteLength(text, "utf8") > maxBytes) throw tooLargeError();
-  return text;
+function setHttpJsonTransport(transport) {
+  httpJsonTransport = typeof transport === "function" ? transport : null;
 }
 
-async function electronHttpJson(url, opts, headers, timeout) {
-  let fetchFn = null;
-  try {
-    const electron = require("electron");
-    fetchFn = electron?.net?.fetch;
-  } catch {
-    return null;
-  }
-  if (typeof fetchFn !== "function") return null;
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
-  try {
-    const response = await fetchFn(url, {
-      method: opts.method || "GET",
-      headers,
-      body: opts.body ? (typeof opts.body === "string" ? opts.body : JSON.stringify(opts.body)) : undefined,
-      signal: controller.signal,
-    });
-    const body = await readResponseUtf8Capped(response);
-    return {
-      status: response.status,
-      headers: toHeaderObject(response.headers),
-      body,
-    };
-  } catch (error) {
-    if (error && error.name === "AbortError") throw new Error("请求超时");
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
+function getHttpJsonTransport() {
+  return httpJsonTransport;
 }
 
-function nodeHttpJson(url, opts, headers, timeout) {
+function nodeHttpJson(url, opts, headers, timeout, signature = null) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const mod = u.protocol === "https:" ? https : http;
-    const agent = getProxyAgent();
+    const agent = getAgentForSignature(signature, u.protocol);
     let settled = false;
     const finish = (fn, value) => {
       if (settled) return;
@@ -199,7 +150,7 @@ function nodeHttpJson(url, opts, headers, timeout) {
   });
 }
 
-async function httpJson(url, opts = {}) {
+async function httpJsonLocal(url, opts = {}) {
   const headers = Object.assign(
     { "Content-Type": "application/json", "Accept": "application/json" },
     opts.headers || {}
@@ -217,7 +168,7 @@ async function httpJson(url, opts = {}) {
   // Content-Length / hijack page freezes the main window as 未响应.
   const attempts = [];
   try {
-    const runNode = () => nodeHttpJson(url, opts, headers, timeout);
+    const runNode = () => nodeHttpJson(url, opts, headers, timeout, signature);
     return idempotent
       ? await withOneRetry("Node network", runNode)
       : await runNode();
@@ -228,13 +179,25 @@ async function httpJson(url, opts = {}) {
     if (idempotent && retrySignature.proxyUrl && retrySignature.proxyUrl !== signature.proxyUrl) {
       await applySignatureToRuntime(retrySignature, { touchSession: false });
       try {
-        return await withOneRetry("Node network", () => nodeHttpJson(url, opts, headers, timeout));
+        return await withOneRetry("Node network", () => nodeHttpJson(url, opts, headers, timeout, retrySignature));
       } catch (retryError) {
         attempts.push({ label: "Node-retry", error: retryError });
       }
     }
     throw buildNetworkFailure(url, attempts);
   }
+}
+
+async function httpJson(url, opts = {}) {
+  if (httpJsonTransport) {
+    try {
+      return await httpJsonTransport(url, opts);
+    } catch (error) {
+      if (error && error.code === "engine_worker_down") return httpJsonLocal(url, opts);
+      throw error;
+    }
+  }
+  return httpJsonLocal(url, opts);
 }
 
 function buildCodexHeaders(acct) {
@@ -262,9 +225,14 @@ function extractErrorCode(body) {
 
 module.exports = {
   httpJson,
+  httpJsonLocal,
+  setHttpJsonTransport,
+  getHttpJsonTransport,
   buildCodexHeaders,
   extractErrorCode,
   MAX_JSON_BODY_BYTES,
   concatUtf8Capped,
   nodeHttpJson,
+  getAgentForSignature,
+  resetHttpAgentsForTests,
 };

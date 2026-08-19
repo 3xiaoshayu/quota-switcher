@@ -1,7 +1,7 @@
-const { b64url, sha256hex, codeChallenge, ts, tsIso, buildId, buildCursorId, buildAntigravityId, jwtPayload, jwtExp, isTokenExpired, extractChatgptAccountId, extractChatgptOrganizationId, extractCursorWorkosUserId } = require("./crypto-utils");
+const { b64url, sha256hex, codeChallenge, ts, tsIso, buildId, buildCursorId, buildAntigravityId, jwtPayload, jwtExp, isExpiryStale, isTokenExpired, extractChatgptAccountId, extractChatgptOrganizationId, extractCursorWorkosUserId } = require("./crypto-utils");
 const { parseTsStr } = require("./time-utils");
-const { httpJson, buildCodexHeaders, extractErrorCode } = require("./http-client");
-const { setSecretCodec, protectData, unprotectData, ensureDir, normalizeAccountId, accountFilePath, loadIdx, saveIdx, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct, getStorageDiagnostics, rebuildIndex } = require("./storage");
+const { httpJson, buildCodexHeaders, extractErrorCode, setHttpJsonTransport } = require("./http-client");
+const { setSecretCodec, protectData, unprotectData, ensureDir, normalizeAccountId, accountFilePath, loadIdx, saveIdx, withIndexLock, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct, getStorageDiagnostics, rebuildIndex, flushPendingAccountRewrites, resetPendingAccountRewritesForTests } = require("./storage");
 const { writeAuthJson, writeProjection, clearApiBaseUrl, killCodex, startCodex, doSwitch, launchOfficialCodex, setSwitchRuntimeForTests } = require("./switch");
 const { oauthLoginFlow, restorePendingOAuth, cancelOAuth, completeOAuthManually, getOAuthStatus, setOpenUrlHandler, upsert, sameAccountIdentity, collapseDuplicateCodexAccounts } = require("./oauth");
 const { inspectAuthState, adoptOfficialAuth, reapplyManagedAuth, authFingerprint, identityMatchesAccount } = require("./auth-state");
@@ -10,7 +10,7 @@ const { refreshOneTok, needsRefresh, refreshAll } = require("./token-refresh");
 const { fetchQuota, fetchQuotaWithTokenRepair, isQuotaAuthError, refreshQuota, probeUsageOnly, canProbeUsageWithoutRefresh, needsBanProbe, extractQuotaMetrics, normalizeQuota } = require("./quota");
 const { classifyProbe, isAccountBanned } = require("./account-probe");
 const { loadAutoSwitchCfg, saveAutoSwitchCfg, remapSelectedAccountIds, DEFAULT_AUTO_SWITCH_CFG } = require("./config-manager");
-const { withAccountLock, withAccountLocks } = require("./operation-locks");
+const { withAccountLock, withAccountLocks, withPathLock, mapLimit } = require("./operation-locks");
 const { metricCrossedThreshold, accountMustLeave, buildSwitchCandidate, pickBestCandidate, resolveMonitoredIds, autoSwitchTick } = require("./auto-switch");
 const { runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes } = require("./daemon");
 const { getCodexInstallationStatus, getCodexInstallationStatusAsync, assertOfficialCodexInstalled, assertOfficialCodexInstalledAsync } = require("./codex-installation");
@@ -23,7 +23,7 @@ const { cursorLoginFlow, cancelCursorOAuth, discardPendingCursorOAuth, getCursor
 const { getCursorInstallationStatus, getCursorInstallationStatusAsync, assertOfficialCursorInstalled } = require("./cursor-install");
 const { setCursorRuntimeForTests, setCursorOpenUrlHandler } = require("./cursor-runtime");
 const { readCursorAuth, writeCursorAuth, hasPendingWal, waitForWalToClear } = require("./cursor-db");
-const { setSqliteNativeTimingForTests } = require("./sqlite-native");
+const { setSqliteNativeTimingForTests, setSqliteReadTransport } = require("./sqlite-native");
 const { listAntigravityAccts, loadAntigravityAcct, saveAntigravityAcct, currentAntigravityAcct, deleteAntigravityAcct, loadAntigravityIdx, setCurrentAntigravityAccountId } = require("./antigravity-storage");
 const { importLocalAntigravityAccount, upsertAntigravityAccount, accountFromAntigravityTokens, syncCurrentAntigravityFromOfficial, collapseDuplicateAntigravityAccounts, resetOfficialSyncCacheForTests: resetAntigravityOfficialSyncCacheForTests } = require("./antigravity-local");
 const { doAntigravitySwitch } = require("./antigravity-switch");
@@ -36,13 +36,13 @@ const { readAntigravityAuth, writeAntigravityAuth } = require("./antigravity-db"
 
 module.exports = {
   // crypto-utils
-  b64url, sha256hex, codeChallenge, ts, tsIso, buildId, buildCursorId, buildAntigravityId, jwtPayload, jwtExp, isTokenExpired, extractChatgptAccountId, extractChatgptOrganizationId, extractCursorWorkosUserId,
+  b64url, sha256hex, codeChallenge, ts, tsIso, buildId, buildCursorId, buildAntigravityId, jwtPayload, jwtExp, isExpiryStale, isTokenExpired, extractChatgptAccountId, extractChatgptOrganizationId, extractCursorWorkosUserId,
   // time-utils
   parseTsStr,
   // http-client
-  httpJson, buildCodexHeaders, extractErrorCode,
+  httpJson, buildCodexHeaders, extractErrorCode, setHttpJsonTransport,
   // storage
-  setSecretCodec, protectData, unprotectData, ensureDir, normalizeAccountId, accountFilePath, loadIdx, saveIdx, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct, getStorageDiagnostics, rebuildIndex,
+  setSecretCodec, protectData, unprotectData, ensureDir, normalizeAccountId, accountFilePath, loadIdx, saveIdx, withIndexLock, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct, getStorageDiagnostics, rebuildIndex, flushPendingAccountRewrites, resetPendingAccountRewritesForTests,
   // switch
   writeAuthJson, writeProjection, clearApiBaseUrl, killCodex, startCodex, doSwitch, launchOfficialCodex, setSwitchRuntimeForTests,
   // oauth
@@ -59,7 +59,7 @@ module.exports = {
   // config-manager
   loadAutoSwitchCfg, saveAutoSwitchCfg, remapSelectedAccountIds, DEFAULT_AUTO_SWITCH_CFG,
   // operation-locks
-  withAccountLock, withAccountLocks,
+  withAccountLock, withAccountLocks, withPathLock, mapLimit,
   // auto-switch
   metricCrossedThreshold, accountMustLeave, buildSwitchCandidate, pickBestCandidate, resolveMonitoredIds, autoSwitchTick,
   // daemon
@@ -72,7 +72,7 @@ module.exports = {
   cursorLoginFlow, cancelCursorOAuth, discardPendingCursorOAuth, getCursorOAuthStatus, restorePendingCursorOAuth,
   getCursorInstallationStatus, getCursorInstallationStatusAsync, assertOfficialCursorInstalled,
   setCursorRuntimeForTests, setCursorOpenUrlHandler, readCursorAuth, writeCursorAuth, hasPendingWal, waitForWalToClear,
-  setSqliteNativeTimingForTests,
+  setSqliteNativeTimingForTests, setSqliteReadTransport,
   listAntigravityAccts, loadAntigravityAcct, saveAntigravityAcct, currentAntigravityAcct, deleteAntigravityAcct, loadAntigravityIdx, setCurrentAntigravityAccountId,
   importLocalAntigravityAccount, upsertAntigravityAccount, accountFromAntigravityTokens, syncCurrentAntigravityFromOfficial, collapseDuplicateAntigravityAccounts, resetAntigravityOfficialSyncCacheForTests,
   doAntigravitySwitch, refreshAntigravityQuota, parseAntigravityUsage, refreshAntigravityToken, refreshAllAntigravityTokens,

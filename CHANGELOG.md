@@ -7,6 +7,25 @@ release is published.
 
 ## Unreleased
 
+## [1.0.0] - 2026-08-19
+
+First stable release after the `0.1.0-beta` series.
+
+- One Windows window for Codex, Cursor, and Antigravity IDE: account cards,
+  quotas, local import, browser sign-in, and switching into the official
+  client.
+- Saved logins stay on this PC and are encrypted with Windows DPAPI.
+- A Codex switch snapshots the official login and rolls the whole transaction
+  back if a later step fails.
+- Quota refresh for saved accounts runs five at a time and skips accounts that
+  already need re-auth or are banned.
+- Desktop quota lens, tray, and Codex auto-switch that keeps running after the
+  window is closed.
+- The installer is still unsigned. Download only from GitHub Releases and check
+  SHA-256.
+- Packaged `0.1.0-beta.*` builds do not auto-update to 1.0.0. Install this
+  Setup once; later `1.0.x` updates can arrive in the app.
+
 ## [0.1.0-beta.34] - 2026-08-19
 
 - Replace the sidebar product switch with a dock of official Codex, Cursor,

@@ -15,9 +15,9 @@ explicit boundary between the renderer and privileged local operations.
 | Renderer build | `src/renderer-dist` | Generated Vite output loaded by Electron; ignored by Git |
 | Domain engine | `engine` | OAuth, storage, quota, token refresh, switching, and auto-switch policy |
 
-The renderer runs with `contextIsolation: true` and `nodeIntegration: false`.
-It cannot access Node.js APIs directly. Electron sandbox hardening is planned
-for a later public-release security pass.
+The renderer runs with `contextIsolation: true`, `nodeIntegration: false`, and
+`sandbox: true`. It cannot access Node.js APIs directly. Tokens never leave
+the main process; the renderer only receives public account metadata.
 
 ## Products
 
@@ -39,10 +39,13 @@ only: no legacy `Antigravity.exe`, no multi-instance, no daemon auto-switch.
 1. Electron initializes a Windows DPAPI-backed secret codec.
 2. The main process registers IPC handlers around the domain engine.
 3. The BrowserWindow loads the isolated preload bridge and renderer.
-4. The renderer loads Codex, Cursor, and Antigravity accounts, current identities,
-   daemon state, configuration, official-client detection, and update status.
-5. Missing or stale quota data is refreshed sequentially in the background.
-   Codex quota auto-sync keeps running while the Cursor tab is open.
+4. The renderer loads a `desktop:snapshot` of Codex, Cursor, and Antigravity
+   accounts, current identities, daemon state, configuration, official-client
+   detection, and update status.
+5. Stale quota data is refreshed in the background with `mapLimit(5)`. Accounts
+   that already need re-auth, are banned, or are waiting on `quota_next_retry_at`
+   are skipped. Codex quota auto-sync keeps running while another product tab
+   is open.
 
 ## Account storage
 
@@ -53,9 +56,11 @@ The manager stores its own state under `%USERPROFILE%\.codex-switch`:
   accounts.json
   accounts.json.bak
   cursor-accounts.json
+  antigravity-accounts.json
   auto-switch.json
   codex_oauth_pending.json
   cursor_oauth_pending.json
+  antigravity_oauth_pending.json
   logs/
   accounts/
     codex_<id>.json
@@ -63,19 +68,25 @@ The manager stores its own state under `%USERPROFILE%\.codex-switch`:
   cursor-accounts/
     cursor_<id>.json
     cursor_<id>.json.bak
+  antigravity-accounts/
+    antigravity_<id>.json
+    antigravity_<id>.json.bak
 ```
 
 Account files contain metadata plus a `tokens_encrypted` payload protected by
-Electron `safeStorage`, which uses Windows DPAPI. Legacy plaintext account
-records are migrated when read.
+Electron `safeStorage`, which uses Windows DPAPI. Listing accounts for the UI
+uses `secrets: false` so tokens are not decrypted. Legacy plaintext records
+are queued for a deferred rewrite instead of being rewritten on every read.
 
 The active Codex identity remains in `%USERPROFILE%\.codex\auth.json`, because
 that is the state consumed by Codex. The manager creates `auth.json.bak` before
 replacing it during a switch.
 
 The active Cursor identity remains in official Cursor `state.vscdb`. The
-manager updates only the login keys in place. A leftover WAL after Cursor has
-exited is applied by SQLite; a locked database still blocks the switch.
+manager updates only the login keys in place (`BEGIN IMMEDIATE`, WAL). A
+leftover WAL after Cursor has exited is applied by SQLite; a locked database
+still blocks the switch. Antigravity IDE uses the same in-place SQLite pattern
+on its own `state.vscdb`.
 
 ## Switching flow
 
@@ -114,14 +125,15 @@ requests use that account directly; they do not need to make it the active
 official identity first.
 
 Codex windows are the 5-hour and weekly quotas. Cursor windows are plan, Auto,
-and API usage. Missing windows remain unknown rather than being converted to
-zero. Automatic refresh is sequential to avoid bursts across all saved
-accounts.
+and API usage. Antigravity windows are plan or credits and primary model
+remaining. Missing windows remain unknown rather than being converted to
+zero. Batch refresh uses `mapLimit(5)` across saved accounts.
 
-Outbound HTTP follows a discovered local HTTP or SOCKS proxy when one is live,
-including leftover Windows proxy entries after system proxy has been turned
-off. Electron and Node reuse the same signature so a doomed direct path is not
-retried on every request.
+Outbound HTTP is Node `http`/`https` (not Chromium `net.fetch`), follows a
+discovered local HTTP or SOCKS proxy, and reuses keep-alive Agents keyed by
+proxy signature. In a packaged Electron app, HTTP and SQLite reads can run in
+a `utilityProcess` worker; DPAPI and switch transactions stay in the main
+process. If the worker exits, those calls fall back in-process.
 
 ## IPC contract
 
@@ -133,6 +145,9 @@ Renderer calls are defined in `src/preload/preload.js` and handled in
 - expected main-process events are exposed to the renderer.
 
 When adding an operation, update all three surfaces and run `npm run audit:ui`.
+
+The first paint uses `desktop:snapshot`. Later quota and account changes can
+arrive as `quota:updated` / `account:updated` patches instead of a full reload.
 
 ## Update channels
 
@@ -151,7 +166,7 @@ engine/antigravity-*.js Antigravity import, Google OAuth, quota, token, and swit
 engine/proxy-resolve.js Outbound proxy discovery
 resources/              Windows application icon
 scripts/                Release and contract verification
-src/main/               Electron main process
+src/main/               Electron main process, IPC, engine worker host
 src/preload/            Isolated renderer bridge
 src/renderer-react/     Current React UI source
 src/renderer-dist/      Generated renderer build (not tracked)

@@ -4,8 +4,8 @@
 
 ## Windows shows an unknown publisher
 
-Current prerelease installers are not code-signed, so Microsoft Defender
-SmartScreen may display an unknown-publisher warning.
+Installers are not code-signed yet, so Microsoft Defender SmartScreen may
+display an unknown-publisher warning.
 
 1. Download only from this repository's Releases page.
 2. Compare the installer SHA-256 with `SHA256SUMS.txt`.

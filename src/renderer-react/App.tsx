@@ -2,9 +2,6 @@ import { useCallback, useEffect, useRef, useState, type SetStateAction } from 'r
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   INITIAL_ACCOUNTS,
-  INITIAL_ANTIGRAVITY_ACCOUNTS,
-  INITIAL_CURSOR_ACCOUNTS,
-  INITIAL_DAEMON_STATE, 
   INITIAL_LOGS, 
   INITIAL_SETTINGS 
 } from './data/mockData';
@@ -21,7 +18,6 @@ import {
   ProductKind,
   LogEntry,
   SystemSettings,
-  DaemonState,
 } from './types';
 import {
   countUnreadAlertLogs,
@@ -31,7 +27,6 @@ import {
   hasDesktopBridge,
   canJoinAutoSwitch,
   accountHasVisibleQuota,
-  canRefreshQuota,
   needsHandling,
   needsQuotaAutoSync,
   isManagedProductAccount,
@@ -57,6 +52,24 @@ import {
   toProductUserMessage,
 } from './api/product-adapter';
 import { productById, readStoredProduct } from './data/products';
+import {
+  setAntigravityAccounts,
+  setAntigravityOAuthStatus,
+  setAntigravityStatus,
+  setAppInfo,
+  setAuthState,
+  setAutoSwitchConfig,
+  setCodexAccounts,
+  setCodexStatus,
+  setCursorAccounts,
+  setCursorOAuthStatus,
+  setCursorStatus,
+  setDaemonState,
+  setOAuthStatus,
+  setSelectedAccountIds,
+  setUpdateStatus,
+  useDesktopStore,
+} from './state/desktop-store';
 import Login from './components/Login';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
@@ -65,7 +78,6 @@ import AutoSwitchView from './components/AutoSwitchView';
 import AccountsView from './components/AccountsView';
 import SettingsView from './components/SettingsView';
 import AuthStatusBanner from './components/AuthStatusBanner';
-import FloatLens from './components/FloatLens';
 import { 
   Bell, 
   X, 
@@ -83,24 +95,6 @@ import {
 
 const desktopBridgeAvailable = hasDesktopBridge();
 const actions = productActions();
-
-const DEFAULT_CONFIG: DesktopAutoSwitchConfig = {
-  enabled: false,
-  primary_threshold: 20,
-  secondary_threshold: 30,
-  account_scope_mode: 'all',
-  selected_account_ids: [],
-  sync_interval_minutes: 1,
-};
-
-const EMPTY_AUTH_STATE: DesktopAuthState = {
-  status: 'empty',
-  requiresResolution: false,
-  currentAccountId: null,
-  matchedAccountId: null,
-  officialIdentity: null,
-  message: null,
-};
 
 function updateChannelForUi(status: DesktopUpdateStatus | null): SystemSettings['updateChannel'] {
   const channel = String(status?.channel || '').toLowerCase();
@@ -141,10 +135,6 @@ function settingsFromDesktopState(
   };
 }
 
-function isFloatRenderer() {
-  return window.location.hash.replace(/^#\/?/, '') === 'float';
-}
-
 function wantsDesktopLoginPreview() {
   return new URLSearchParams(window.location.search).has('desktopLogin');
 }
@@ -169,27 +159,27 @@ function DashboardApp() {
   const [accountsFilterTab, setAccountsFilterTab] = useState<'all' | 'current' | 'warning'>('all');
   const didPickLandingTab = useRef(false);
   const didAutoShowFloat = useRef(false);
-  const didOpenQuotaSync = useRef(false);
   const [product, setProduct] = useState<ProductKind>(() => readStoredProduct());
-  const [codexAccounts, setCodexAccounts] = useState<AccountQuota[]>(desktopBridgeAvailable ? [] : INITIAL_ACCOUNTS);
-  const [cursorAccounts, setCursorAccounts] = useState<AccountQuota[]>(desktopBridgeAvailable ? [] : INITIAL_CURSOR_ACCOUNTS);
-  const [antigravityAccounts, setAntigravityAccounts] = useState<AccountQuota[]>(desktopBridgeAvailable ? [] : INITIAL_ANTIGRAVITY_ACCOUNTS);
+  const {
+    codexAccounts,
+    cursorAccounts,
+    antigravityAccounts,
+    daemonState,
+    autoSwitchConfig,
+    appInfo,
+    codexStatus,
+    cursorStatus,
+    antigravityStatus,
+    updateStatus,
+    authState,
+    oauthStatus,
+    cursorOAuthStatus,
+    antigravityOAuthStatus,
+    selectedAccountIds,
+  } = useDesktopStore();
   const accounts = accountsFromSnapshot(product, { accounts: codexAccounts, cursorAccounts, antigravityAccounts });
-  const [daemonState, setDaemonState] = useState<DaemonState>(
-    desktopBridgeAvailable ? { status: 'Stopped', syncInterval: 1, lastChecked: '' } : INITIAL_DAEMON_STATE,
-  );
   const [settings, setSettings] = useState<SystemSettings>(INITIAL_SETTINGS);
   const [logs, setLogs] = useState<LogEntry[]>(desktopBridgeAvailable ? [] : INITIAL_LOGS);
-  const [autoSwitchConfig, setAutoSwitchConfig] = useState<DesktopAutoSwitchConfig>(DEFAULT_CONFIG);
-  const [appInfo, setAppInfo] = useState<DesktopAppInfo | null>(null);
-  const [codexStatus, setCodexStatus] = useState<DesktopCodexStatus | null>(null);
-  const [cursorStatus, setCursorStatus] = useState<DesktopCursorStatus | null>(null);
-  const [antigravityStatus, setAntigravityStatus] = useState<DesktopAntigravityStatus | null>(null);
-  const [updateStatus, setUpdateStatus] = useState<DesktopUpdateStatus | null>(null);
-  const [authState, setAuthState] = useState<DesktopAuthState>(EMPTY_AUTH_STATE);
-  const [oauthStatus, setOAuthStatus] = useState<DesktopOAuthStatus | null>(null);
-  const [cursorOAuthStatus, setCursorOAuthStatus] = useState<DesktopOAuthStatus | null>(null);
-  const [antigravityOAuthStatus, setAntigravityOAuthStatus] = useState<DesktopOAuthStatus | null>(null);
   const [isResolvingAuth, setIsResolvingAuth] = useState(false);
   const [dashboardLoadState, setDashboardLoadState] = useState<'loading' | 'ready' | 'error'>(
     desktopBridgeAvailable ? 'loading' : 'ready',
@@ -211,10 +201,6 @@ function DashboardApp() {
   const configSaveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const configSaveRevision = useRef(0);
   
-  // Auto-switch scope checkmarks list (Premium_Member_01, Team_Admin_Shared, Internal_Dev_Account checked initially)
-  const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>(
-    desktopBridgeAvailable ? [] : ['5', '6', '8'],
-  );
   const selectedAccountIdsRef = useRef<string[]>(selectedAccountIds);
 
   useEffect(() => {
@@ -474,12 +460,11 @@ function DashboardApp() {
       setDashboardLoadError(null);
     }
     try {
-      const [snapshot, cursorSnapshot, antigravitySnapshot] = await Promise.all([
-        desktopApi.loadDashboardState(),
-        desktopApi.loadCursorState({ skipOfficialSync: options?.skipOfficialSync }).catch(() => null),
-        desktopApi.loadAntigravityState({ skipOfficialSync: options?.skipOfficialSync }).catch(() => null),
-      ]);
+      const bundle = await desktopApi.loadDesktopSnapshot({ skipOfficialSync: options?.skipOfficialSync });
       if (seq !== dashboardLoadSeqRef.current) return null;
+      const snapshot = bundle.dashboard;
+      const cursorSnapshot = bundle.cursor;
+      const antigravitySnapshot = bundle.antigravity;
       applyDashboardState(snapshot);
       if (cursorSnapshot) applyCursorState(cursorSnapshot);
       if (antigravitySnapshot) applyAntigravityState(antigravitySnapshot);
@@ -640,22 +625,6 @@ function DashboardApp() {
       if (disposed || !snapshot) return;
       void desktopApi.notifyUiReady().catch(() => {});
       if (!disposed) void loadDashboardState(false);
-      if (!didOpenQuotaSync.current) {
-        didOpenQuotaSync.current = true;
-        let refreshedAny = false;
-        for (const kind of (['codex', 'cursor', 'antigravity'] as ProductKind[])) {
-          const list = accountsFromSnapshot(kind, snapshot);
-          if (!list.some((account) => canRefreshQuota(account))) continue;
-          try {
-            await actions.refreshAllQuotas(kind);
-            refreshedAny = true;
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            addLogEntry(message, 'info', kind);
-          }
-        }
-        if (!disposed && refreshedAny) await loadDashboardState(false);
-      }
       if (!disposed) {
         queueQuotaAutoSync([
           ...snapshot.accounts,
@@ -677,6 +646,16 @@ function DashboardApp() {
         ]);
       }
     }, QUOTA_AUTO_SYNC_MIN_GAP_MS);
+
+    let patchTimer: number | null = null;
+    const schedulePatchReload = () => {
+      if (disposed) return;
+      if (patchTimer) window.clearTimeout(patchTimer);
+      patchTimer = window.setTimeout(() => {
+        patchTimer = null;
+        if (!disposed) void loadDashboardState(false);
+      }, 150);
+    };
 
     const unsubscribe = desktopApi.subscribe({
       onDaemonTick: () => {
@@ -704,10 +683,13 @@ function DashboardApp() {
         authStateRef.current = state;
         addToast(state.message || '官方 Codex 登录状态已变更。', 'warning', 'codex');
       },
+      onQuotaUpdated: () => schedulePatchReload(),
+      onAccountUpdated: () => schedulePatchReload(),
     });
 
     return () => {
       disposed = true;
+      if (patchTimer) window.clearTimeout(patchTimer);
       window.clearTimeout(authRetryTimer);
       window.clearInterval(syncTimer);
       unsubscribe();
@@ -2295,6 +2277,5 @@ function DashboardApp() {
 }
 
 export default function App() {
-  if (isFloatRenderer()) return <FloatLens />;
   return <DashboardApp />;
 }

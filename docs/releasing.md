@@ -7,11 +7,15 @@ locally built installer as an official release asset.
 
 ## Channels
 
-- `x.y.z-beta.n`: prerelease, manual updates in the application.
-- `x.y.z`: stable release, eligible for automatic update checks.
+- `x.y.z-beta.n`: prerelease. The application does not auto-update on this
+  channel; users install a newer build from GitHub Releases by hand.
+- `x.y.z`: stable release. Packaged builds may check GitHub for later stable
+  updates.
 
-Stable releases should not be created until code signing, update behavior, and
-migration from the latest beta have been verified.
+`1.0.0` is the first stable release. The Windows installer is still unsigned,
+so keep the unknown-publisher warning and SHA-256 check in user-facing notes.
+A packaged `0.1.0-beta.*` build will not jump to `1.0.0` by itself; that Setup
+must be installed once. Later `1.0.x` builds can use the in-app updater.
 
 ## Prepare a release
 

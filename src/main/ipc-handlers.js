@@ -22,6 +22,20 @@ function reauthorizationRequiredMessage(operation) {
     return `Account requires reauthorization before ${operation}.`;
 }
 
+const BATCH_CONCURRENCY = 5;
+
+function runMapped(eng, items, mapper) {
+    if (typeof eng.mapLimit === "function") return eng.mapLimit(items, BATCH_CONCURRENCY, mapper);
+    return Promise.all(Array.from(items || []).map((item, index) => mapper(item, index)));
+}
+
+function quotaRetryPending(eng, account) {
+    const retryAt = Number(account?.quota_next_retry_at || 0);
+    if (!Number.isFinite(retryAt) || retryAt <= 0) return false;
+    const now = typeof eng.ts === "function" ? eng.ts() : Math.floor(Date.now() / 1000);
+    return retryAt > now;
+}
+
 async function refreshAccountQuota(eng, account, force) {
     if (account.banned || account.requires_reauth) {
         if (typeof eng.canProbeUsageWithoutRefresh === "function"
@@ -58,11 +72,36 @@ function publicQuota(eng, quota) {
     return safeQuota;
 }
 
+function publicTokenStatus(eng, account) {
+    const accessToken = account.tokens?.access_token || null;
+    const refreshToken = account.tokens?.refresh_token || null;
+    const storedExp = Number(account.token_exp || account.tokens?.expiry_timestamp || 0);
+    const jwtExp = typeof eng.jwtExp === "function" ? eng.jwtExp.bind(eng) : () => null;
+    const jwtPayload = typeof eng.jwtPayload === "function" ? eng.jwtPayload.bind(eng) : () => null;
+    const now = typeof eng.ts === "function" ? eng.ts() : Math.floor(Date.now() / 1000);
+    const expiryDate = accessToken
+        ? jwtExp(accessToken)
+        : (Number.isFinite(storedExp) && storedExp > 0 ? storedExp : null);
+    const issuedAt = accessToken
+        ? (jwtPayload(accessToken)?.iat ?? null)
+        : (account.token_iat != null ? Number(account.token_iat) : null);
+    const accessAvailable = !!accessToken || account.has_access === true;
+    const refreshAvailable = !!refreshToken || account.has_refresh === true;
+    const expired = accessToken
+        ? (typeof eng.isTokenExpired === "function" ? eng.isTokenExpired(accessToken) : !expiryDate)
+        : (typeof eng.isExpiryStale === "function" ? eng.isExpiryStale(expiryDate) : !expiryDate);
+    return {
+        accessAvailable,
+        refreshAvailable,
+        expired: accessAvailable ? !!expired : true,
+        expiryDate: expiryDate || null,
+        issuedAt: typeof issuedAt === "number" ? issuedAt : null,
+        timeLeft: expiryDate ? expiryDate - now : null,
+    };
+}
+
 function publicAccount(eng, account) {
     if (!account) return null;
-    const accessToken = account.tokens?.access_token || null;
-    const expiryDate = accessToken ? eng.jwtExp(accessToken) : null;
-    const issuedAt = accessToken ? (eng.jwtPayload(accessToken)?.iat ?? null) : null;
     return {
         id: account.id,
         email: account.email,
@@ -92,15 +131,31 @@ function publicAccount(eng, account) {
             message: account.quota_error.message || String(account.quota_error),
             timestamp: account.quota_error.timestamp || null,
         } : null,
-        token_status: {
-            accessAvailable: !!accessToken,
-            refreshAvailable: !!account.tokens?.refresh_token,
-            expired: accessToken ? eng.isTokenExpired(accessToken) : true,
-            expiryDate,
-            issuedAt: typeof issuedAt === "number" ? issuedAt : null,
-            timeLeft: expiryDate ? expiryDate - eng.ts() : null,
-        },
+        token_status: publicTokenStatus(eng, account),
     };
+}
+
+async function inspectAuthStateForBackground(eng) {
+    const index = typeof eng.loadIdx === "function" ? eng.loadIdx() : null;
+    const currentId = index?.current_account_id;
+    if (currentId && typeof eng.withAccountLock === "function") {
+        let busyTimer = null;
+        try {
+            const inspectPromise = eng.withAccountLock(currentId, async () =>
+                eng.inspectAuthState({ migrateProjection: false })
+            );
+            inspectPromise.catch(() => {});
+            return await Promise.race([
+                inspectPromise,
+                new Promise((_, reject) => {
+                    busyTimer = setTimeout(() => reject(new Error("Authentication state is busy")), 1500);
+                }),
+            ]);
+        } finally {
+            if (busyTimer) clearTimeout(busyTimer);
+        }
+    }
+    return eng.inspectAuthState({ migrateProjection: false });
 }
 
 function publicAutoSwitchResult(eng, result) {
@@ -158,6 +213,35 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             }
         });
     };
+
+    const broadcast = (channel, payload) => {
+        for (const window of BrowserWindow.getAllWindows()) {
+            if (window.isDestroyed() || window.webContents.isDestroyed()) continue;
+            try { window.webContents.send(channel, payload); } catch {}
+        }
+    };
+    const emitAccountUpdated = (product, account) => {
+        if (!account) return;
+        try { broadcast("account:updated", { product, account }); } catch {}
+    };
+    const emitQuotaUpdated = (product, account) => {
+        if (!account) return;
+        try { broadcast("quota:updated", { product, account, quota: account.quota || null }); } catch {}
+    };
+
+    async function withTimeout(task, ms, fallback = null) {
+        let timer = null;
+        try {
+            return await Promise.race([
+                Promise.resolve().then(task),
+                new Promise((resolve) => {
+                    timer = setTimeout(() => resolve(fallback), ms);
+                }),
+            ]);
+        } finally {
+            if (timer) clearTimeout(timer);
+        }
+    }
 
     handle("app:uiReady", () => {
         try { services.onUiReady?.(); } catch (error) {
@@ -267,9 +351,6 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
 
     function publicCursorAccount(account) {
         if (!account) return null;
-        const accessToken = account.tokens?.access_token || null;
-        const expiryDate = accessToken ? eng.jwtExp(accessToken) : null;
-        const issuedAt = accessToken ? (eng.jwtPayload(accessToken)?.iat ?? null) : null;
         return {
             id: account.id,
             platform: "cursor",
@@ -299,14 +380,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                 message: account.quota_error.message || String(account.quota_error),
                 timestamp: account.quota_error.timestamp || null,
             } : null,
-            token_status: {
-                accessAvailable: !!accessToken,
-                refreshAvailable: !!account.tokens?.refresh_token,
-                expired: accessToken ? eng.isTokenExpired(accessToken) : true,
-                expiryDate,
-                issuedAt: typeof issuedAt === "number" ? issuedAt : null,
-                timeLeft: expiryDate ? expiryDate - eng.ts() : null,
-            },
+            token_status: publicTokenStatus(eng, account),
         };
     }
 
@@ -339,8 +413,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     });
     handle("cursor:list", async (event, options) => {
         if (!options?.skipOfficialSync) await eng.syncCurrentCursorFromOfficial();
-        await foldListedAccounts(eng, "__cursor_switch__", eng.collapseDuplicateCursorAccounts);
-        return ok(eng.listCursorAccts().map((account) => publicCursorAccount(account)));
+        return ok(eng.listCursorAccts({ secrets: false }).map((account) => publicCursorAccount(account)));
     });
     handle("cursor:current", async (event, options) => {
         if (!options?.skipOfficialSync) await eng.syncCurrentCursorFromOfficial();
@@ -392,56 +465,80 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         return eng.withAccountLocks(lockIds, async () => {
             const account = eng.loadCursorAcct(target.id);
             if (!account) return fail("Account does not exist");
-            const result = await eng.doCursorSwitch(account);
-            return ok({
-                ...result,
-                account: publicCursorAccount(result.account),
-            });
+                const result = await eng.doCursorSwitch(account);
+                const publicResult = publicCursorAccount(result.account);
+                emitAccountUpdated("cursor", publicResult);
+                return ok({
+                    ...result,
+                    account: publicResult,
+                });
         });
     });
     handle("cursor:refreshQuota", async (event, id, force = true) => {
         return withFreshCursorAccount(id, async (account) => {
             const quota = await eng.refreshCursorQuota(account, { force: force !== false });
+            const fresh = publicCursorAccount(eng.loadCursorAcct(account.id) || account);
+            emitQuotaUpdated("cursor", fresh);
+            emitAccountUpdated("cursor", fresh);
             return ok(publicCursorQuota(quota));
         });
     });
     handle("cursor:refreshAllQuotas", async () => {
-        const results = [];
-        for (const listed of eng.listCursorAccts()) {
+        const listedAccounts = eng.listCursorAccts();
+        const results = await runMapped(eng, listedAccounts, async (listed) => {
             try {
-                await eng.withAccountLocks(["__cursor_switch__", listed.id], async () => {
+                return await eng.withAccountLock(listed.id, async () => {
                     const account = eng.loadCursorAcct(listed.id);
-                    if (!account) return;
-                    const quota = await eng.refreshCursorQuota(account, { force: true });
-                    const fresh = eng.loadCursorAcct(account.id) || account;
-                    if (fresh.requires_reauth || fresh.quota_error?.code === "reauthorization_required") {
-                        results.push({
+                    if (!account) return null;
+                    if (account.requires_reauth) {
+                        return {
                             id: account.id,
                             email: account.email,
                             skipped: true,
                             reason: "reauthorization_required",
-                        });
-                    } else if (fresh.quota_error) {
-                        results.push({
+                        };
+                    }
+                    if (quotaRetryPending(eng, account)) {
+                        return {
+                            id: account.id,
+                            email: account.email,
+                            skipped: true,
+                            reason: "quota_retry_pending",
+                        };
+                    }
+                    const quota = await eng.refreshCursorQuota(account, { force: true });
+                    const fresh = eng.loadCursorAcct(account.id) || account;
+                    if (fresh.requires_reauth || fresh.quota_error?.code === "reauthorization_required") {
+                        return {
+                            id: account.id,
+                            email: account.email,
+                            skipped: true,
+                            reason: "reauthorization_required",
+                        };
+                    }
+                    if (fresh.quota_error) {
+                        return {
                             id: account.id,
                             email: account.email,
                             error: fresh.quota_error.message,
                             reason: fresh.quota_error.code,
-                        });
-                    } else {
-                        results.push({ id: account.id, email: account.email, quota: publicCursorQuota(quota) });
+                        };
                     }
+                    const published = publicCursorAccount(fresh);
+                    emitQuotaUpdated("cursor", published);
+                    emitAccountUpdated("cursor", published);
+                    return { id: account.id, email: account.email, quota: publicCursorQuota(quota) };
                 });
             } catch (error) {
-                results.push({
+                return {
                     id: listed.id,
                     email: listed.email,
                     error: error.message,
                     reason: error.code || undefined,
-                });
+                };
             }
-        }
-        return ok(results);
+        });
+        return ok(results.filter(Boolean));
     });
     handle("cursor:refreshToken", async (event, id) => {
         return withFreshCursorAccount(id, async (account) => {
@@ -462,9 +559,6 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
 
     function publicAntigravityAccount(account) {
         if (!account) return null;
-        const accessToken = account.tokens?.access_token || null;
-        const expiryDate = Number(account.tokens?.expiry_timestamp || 0) || (accessToken ? eng.jwtExp(accessToken) : null);
-        const issuedAt = accessToken ? (eng.jwtPayload(accessToken)?.iat ?? null) : null;
         return {
             id: account.id,
             platform: "antigravity",
@@ -493,14 +587,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                 message: account.quota_error.message || String(account.quota_error),
                 timestamp: account.quota_error.timestamp || null,
             } : null,
-            token_status: {
-                accessAvailable: !!accessToken,
-                refreshAvailable: !!account.tokens?.refresh_token,
-                expired: expiryDate ? expiryDate < eng.ts() : !accessToken,
-                expiryDate: expiryDate || null,
-                issuedAt: typeof issuedAt === "number" ? issuedAt : null,
-                timeLeft: expiryDate ? expiryDate - eng.ts() : null,
-            },
+            token_status: publicTokenStatus(eng, account),
         };
     }
 
@@ -523,8 +610,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     });
     handle("antigravity:list", async (event, options) => {
         if (!options?.skipOfficialSync) await eng.syncCurrentAntigravityFromOfficial();
-        await foldListedAccounts(eng, "__antigravity_switch__", eng.collapseDuplicateAntigravityAccounts);
-        return ok(eng.listAntigravityAccts().map((account) => publicAntigravityAccount(account)));
+        return ok(eng.listAntigravityAccts({ secrets: false }).map((account) => publicAntigravityAccount(account)));
     });
     handle("antigravity:current", async (event, options) => {
         if (!options?.skipOfficialSync) await eng.syncCurrentAntigravityFromOfficial();
@@ -577,55 +663,79 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             const account = eng.loadAntigravityAcct(target.id);
             if (!account) return fail("Account does not exist");
             const result = await eng.doAntigravitySwitch(account);
+            const publicResult = publicAntigravityAccount(result.account);
+            emitAccountUpdated("antigravity", publicResult);
             return ok({
                 ...result,
-                account: publicAntigravityAccount(result.account),
+                account: publicResult,
             });
         });
     });
     handle("antigravity:refreshQuota", async (event, id, force = true) => {
         return withFreshAntigravityAccount(id, async (account) => {
             const quota = await eng.refreshAntigravityQuota(account, { force: force !== false });
+            const fresh = publicAntigravityAccount(eng.loadAntigravityAcct(account.id) || account);
+            emitQuotaUpdated("antigravity", fresh);
+            emitAccountUpdated("antigravity", fresh);
             return ok(publicAntigravityQuota(quota));
         });
     });
     handle("antigravity:refreshAllQuotas", async () => {
-        const results = [];
-        for (const listed of eng.listAntigravityAccts()) {
+        const listedAccounts = eng.listAntigravityAccts();
+        const results = await runMapped(eng, listedAccounts, async (listed) => {
             try {
-                await eng.withAccountLocks(["__antigravity_switch__", listed.id], async () => {
+                return await eng.withAccountLock(listed.id, async () => {
                     const account = eng.loadAntigravityAcct(listed.id);
-                    if (!account) return;
-                    const quota = await eng.refreshAntigravityQuota(account, { force: true });
-                    const fresh = eng.loadAntigravityAcct(account.id) || account;
-                    if (fresh.requires_reauth || fresh.quota_error?.code === "reauthorization_required") {
-                        results.push({
+                    if (!account) return null;
+                    if (account.requires_reauth) {
+                        return {
                             id: account.id,
                             email: account.email,
                             skipped: true,
                             reason: "reauthorization_required",
-                        });
-                    } else if (fresh.quota_error) {
-                        results.push({
+                        };
+                    }
+                    if (quotaRetryPending(eng, account)) {
+                        return {
+                            id: account.id,
+                            email: account.email,
+                            skipped: true,
+                            reason: "quota_retry_pending",
+                        };
+                    }
+                    const quota = await eng.refreshAntigravityQuota(account, { force: true });
+                    const fresh = eng.loadAntigravityAcct(account.id) || account;
+                    if (fresh.requires_reauth || fresh.quota_error?.code === "reauthorization_required") {
+                        return {
+                            id: account.id,
+                            email: account.email,
+                            skipped: true,
+                            reason: "reauthorization_required",
+                        };
+                    }
+                    if (fresh.quota_error) {
+                        return {
                             id: account.id,
                             email: account.email,
                             error: fresh.quota_error.message,
                             reason: fresh.quota_error.code,
-                        });
-                    } else {
-                        results.push({ id: account.id, email: account.email, quota: publicAntigravityQuota(quota) });
+                        };
                     }
+                    const published = publicAntigravityAccount(fresh);
+                    emitQuotaUpdated("antigravity", published);
+                    emitAccountUpdated("antigravity", published);
+                    return { id: account.id, email: account.email, quota: publicAntigravityQuota(quota) };
                 });
             } catch (error) {
-                results.push({
+                return {
                     id: listed.id,
                     email: listed.email,
                     error: error.message,
                     reason: error.code || undefined,
-                });
+                };
             }
-        }
-        return ok(results);
+        });
+        return ok(results.filter(Boolean));
     });
     handle("antigravity:refreshToken", async (event, id) => {
         return withFreshAntigravityAccount(id, async (account) => {
@@ -639,8 +749,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     });
 
     handle("account:list", async () => {
-        await foldListedAccounts(eng, "__switch__", eng.collapseDuplicateCodexAccounts);
-        return ok(eng.listAccts().map(account => publicAccount(eng, account)));
+        return ok(eng.listAccts({ secrets: false }).map(account => publicAccount(eng, account)));
     });
     handle("account:current", () => ok(publicAccount(eng, eng.currentAcct())));
     handle("account:get", (event, id) => {
@@ -745,7 +854,9 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                 const account = eng.loadAcct(target.id);
                 if (!account) return fail("Account does not exist");
                 const result = await eng.doSwitch(account);
-                return ok({ ...result, account: publicAccount(eng, result.account) });
+                const published = publicAccount(eng, result.account);
+                emitAccountUpdated("codex", published);
+                return ok({ ...result, account: published });
             });
         } catch (error) { return fail(error.message); }
     });
@@ -753,56 +864,71 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     handle("quota:refresh", async (event, id, force = true) => {
         try {
             if (force === false) {
-                const authState = eng.inspectAuthState({ migrateProjection: false });
+                const authState = await inspectAuthStateForBackground(eng);
                 if (authState.requiresResolution) {
                     return fail(authState.message || "Automatic quota sync is paused until authentication is resolved");
                 }
             }
             return await withFreshAccount(eng, id, async account => {
                 const quota = await refreshAccountQuota(eng, account, force !== false);
+                const published = publicAccount(eng, eng.loadAcct(account.id) || account);
+                emitQuotaUpdated("codex", published);
+                emitAccountUpdated("codex", published);
                 return ok(publicQuota(eng, quota));
             });
         } catch (error) { return fail(error.message); }
     });
     handle("quota:refreshAll", async () => {
-        const results = [];
-        for (const listed of eng.listAccts()) {
+        const listedAccounts = eng.listAccts();
+        const results = await runMapped(eng, listedAccounts, async (listed) => {
             try {
-                await eng.withAccountLock(listed.id, async () => {
+                return await eng.withAccountLock(listed.id, async () => {
                     const account = eng.loadAcct(listed.id);
-                    if (!account) return;
+                    if (!account) return null;
+                    if (quotaRetryPending(eng, account)) {
+                        return {
+                            id: account.id,
+                            email: account.email,
+                            skipped: true,
+                            reason: "quota_retry_pending",
+                        };
+                    }
                     if (account.banned || account.requires_reauth) {
                         if (typeof eng.canProbeUsageWithoutRefresh === "function"
                             && typeof eng.probeUsageOnly === "function"
                             && eng.canProbeUsageWithoutRefresh(account)) {
                             const quota = await eng.probeUsageOnly(account, { force: true });
-                            results.push({ id: account.id, email: account.email, quota: publicQuota(eng, quota) });
-                            return;
+                            const published = publicAccount(eng, eng.loadAcct(account.id) || account);
+                            emitQuotaUpdated("codex", published);
+                            emitAccountUpdated("codex", published);
+                            return { id: account.id, email: account.email, quota: publicQuota(eng, quota) };
                         }
-                        results.push({
+                        return {
                             id: account.id,
                             email: account.email,
                             skipped: true,
                             reason: account.banned ? "account_banned" : "reauthorization_required",
                             banned: !!account.banned,
-                        });
-                        return;
+                        };
                     }
                     const quota = await eng.refreshQuota(account, { force: true });
-                    results.push({ id: account.id, email: account.email, quota: publicQuota(eng, quota) });
+                    const published = publicAccount(eng, eng.loadAcct(account.id) || account);
+                    emitQuotaUpdated("codex", published);
+                    emitAccountUpdated("codex", published);
+                    return { id: account.id, email: account.email, quota: publicQuota(eng, quota) };
                 });
             } catch (error) {
                 const latest = typeof eng.loadAcct === "function" ? eng.loadAcct(listed.id) : null;
-                results.push({
+                return {
                     id: listed.id,
                     email: listed.email,
                     error: error.message,
                     banned: !!latest?.banned,
                     reason: error.code || undefined,
-                });
+                };
             }
-        }
-        return ok(results);
+        });
+        return ok(results.filter(Boolean));
     });
 
     handle("token:refresh", async (event, id) => {
@@ -832,15 +958,6 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             timeLeft: expiryDate ? expiryDate - eng.ts() : null,
         });
     });
-    // Windows can linger in getAllWindows() for a tick after their
-    // webContents is destroyed; sending there throws.
-    const broadcast = (channel, payload) => {
-        for (const window of BrowserWindow.getAllWindows()) {
-            if (window.isDestroyed() || window.webContents.isDestroyed()) continue;
-            try { window.webContents.send(channel, payload); } catch {}
-        }
-    };
-
     let daemonTimer = null;
     let daemonInFlight = false;
     let daemonRunRequested = false;
@@ -987,6 +1104,78 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         syncIntervalMinutes: daemonIntervalMinutes(),
         ...daemonRuntimeState,
     }));
+
+    handle("desktop:snapshot", async (event, options) => {
+        const skipOfficialSync = !!options?.skipOfficialSync;
+        if (!skipOfficialSync) {
+            try { await eng.syncCurrentCursorFromOfficial(); } catch {}
+            try { await eng.syncCurrentAntigravityFromOfficial(); } catch {}
+        }
+        let authState = null;
+        let authError = null;
+        try {
+            authState = await inspectAuthStateForBackground(eng);
+        } catch (error) {
+            authError = error?.message || String(error);
+        }
+        const [codexStatus, cursorStatus, antigravityStatus] = await Promise.all([
+            withTimeout(async () => {
+                if (typeof eng.getCodexInstallationStatusAsync === "function") {
+                    return eng.getCodexInstallationStatusAsync();
+                }
+                return typeof eng.getCodexInstallationStatus === "function" ? eng.getCodexInstallationStatus() : null;
+            }, 2500, null),
+            withTimeout(async () => {
+                if (typeof eng.getCursorInstallationStatusAsync === "function") {
+                    return eng.getCursorInstallationStatusAsync();
+                }
+                return typeof eng.getCursorInstallationStatus === "function" ? eng.getCursorInstallationStatus() : null;
+            }, 2500, null),
+            withTimeout(async () => {
+                if (typeof eng.getAntigravityInstallationStatusAsync === "function") {
+                    return eng.getAntigravityInstallationStatusAsync();
+                }
+                return typeof eng.getAntigravityInstallationStatus === "function" ? eng.getAntigravityInstallationStatus() : null;
+            }, 2500, null),
+        ]);
+        return ok({
+            accounts: eng.listAccts({ secrets: false }).map((account) => publicAccount(eng, account)),
+            currentAccount: publicAccount(eng, eng.currentAcct()),
+            cursorAccounts: eng.listCursorAccts({ secrets: false }).map((account) => publicCursorAccount(account)),
+            currentCursorAccount: publicCursorAccount(eng.currentCursorAcct()),
+            antigravityAccounts: eng.listAntigravityAccts({ secrets: false }).map((account) => publicAntigravityAccount(account)),
+            currentAntigravityAccount: publicAntigravityAccount(eng.currentAntigravityAcct()),
+            daemon: {
+                running: daemonTimer !== null,
+                syncIntervalMinutes: daemonIntervalMinutes(),
+                ...daemonRuntimeState,
+            },
+            config: typeof eng.loadAutoSwitchCfg === "function" ? eng.loadAutoSwitchCfg() : null,
+            appInfo: updateService?.getAppInfo?.() || {
+                name: "Codex Account Manager",
+                version: app.getVersion(),
+                releaseChannel: String(app.getVersion()).includes("-") ? "beta" : "stable",
+                isPackaged: app.isPackaged,
+                updateEnabled: false,
+                repository: "https://github.com/3xiaoshayu/codex-account-manager",
+            },
+            oauthStatus: typeof eng.getOAuthStatus === "function" ? eng.getOAuthStatus() : null,
+            cursorOAuthStatus: typeof eng.getCursorOAuthStatus === "function" ? eng.getCursorOAuthStatus() : null,
+            antigravityOAuthStatus: typeof eng.getAntigravityOAuthStatus === "function" ? eng.getAntigravityOAuthStatus() : null,
+            authState,
+            authError,
+            updateStatus: updateService?.getStatus?.() || {
+                status: "disabled",
+                enabled: false,
+                channel: String(app.getVersion()).includes("-") ? "beta" : "stable",
+                message: "Update service is not initialized",
+            },
+            storageDiagnostics: typeof eng.getStorageDiagnostics === "function" ? eng.getStorageDiagnostics() : [],
+            codexStatus,
+            cursorStatus,
+            antigravityStatus,
+        });
+    });
 
     return { startDaemon, stopDaemon, runDaemon };
 }

@@ -27,6 +27,7 @@ function freshEngine(t) {
   engine.setSecretCodec(codec);
   t.after(() => {
     try { engine.cancelOAuth(); } catch {}
+    try { engine.resetPendingAccountRewritesForTests(); } catch {}
     engine.setSwitchRuntimeForTests();
     fs.rmSync(root, { recursive: true, force: true });
   });
@@ -2751,9 +2752,10 @@ test("codex upsert keeps quota_error when no new windows arrive", async (t) => {
   assert.equal(engine.loadAcct(first.id).quota_error.code, "probe_failed");
 });
 
-test("account lists still return when fold throws", async () => {
+test("account lists do not fold duplicates and still return accounts", async () => {
   const handlers = new Map();
   const warnings = [];
+  let foldCalls = 0;
   const electron = {
     ipcMain: {
       handle(channel, listener) {
@@ -2771,9 +2773,9 @@ test("account lists still return when fold throws", async () => {
     },
   };
   const engine = {
-    collapseDuplicateCodexAccounts() { throw new Error("codex fold boom"); },
-    collapseDuplicateCursorAccounts() { throw new Error("cursor fold boom"); },
-    collapseDuplicateAntigravityAccounts() { throw new Error("ag fold boom"); },
+    collapseDuplicateCodexAccounts() { foldCalls += 1; throw new Error("codex fold boom"); },
+    collapseDuplicateCursorAccounts() { foldCalls += 1; throw new Error("cursor fold boom"); },
+    collapseDuplicateAntigravityAccounts() { foldCalls += 1; throw new Error("ag fold boom"); },
     listAccts: () => [{ id: "codex_one", email: "one@example.com" }],
     listCursorAccts: () => [{ id: "cursor_one", email: "cursor@example.com", tokens: {} }],
     listAntigravityAccts: () => [{ id: "antigravity_one", email: "ag@example.com", tokens: {} }],
@@ -2783,17 +2785,259 @@ test("account lists still return when fold throws", async () => {
     jwtPayload: () => null,
     ts: () => 1,
     isTokenExpired: () => true,
+    isExpiryStale: () => true,
   };
   const { registerIpcHandlers } = require("../src/main/ipc-handlers");
   registerIpcHandlers(engine, { electron });
   const listed = await handlers.get("account:list")({});
   assert.equal(listed.success, true);
   assert.equal(listed.data.length, 1);
+  assert.equal(listed.data[0].tokens, undefined);
   const cursor = await handlers.get("cursor:list")({}, { skipOfficialSync: true });
   assert.equal(cursor.success, true);
   assert.equal(cursor.data.length, 1);
   const antigravity = await handlers.get("antigravity:list")({}, { skipOfficialSync: true });
   assert.equal(antigravity.success, true);
   assert.equal(antigravity.data.length, 1);
-  assert.equal(warnings.length, 3);
+  assert.equal(foldCalls, 0);
+  assert.equal(warnings.length, 0);
+});
+
+test("secrets:false account lists skip decrypt when token metadata is present", async (t) => {
+  const { engine, codec } = freshEngine(t);
+  const account = await addAccount(engine, "meta@example.com", "acct-meta", "meta");
+  const filePath = engine.accountFilePath(account.id);
+  const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  assert.ok(raw.tokens_encrypted);
+  assert.equal(typeof raw.token_exp, "number");
+  assert.equal(raw.has_refresh, true);
+  assert.equal(raw.has_access, true);
+  assert.equal(raw.tokens, undefined);
+
+  let decrypts = 0;
+  const originalDecrypt = codec.decrypt.bind(codec);
+  engine.setSecretCodec({
+    name: codec.name,
+    encrypt: codec.encrypt,
+    decrypt: (value) => {
+      decrypts += 1;
+      return originalDecrypt(value);
+    },
+  });
+  fs.utimesSync(filePath, new Date(), new Date());
+  const listed = engine.listAccts({ secrets: false });
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].id, account.id);
+  assert.equal(listed[0].tokens, null);
+  assert.equal(listed[0].has_refresh, true);
+  assert.equal(listed[0].email, "meta@example.com");
+  assert.equal(decrypts, 0);
+
+  const loaded = engine.loadAcct(account.id);
+  assert.ok(loaded.tokens.access_token);
+  assert.ok(decrypts >= 1);
+});
+
+test("secrets:false lists decrypt as a fallback and do not rewrite the file", async (t) => {
+  const { engine, codec } = freshEngine(t);
+  const account = await addAccount(engine, "legacy-meta@example.com", "acct-legacy-meta", "legacy-meta");
+  const filePath = engine.accountFilePath(account.id);
+  const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  delete raw.token_exp;
+  delete raw.token_iat;
+  delete raw.has_refresh;
+  delete raw.has_access;
+  fs.writeFileSync(filePath, JSON.stringify(raw));
+
+  let decrypts = 0;
+  const originalDecrypt = codec.decrypt.bind(codec);
+  engine.setSecretCodec({
+    name: codec.name,
+    encrypt: codec.encrypt,
+    decrypt: (value) => {
+      decrypts += 1;
+      return originalDecrypt(value);
+    },
+  });
+  const listed = engine.listAccts({ secrets: false });
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].tokens, null);
+  assert.ok(decrypts >= 1);
+  const after = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  assert.equal(after.token_exp, undefined);
+  assert.equal(after.has_refresh, undefined);
+});
+
+test("path locks serialize overlapping writers", async (t) => {
+  const { engine } = freshEngine(t);
+  const order = [];
+  await Promise.all([
+    engine.withPathLock("accounts-index.json", async () => {
+      order.push("a");
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      order.push("a-done");
+    }),
+    engine.withPathLock("accounts-index.json", async () => {
+      order.push("b");
+      order.push("b-done");
+    }),
+  ]);
+  assert.deepEqual(order, ["a", "a-done", "b", "b-done"]);
+});
+
+test("token refresh skips when observed generation is behind and access is still valid", async (t) => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "gen@example.com", "acct-gen", "gen");
+  account.token_generation = 2;
+  engine.saveAcct(account);
+  let calls = 0;
+  const { refreshOneTok } = require("../engine/token-refresh");
+  const result = await refreshOneTok(engine.loadAcct(account.id), {
+    observedGeneration: 1,
+    httpJson: async () => {
+      calls += 1;
+      throw new Error("should not refresh");
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.skipped, true);
+  assert.equal(result.gen, 2);
+  assert.equal(calls, 0);
+});
+
+test("mapLimit caps concurrent mappers", async (t) => {
+  const { engine } = freshEngine(t);
+  let inflight = 0;
+  let max = 0;
+  await engine.mapLimit([1, 2, 3, 4, 5, 6, 7, 8], 3, async () => {
+    inflight += 1;
+    max = Math.max(max, inflight);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    inflight -= 1;
+  });
+  assert.equal(max, 3);
+});
+
+test("quota refreshAll skips accounts waiting to retry", async () => {
+  const handlers = new Map();
+  let quotaRefreshCount = 0;
+  const electron = {
+    ipcMain: {
+      handle(channel, listener) {
+        handlers.set(channel, listener);
+      },
+    },
+    BrowserWindow: { getAllWindows: () => [] },
+    app: {
+      getVersion: () => "0.1.0-beta.34",
+      isPackaged: false,
+    },
+    shell: {
+      async openExternal() {},
+      async openPath() { return ""; },
+    },
+  };
+  const waiting = {
+    id: "waiting-account",
+    email: "waiting@example.com",
+    quota_next_retry_at: Math.floor(Date.now() / 1000) + 600,
+  };
+  const ready = {
+    id: "ready-account",
+    email: "ready@example.com",
+  };
+  const accounts = new Map([[waiting.id, waiting], [ready.id, ready]]);
+  const engine = {
+    ts: () => Math.floor(Date.now() / 1000),
+    listAccts: () => [waiting, ready],
+    loadAcct: (id) => accounts.get(id) || null,
+    withAccountLock: async (_id, task) => task(),
+    mapLimit: async (items, limit, mapper) => {
+      const { mapLimit } = require("../engine/operation-locks");
+      return mapLimit(items, limit, mapper);
+    },
+    async refreshQuota() {
+      quotaRefreshCount += 1;
+      return { hourly_remaining_percentage: 50 };
+    },
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, { electron });
+  const allQuotas = await handlers.get("quota:refreshAll")({});
+  assert.equal(allQuotas.success, true);
+  assert.equal(allQuotas.data[0].skipped, true);
+  assert.equal(allQuotas.data[0].reason, "quota_retry_pending");
+  assert.equal(allQuotas.data[1].id, ready.id);
+  assert.equal(quotaRefreshCount, 1);
+});
+
+test("desktop snapshot IPC returns public accounts without secrets", async (t) => {
+  const { engine } = freshEngine(t);
+  await addAccount(engine, "snap@example.com", "acct-snap", "snap");
+  const handlers = new Map();
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: {
+        handle(channel, listener) {
+          handlers.set(channel, listener);
+        },
+      },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: {
+        getVersion: () => "0.1.0-beta.34",
+        isPackaged: false,
+      },
+      shell: {
+        async openExternal() {},
+        async openPath() { return ""; },
+      },
+    },
+  });
+  const snapshot = await handlers.get("desktop:snapshot")({}, { skipOfficialSync: true });
+  assert.equal(snapshot.success, true);
+  assert.equal(snapshot.data.accounts.length, 1);
+  assert.equal(snapshot.data.accounts[0].email, "snap@example.com");
+  assert.equal(snapshot.data.accounts[0].tokens, undefined);
+  assert.equal(Array.isArray(snapshot.data.cursorAccounts), true);
+  assert.equal(Array.isArray(snapshot.data.antigravityAccounts), true);
+});
+
+test("legacy plaintext rewrite is deferred off the list hot path", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "defer-list@example.com", "acct-defer-list", "defer-list");
+  const filePath = engine.accountFilePath(account.id);
+  const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  delete raw.tokens_encrypted;
+  raw.tokens = { ...account.tokens, refresh_token: "plain-refresh-token" };
+  fs.writeFileSync(filePath, JSON.stringify(raw));
+
+  const listed = engine.listAccts();
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].tokens.refresh_token, "plain-refresh-token");
+  const afterList = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  assert.ok(afterList.tokens, "list must not rewrite plaintext on the hot path");
+  assert.equal(afterList.tokens_encrypted, undefined);
+
+  await engine.flushPendingAccountRewrites();
+  const afterFlush = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  assert.ok(afterFlush.tokens_encrypted, "deferred rewrite must encrypt the record");
+  assert.equal(afterFlush.tokens, undefined);
+  assert.equal(fs.readFileSync(filePath, "utf8").includes("plain-refresh-token"), false);
+});
+
+test("deferred plaintext rewrite is discarded when the file changes first", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "defer-drop@example.com", "acct-defer-drop", "defer-drop");
+  const filePath = engine.accountFilePath(account.id);
+  const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  delete raw.tokens_encrypted;
+  raw.tokens = { ...account.tokens };
+  fs.writeFileSync(filePath, JSON.stringify(raw));
+
+  engine.listAccts();
+  fs.writeFileSync(filePath, "{ not-json", "utf8");
+  await engine.flushPendingAccountRewrites();
+  assert.equal(fs.existsSync(filePath), true, "a changed file must not be quarantined by a stale rewrite");
+  assert.equal(fs.readFileSync(filePath, "utf8"), "{ not-json");
 });

@@ -11,6 +11,7 @@ const WAIT_WRITABLE_TIMEOUT_MS = 12000;
 const WAIT_WRITABLE_POLL_MS = 200;
 const WAIT_WRITABLE_OPEN_TIMEOUT_MS = 50;
 const BUSY_RETRIES = 1;
+const READ_BUSY_RETRIES = 4;
 const BUSY_RETRY_WAIT_MS = 200;
 
 const DEFAULT_TIMING = {
@@ -21,6 +22,7 @@ const DEFAULT_TIMING = {
   waitWritablePollMs: WAIT_WRITABLE_POLL_MS,
   waitWritableOpenTimeoutMs: WAIT_WRITABLE_OPEN_TIMEOUT_MS,
   busyRetries: BUSY_RETRIES,
+  readBusyRetries: READ_BUSY_RETRIES,
   busyRetryWaitMs: BUSY_RETRY_WAIT_MS,
 };
 
@@ -144,7 +146,7 @@ function withVscdbSync(dbPath, options, fn) {
 
 async function withVscdb(dbPath, options, fn) {
   const labels = options.labels || {};
-  const retries = options.retries ?? timing.busyRetries;
+  const retries = options.retries ?? (options.readOnly ? timing.readBusyRetries : timing.busyRetries);
   let lastError;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
@@ -173,6 +175,38 @@ function captureItems(db, dbPath, keys) {
 
 function missingSnapshot(dbPath, keys) {
   return { dbPath, missing: true, rows: Object.fromEntries((keys || []).map((key) => [key, null])) };
+}
+
+let sqliteReadTransport = null;
+
+function setSqliteReadTransport(transport) {
+  sqliteReadTransport = typeof transport === "function" ? transport : null;
+}
+
+async function readVscdbItemRowsLocal(dbPath, keys, options = {}) {
+  if (!dbPath || !fs.existsSync(dbPath)) return null;
+  return withVscdb(dbPath, { readOnly: true, labels: options.labels }, (db) => {
+    const rows = {};
+    for (const key of keys || []) {
+      const value = getItem(db, key);
+      rows[key] = value == null ? null : Buffer.from(asBuffer(value)).toString("base64");
+    }
+    return rows;
+  });
+}
+
+async function readVscdbItemRows(dbPath, keys, options = {}) {
+  if (sqliteReadTransport) {
+    try {
+      return await sqliteReadTransport(dbPath, keys, options);
+    } catch (error) {
+      if (error && error.code === "engine_worker_down") {
+        return readVscdbItemRowsLocal(dbPath, keys, options);
+      }
+      throw error;
+    }
+  }
+  return readVscdbItemRowsLocal(dbPath, keys, options);
 }
 
 async function snapshotItems(dbPath, keys, labels, options = {}) {
@@ -274,4 +308,7 @@ module.exports = {
   waitForVscdbWritable,
   getSqliteNativeTiming,
   setSqliteNativeTimingForTests,
+  setSqliteReadTransport,
+  readVscdbItemRows,
+  readVscdbItemRowsLocal,
 };

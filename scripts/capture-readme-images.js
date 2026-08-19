@@ -210,7 +210,7 @@ async function captureSocialPreview(browser) {
     <div class="copy">
       <img class="icon" src="${iconUri}" alt="">
       <h1>Codex Account Manager</h1>
-      <p>多个 Codex 和 Cursor 账号，一个窗口里照看。</p>
+      <p>多个 Codex、Cursor 和 Antigravity 账号，一个窗口里照看。</p>
       <div class="meta">LOCAL-FIRST  ·  WINDOWS</div>
     </div>
     <div class="preview"><img src="${dashUri}" alt=""></div>
@@ -228,6 +228,12 @@ async function main() {
     headless: true,
   });
   try {
+    const traySocialOnly = process.argv.includes("--tray-social");
+    if (traySocialOnly) {
+      await captureTrayMenu(browser);
+      await captureSocialPreview(browser);
+      return;
+    }
     await captureLogin(browser);
     await captureAppPages(browser);
     await captureFloatLens(browser);

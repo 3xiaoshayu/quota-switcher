@@ -92,6 +92,19 @@ function startApplication() {
       eng.setAntigravityOpenUrlHandler((url) => shell.openExternal(url));
     }
     eng.initLogger();
+    try {
+      const workerHost = require("./engine-worker-host");
+      if (workerHost.startEngineWorker()) {
+        if (typeof eng.setHttpJsonTransport === "function") {
+          eng.setHttpJsonTransport(workerHost.httpJson);
+        }
+        if (typeof eng.setSqliteReadTransport === "function") {
+          eng.setSqliteReadTransport(workerHost.readVscdbItems);
+        }
+      }
+    } catch (error) {
+      console.error("Engine worker not started; using in-process engine:", error);
+    }
     const restoredCodexOAuth = eng.restorePendingOAuth();
     if (restoredCodexOAuth) {
       if (typeof eng.discardPendingCursorOAuth === "function") {
@@ -229,6 +242,7 @@ if (!hasSingleInstanceLock) {
     });
     app.on("before-quit", () => {
         isQuitting = true;
+        try { require("./engine-worker-host").stopEngineWorker(); } catch {}
         if (floatWindow) {
             floatWindow.destroy();
             floatWindow = null;

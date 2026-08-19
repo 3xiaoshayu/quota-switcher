@@ -1,0 +1,136 @@
+const path = require("node:path");
+const { httpJsonLocal } = require("../../engine/http-client");
+const { readVscdbItemRowsLocal } = require("../../engine/sqlite-native");
+const { reviveError } = require("./engine-worker");
+
+const RPC_TIMEOUT_MS = 90_000;
+const WORKER_DOWN = "engine_worker_down";
+
+let child = null;
+let alive = false;
+let nextId = 1;
+const pending = new Map();
+
+function workerDownError(message = "Engine worker is not running") {
+  const error = new Error(message);
+  error.code = WORKER_DOWN;
+  return error;
+}
+
+function failAllPending(error) {
+  for (const [id, waiter] of pending) {
+    clearTimeout(waiter.timer);
+    waiter.reject(error);
+    pending.delete(id);
+  }
+}
+
+function onWorkerExit() {
+  alive = false;
+  child = null;
+  failAllPending(workerDownError("Engine worker exited"));
+}
+
+function onWorkerMessage(data) {
+  const payload = data && Object.prototype.hasOwnProperty.call(data, "data") ? data.data : data;
+  const waiter = pending.get(payload?.id);
+  if (!waiter) return;
+  pending.delete(payload.id);
+  clearTimeout(waiter.timer);
+  if (payload.ok) waiter.resolve(payload.result);
+  else waiter.reject(reviveError(payload.error));
+}
+
+function rpc(op, payload) {
+  if (!alive || !child || typeof child.postMessage !== "function") {
+    return Promise.reject(workerDownError());
+  }
+  const id = nextId;
+  nextId += 1;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(workerDownError("Engine worker timed out"));
+    }, RPC_TIMEOUT_MS);
+    pending.set(id, { resolve, reject, timer });
+    try {
+      child.postMessage({ id, op, payload });
+    } catch (error) {
+      pending.delete(id);
+      clearTimeout(timer);
+      reject(error);
+    }
+  });
+}
+
+function canUseUtilityProcess() {
+  if (!process.versions.electron) return false;
+  try {
+    const electron = require("electron");
+    return typeof electron.utilityProcess?.fork === "function";
+  } catch {
+    return false;
+  }
+}
+
+function startEngineWorker() {
+  if (alive) return true;
+  if (!canUseUtilityProcess()) return false;
+  try {
+    const { utilityProcess } = require("electron");
+    const script = path.join(__dirname, "engine-worker.js");
+    child = utilityProcess.fork(script, [], { serviceName: "codex-engine-worker" });
+    child.on("message", onWorkerMessage);
+    child.on("exit", onWorkerExit);
+    if (typeof child.on === "function") {
+      child.on("error", onWorkerExit);
+    }
+    alive = true;
+    return true;
+  } catch (error) {
+    console.error("Engine worker fork failed; using in-process engine:", error);
+    alive = false;
+    child = null;
+    return false;
+  }
+}
+
+function stopEngineWorker() {
+  alive = false;
+  failAllPending(workerDownError("Engine worker stopped"));
+  try { if (child && typeof child.kill === "function") child.kill(); } catch {}
+  child = null;
+}
+
+function isEngineWorkerAlive() {
+  return alive;
+}
+
+async function httpJson(url, opts = {}) {
+  if (!alive) return httpJsonLocal(url, opts);
+  try {
+    return await rpc("httpJson", { url, opts });
+  } catch (error) {
+    if (error && error.code === WORKER_DOWN) return httpJsonLocal(url, opts);
+    throw error;
+  }
+}
+
+async function readVscdbItems(dbPath, keys, options = {}) {
+  if (!alive) return readVscdbItemRowsLocal(dbPath, keys, options);
+  try {
+    return await rpc("readVscdbItems", { dbPath, keys, options });
+  } catch (error) {
+    if (error && error.code === WORKER_DOWN) return readVscdbItemRowsLocal(dbPath, keys, options);
+    throw error;
+  }
+}
+
+module.exports = {
+  startEngineWorker,
+  stopEngineWorker,
+  isEngineWorkerAlive,
+  httpJson,
+  readVscdbItems,
+  WORKER_DOWN,
+};

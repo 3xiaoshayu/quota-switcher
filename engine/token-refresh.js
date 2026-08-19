@@ -3,7 +3,7 @@ const { ts, isTokenExpired, jwtExp } = require("./crypto-utils");
 const { httpJson, extractErrorCode } = require("./http-client");
 const { saveAcct, loadAcct, listAccts, loadIdx } = require("./storage");
 const { writeAuthJson, writeProjection } = require("./switch");
-const { withAccountLock } = require("./operation-locks");
+const { withAccountLock, mapLimit } = require("./operation-locks");
 
 const REAUTH_ERROR_CODES = new Set([
   "invalid_grant",
@@ -108,6 +108,15 @@ async function refreshOneTok(acct, options = {}) {
       return { ok: false, skipped: true, revoked: true, reauthRequired: true, code, error: reauthRequiredError(code) };
     }
   }
+  const observedGeneration = optionBag.observedGeneration;
+  if (
+    observedGeneration != null
+    && Number(acct.token_generation || 0) > Number(observedGeneration)
+    && acct.tokens?.access_token
+    && !isTokenExpired(acct.tokens.access_token)
+  ) {
+    return { ok: true, skipped: true, gen: acct.token_generation || 0, timeLeft: tokenTimeLeft(acct) };
+  }
   if (!force && !needsRefresh(acct) && !hasTokenRepairSignal(acct)) {
     return { ok: true, skipped: true, gen: acct.token_generation || 0, timeLeft: tokenTimeLeft(acct) };
   }
@@ -176,47 +185,58 @@ async function refreshAll(force) {
   const accts = listAccts();
   if (!accts.length) return { okCount: 0, revivedCount: 0, deadCount: 0, results: [] };
 
-  let okN = 0, revived = 0, dead = 0;
-  const results = [];
-
-  for (const listed of accts) {
-    await withAccountLock(listed.id, async () => {
+  const rows = await mapLimit(accts, 5, async (listed) => {
+    return withAccountLock(listed.id, async () => {
       const a = loadAcct(listed.id);
-      if (!a) return;
+      if (!a) return null;
       if (a.banned) {
-        results.push({ email: a.email, ok: false, skipped: true, banned: true });
-        return;
+        return { result: { email: a.email, ok: false, skipped: true, banned: true } };
+      }
+      if (a.requires_reauth && !hasTokenRepairSignal(a) && !a.tokens?.refresh_token) {
+        return {
+          result: {
+            email: a.email,
+            ok: false,
+            skipped: true,
+            reauthRequired: true,
+          },
+        };
       }
       if (!force && !needsRefresh(a) && !hasTokenRepairSignal(a)) {
-        okN++;
-        results.push({ email: a.email, ok: true, skipped: true });
-        return;
+        return { kind: "ok", result: { email: a.email, ok: true, skipped: true } };
       }
       const wasRepair = hasTokenRepairSignal(a);
-      const r = await refreshOneTok(a, { force });
-      results.push({
+      const r = await refreshOneTok(a, {
+        force,
+        observedGeneration: listed.token_generation,
+      });
+      const result = {
         email: a.email,
         ok: r.ok,
         skipped: !!r.skipped,
         gen: r.gen,
         error: r.error,
         reauthRequired: !!r.reauthRequired,
-      });
-
-      if (r.ok) {
-        if (wasRepair) revived++;
-        else okN++;
-      } else if (r.reauthRequired) {
-        dead++;
-      } else if (r.revoked) {
-        dead++;
-        markRequiresReauth(a, r.code || "token_revoked", r.detail);
+      };
+      if (r.ok) return { kind: wasRepair ? "revived" : "ok", result };
+      if (r.reauthRequired || r.revoked) {
+        if (r.revoked && !r.reauthRequired) markRequiresReauth(a, r.code || "token_revoked", r.detail);
+        return { kind: "dead", result };
       }
+      return { result };
     });
-    // A short pause keeps the token endpoint friendly without making a
-    // six-account batch check feel sluggish.
-    await new Promise((resolve) => setTimeout(resolve, 150));
+  });
+
+  let okN = 0, revived = 0, dead = 0;
+  const results = [];
+  for (const row of rows) {
+    if (!row) continue;
+    results.push(row.result);
+    if (row.kind === "ok") okN += 1;
+    else if (row.kind === "revived") revived += 1;
+    else if (row.kind === "dead") dead += 1;
   }
+
   // 保持当前账号 auth.json 最新（锁内执行，避免与在途刷新交错）
   const idx = loadIdx();
   if (idx.current_account_id) {

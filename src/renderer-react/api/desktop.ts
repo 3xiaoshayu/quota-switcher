@@ -146,6 +146,33 @@ type DesktopFloatState = {
 
 
 
+type DesktopSnapshotPayload = {
+  accounts?: DesktopAccount[];
+  currentAccount?: DesktopAccount | null;
+  cursorAccounts?: DesktopAccount[];
+  currentCursorAccount?: DesktopAccount | null;
+  antigravityAccounts?: DesktopAccount[];
+  currentAntigravityAccount?: DesktopAccount | null;
+  daemon?: DesktopDaemonStatus & {
+    lastSuccessAt?: string | number | null;
+    lastRunAt?: string | number | null;
+    lastError?: string | null;
+    pausedReason?: string | null;
+  };
+  config?: DesktopAutoSwitchConfig | null;
+  appInfo?: DesktopAppInfo | null;
+  oauthStatus?: DesktopOAuthStatus | null;
+  cursorOAuthStatus?: DesktopOAuthStatus | null;
+  antigravityOAuthStatus?: DesktopOAuthStatus | null;
+  authState?: DesktopAuthState | null;
+  authError?: string | null;
+  updateStatus?: DesktopUpdateStatus | null;
+  storageDiagnostics?: StorageDiagnostic[];
+  codexStatus?: DesktopCodexStatus | null;
+  cursorStatus?: DesktopCursorStatus | null;
+  antigravityStatus?: DesktopAntigravityStatus | null;
+};
+
 interface DesktopBridge {
   getAppInfo: () => Promise<ApiResponse<DesktopAppInfo>>;
   notifyUiReady?: () => Promise<ApiResponse<true>>;
@@ -215,6 +242,7 @@ interface DesktopBridge {
   cancelOAuth: () => Promise<ApiResponse<boolean>>;
   completeOAuthManually: (callbackUrl: string) => Promise<ApiResponse<DesktopOAuthResult>>;
   getAuthState: () => Promise<ApiResponse<DesktopAuthState>>;
+  getDesktopSnapshot?: (options?: { skipOfficialSync?: boolean }) => Promise<ApiResponse<DesktopSnapshotPayload>>;
   adoptOfficialAccount: () => Promise<ApiResponse<DesktopAccount & { updated?: boolean }>>;
   reapplyManagedAccount: (id?: string | null) => Promise<ApiResponse<unknown>>;
   deleteAccount: (id: string) => Promise<ApiResponse<boolean>>;
@@ -242,6 +270,8 @@ interface DesktopBridge {
   onAutoSwitch?: (cb: (payload: AutoSwitchRunResult) => void) => () => void;
   onUpdateStatus?: (cb: (payload: DesktopUpdateStatus) => void) => () => void;
   onAuthConflict?: (cb: (payload: DesktopAuthState) => void) => () => void;
+  onQuotaUpdated?: (cb: (payload: { product?: ProductKind; account?: DesktopAccount | null; quota?: DesktopQuota | null }) => void) => () => void;
+  onAccountUpdated?: (cb: (payload: { product?: ProductKind; account?: DesktopAccount | null }) => void) => () => void;
 }
 
 declare global {
@@ -398,6 +428,58 @@ function clampSyncIntervalMinutes(value: unknown): number {
   const number = Number(value);
   if (!Number.isFinite(number)) return DEFAULT_SYNC_INTERVAL_MINUTES;
   return Math.min(60, Math.max(1, Math.round(number)));
+}
+
+function dashboardFromSnapshot(data: DesktopSnapshotPayload): DashboardState {
+  const config = data.config || defaultConfig();
+  const rawAccounts = data.accounts || [];
+  const currentAccount = data.currentAccount || null;
+  const daemon = data.daemon || defaultDaemonStatus();
+  const authState = data.authState
+    ? data.authState
+    : unverifiedAuthState(data.authError || undefined);
+  return {
+    accounts: rawAccounts.map((account) => mapAccountForUi(account, currentAccount, config)),
+    rawAccounts,
+    currentAccount,
+    daemonRunning: !!daemon?.running,
+    daemonSyncInterval: clampSyncIntervalMinutes(daemon?.syncIntervalMinutes ?? config.sync_interval_minutes),
+    config,
+    appInfo: data.appInfo || null,
+    codexStatus: data.codexStatus || null,
+    updateStatus: data.updateStatus || null,
+    authState: authState || defaultAuthState(),
+    oauthStatus: data.oauthStatus || defaultOAuthStatus(),
+    storageDiagnostics: data.storageDiagnostics || [],
+    daemonLastSuccessAt: daemon?.lastSuccessAt || null,
+    daemonLastRunAt: daemon?.lastRunAt || null,
+    daemonLastError: daemon?.lastError || null,
+    daemonPausedReason: daemon?.pausedReason || null,
+  };
+}
+
+function cursorStateFromSnapshot(data: DesktopSnapshotPayload) {
+  const rawAccounts = data.cursorAccounts || [];
+  const currentAccount = data.currentCursorAccount || null;
+  return {
+    accounts: rawAccounts.map((account) => mapCursorAccountForUi(account, currentAccount)),
+    rawAccounts,
+    currentAccount,
+    oauthStatus: data.cursorOAuthStatus || defaultOAuthStatus(),
+    cursorStatus: data.cursorStatus || null,
+  };
+}
+
+function antigravityStateFromSnapshot(data: DesktopSnapshotPayload) {
+  const rawAccounts = data.antigravityAccounts || [];
+  const currentAccount = data.currentAntigravityAccount || null;
+  return {
+    accounts: rawAccounts.map((account) => mapAntigravityAccountForUi(account, currentAccount)),
+    rawAccounts,
+    currentAccount,
+    oauthStatus: data.antigravityOAuthStatus || defaultOAuthStatus(),
+    antigravityStatus: data.antigravityStatus || null,
+  };
 }
 
 export function quotaAutoSyncStaleMs(
@@ -1674,6 +1756,24 @@ export const desktopApi = {
     await captureResponse(() => api.notifyUiReady!(), 'Notify UI ready');
   },
 
+  async loadDesktopSnapshot(options: { skipOfficialSync?: boolean } = {}) {
+    const api = bridge();
+    if (typeof api.getDesktopSnapshot === 'function') {
+      const data = expectData(await api.getDesktopSnapshot(options), 'Read desktop snapshot') || {};
+      return {
+        dashboard: dashboardFromSnapshot(data),
+        cursor: cursorStateFromSnapshot(data),
+        antigravity: antigravityStateFromSnapshot(data),
+      };
+    }
+    const [dashboard, cursor, antigravity] = await Promise.all([
+      desktopApi.loadDashboardState(),
+      desktopApi.loadCursorState({ skipOfficialSync: options.skipOfficialSync }).catch(() => null),
+      desktopApi.loadAntigravityState({ skipOfficialSync: options.skipOfficialSync }).catch(() => null),
+    ]);
+    return { dashboard, cursor, antigravity };
+  },
+
   async loadDashboardState(): Promise<DashboardState> {
     const api = bridge();
     // Local account files must not wait on Codex detection, GitHub updates,
@@ -2055,6 +2155,8 @@ export const desktopApi = {
     onUpdateStatus?: (status: DesktopUpdateStatus) => void;
     onAuthConflict?: (state: DesktopAuthState) => void;
     onFloatProduct?: (product: ProductKind) => void;
+    onQuotaUpdated?: (payload: { product?: ProductKind; account?: DesktopAccount | null; quota?: DesktopQuota | null }) => void;
+    onAccountUpdated?: (payload: { product?: ProductKind; account?: DesktopAccount | null }) => void;
   }) {
     const api = getBridge();
     if (!api) return () => {};
@@ -2065,6 +2167,8 @@ export const desktopApi = {
       api.onUpdateStatus?.((payload) => events.onUpdateStatus?.(payload)),
       api.onAuthConflict?.((payload) => events.onAuthConflict?.(payload)),
       api.onFloatProduct?.((product) => events.onFloatProduct?.(product)),
+      api.onQuotaUpdated?.((payload) => events.onQuotaUpdated?.(payload)),
+      api.onAccountUpdated?.((payload) => events.onAccountUpdated?.(payload)),
     ].filter(Boolean) as Array<() => void>;
     return () => cleanups.forEach((cleanup) => cleanup());
   },

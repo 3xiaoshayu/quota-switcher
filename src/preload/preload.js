@@ -32,6 +32,7 @@ const api = {
   switchAccount: (id) => ipcRenderer.invoke('account:switch', id),
   getCurrentAccount: () => ipcRenderer.invoke('account:current'),
   getAuthState: () => ipcRenderer.invoke('account:authState'),
+  getDesktopSnapshot: (options) => ipcRenderer.invoke('desktop:snapshot', options),
   adoptOfficialAccount: () => ipcRenderer.invoke('account:adoptOfficial'),
   reapplyManagedAccount: (id) => ipcRenderer.invoke('account:reapplyManaged', id),
   reauthorizeAccount: (id) => ipcRenderer.invoke('account:reauthorize', id),
@@ -114,6 +115,16 @@ const api = {
     const handler = (_event, product) => cb(product);
     ipcRenderer.on('float:product', handler);
     return () => ipcRenderer.removeListener('float:product', handler);
+  },
+  onQuotaUpdated: (cb) => {
+    const handler = (_event, payload) => cb(payload);
+    ipcRenderer.on('quota:updated', handler);
+    return () => ipcRenderer.removeListener('quota:updated', handler);
+  },
+  onAccountUpdated: (cb) => {
+    const handler = (_event, payload) => cb(payload);
+    ipcRenderer.on('account:updated', handler);
+    return () => ipcRenderer.removeListener('account:updated', handler);
   },
 };
 
