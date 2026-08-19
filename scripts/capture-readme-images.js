@@ -23,6 +23,7 @@ async function openPage(browser, url, ready) {
     if (auth) {
       localStorage.setItem("codex_auth_status", "true");
       localStorage.setItem("codex_auth_email", "ops-01-primary@codex.local");
+      localStorage.setItem("cam_product", "cursor");
     } else {
       localStorage.removeItem("codex_auth_status");
       localStorage.removeItem("codex_auth_email");
@@ -45,22 +46,44 @@ async function save(page, name, options) {
   console.log(`wrote ${name}`);
 }
 
+async function selectProduct(page, id) {
+  const button = page.locator(`#sidebar-product-${id}`);
+  if (await button.count()) {
+    await button.click();
+    await page.waitForTimeout(400);
+  }
+}
+
 async function captureAppPages(browser) {
   const page = await openPage(browser, `${baseUrl}/`, "dashboard");
   await page.waitForSelector("#dashboard-main-container");
   await page.waitForTimeout(400);
 
-  const shots = [
-    ["accounts", "account-dashboard.png"],
-    ["quotas", "quota-overview.png"],
-    ["autoswitch", "auto-switch.png"],
-    ["settings", "settings.png"],
-  ];
-  for (const [tab, file] of shots) {
-    await page.click(`#sidebar-nav-${tab}`);
-    await page.waitForTimeout(250);
-    await save(page, file, { fullPage: false });
-  }
+  await selectProduct(page, "cursor");
+  await page.click("#sidebar-nav-accounts");
+  await page.waitForTimeout(250);
+  await save(page, "account-dashboard.png", { fullPage: false });
+
+  await page.click("#sidebar-nav-quotas");
+  await page.waitForTimeout(250);
+  await save(page, "quota-overview.png", { fullPage: false });
+
+  await selectProduct(page, "codex");
+  await page.click("#sidebar-nav-accounts");
+  await page.waitForTimeout(250);
+  await save(page, "codex-accounts.png", { fullPage: false });
+
+  await page.click("#sidebar-nav-autoswitch");
+  await page.waitForTimeout(250);
+  await page.evaluate(() => {
+    const banner = document.querySelector("#autoswitch-log-banner");
+    if (banner) banner.style.display = "none";
+  });
+  await save(page, "auto-switch.png", { fullPage: false });
+
+  await page.click("#sidebar-nav-settings");
+  await page.waitForTimeout(250);
+  await save(page, "settings.png", { fullPage: false });
   await page.close();
 }
 
