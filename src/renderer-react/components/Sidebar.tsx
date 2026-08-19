@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AtSign, Check, ChevronDown, Gauge, Shuffle, Settings, RefreshCw, HelpCircle } from 'lucide-react';
 import { motion } from 'motion/react';
-import { DaemonState, ProductKind } from '../types';
+import { ProductKind } from '../types';
 import {
   PRODUCTS,
   PRODUCT_ICON_DOCK_LIMIT,
@@ -9,7 +9,7 @@ import {
   productById,
 } from '../data/products';
 import appIcon from '../assets/app-icon.png';
-import { APP_DISPLAY_NAME } from '../brand';
+import QuotaWordmark from './QuotaWordmark';
 import iconCodex from '../assets/products/codex.png';
 import iconCursor from '../assets/products/cursor.png';
 import iconAntigravity from '../assets/products/antigravity.png';
@@ -188,7 +188,6 @@ interface SidebarProps {
   setActiveTab: (tab: 'accounts' | 'quotas' | 'autoswitch' | 'settings') => void;
   product: ProductKind;
   onProductChange: (product: ProductKind) => void;
-  daemonState: DaemonState;
   onShowSupport: () => void;
   onShowUpdates: () => void;
 }
@@ -198,7 +197,6 @@ export default function Sidebar({
   setActiveTab,
   product,
   onProductChange,
-  daemonState,
   onShowSupport,
   onShowUpdates,
 }: SidebarProps) {
@@ -214,7 +212,6 @@ export default function Sidebar({
       className="w-60 bg-white/[0.03] border-r border-sep flex flex-col h-full text-label-2 font-sans shrink-0 overflow-y-auto"
       id="app-sidebar"
     >
-      {/* Top Profile / Daemon Area */}
       <div className="app-drag px-5 pt-6 pb-5" id="sidebar-profile-header">
         <div className="flex items-center gap-3" id="sidebar-manager-profile">
           <img
@@ -223,19 +220,7 @@ export default function Sidebar({
             className="w-10 h-10 rounded-[10px] object-cover shrink-0"
             id="sidebar-avatar-wrapper"
           />
-          <div className="flex flex-col select-none" id="sidebar-profile-text">
-            <span className="font-semibold text-label text-[13px]">{APP_DISPLAY_NAME}</span>
-            <span className="flex items-center gap-1.5 text-[11px] text-label-3 mt-0.5">
-              <span className={`w-1.5 h-1.5 rounded-full ${
-                daemonState.status === 'Running'
-                  ? (daemonState.pausedReason ? 'bg-warn' : 'bg-ok')
-                  : 'bg-danger'
-              }`} />
-              {daemonState.status === 'Running'
-                ? (daemonState.pausedReason ? 'Daemon 已暂停' : 'Daemon 运行中')
-                : 'Daemon 已停止'}
-            </span>
-          </div>
+          <QuotaWordmark />
         </div>
       </div>
 

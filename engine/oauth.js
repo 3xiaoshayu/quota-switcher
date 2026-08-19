@@ -18,6 +18,7 @@ const {
   currentAcct,
 } = require("./storage");
 const { extraIdentityIds, foldDuplicateAccounts, mergePreservedQuota, pickIdentityKeeper, usableEmail } = require("./account-identity");
+const { APP_DISPLAY_NAME } = require("./app-brand");
 const { remapSelectedAccountIds } = require("./config-manager");
 const { writeJsonAtomic } = require("./atomic-file");
 const { logInfo, logWarn, logError } = require("./logger");
@@ -27,6 +28,7 @@ const OAUTH_TTL_MS = 5 * 60 * 1000;
 let active = null;
 let lastStatus = { status: "idle", message: null, targetAccountId: null, result: null };
 let openUrlHandler = null;
+let oauthAccountSavedHandler = null;
 
 function publicAccountResult(result) {
   if (!result?.account) return null;
@@ -36,6 +38,8 @@ function publicAccountResult(result) {
     mismatch: !!result.mismatch,
     targetAccountId: result.targetAccountId || null,
     updated: !!result.updated,
+    switched: !!result.switched,
+    switchError: result.switchError || null,
   };
 }
 
@@ -66,6 +70,48 @@ function setOpenUrlHandler(handler) {
     throw new TypeError("OAuth URL opener must be a function");
   }
   openUrlHandler = handler;
+}
+
+function setOAuthAccountSavedHandler(handler) {
+  oauthAccountSavedHandler = typeof handler === "function" ? handler : null;
+}
+
+function shouldSwitchAfterOAuth(result) {
+  if (!result?.account?.id) return false;
+  // Reauthorizing the same card only refreshes tokens in the vault.
+  // A new add, or a reauth that saved a different login as a new account,
+  // should become the live Codex session — same as clicking 切换.
+  if (result.targetAccountId && !result.mismatch) return false;
+  return true;
+}
+
+async function switchCodexAfterOAuth(result) {
+  if (!shouldSwitchAfterOAuth(result)) return result;
+  const { withAccountLocks } = require("./operation-locks");
+  const { doSwitch } = require("./switch");
+  const currentId = currentAcct()?.id || null;
+  const lockIds = ["__switch__", result.account.id];
+  if (currentId && currentId !== result.account.id) lockIds.push(currentId);
+  try {
+    const switched = await withAccountLocks(lockIds, async () => {
+      const account = loadAcct(result.account.id) || result.account;
+      return doSwitch(account);
+    });
+    result.switched = !switched?.already;
+    result.alreadyCurrent = !!switched?.already;
+  } catch (error) {
+    result.switched = false;
+    result.switchError = error.message || String(error);
+    logWarn(`OAuth account saved but Codex switch failed: ${result.switchError}`);
+  }
+  return result;
+}
+
+function notifyOAuthAccountSaved(result) {
+  if (typeof oauthAccountSavedHandler !== "function" || !result?.account) return;
+  try { oauthAccountSavedHandler(result); } catch (error) {
+    logWarn(`OAuth account-saved handler failed: ${error.message}`);
+  }
 }
 
 function openBrowser(url) {
@@ -398,6 +444,9 @@ async function handleAuthorizationCode(pending, code) {
     if (active !== session || session.settled) return false;
     const result = await upsert(tokens, { targetAccountId: pending.targetAccountId });
     if (active !== session || session.settled) return false;
+    await switchCodexAfterOAuth(result);
+    if (active !== session || session.settled) return false;
+    notifyOAuthAccountSaved(result);
     settleActive(null, result);
     return true;
   } catch (error) {
@@ -434,7 +483,7 @@ function startPendingSession(pending, options = {}) {
         response.writeHead(success ? 200 : 400, { "Content-Type": "text/html; charset=utf-8" });
         response.end(callbackHtml(
           success,
-          success ? "可以回到 Codex 账号管理器查看结果。" : "授权未能完成，请回到管理器重试。",
+          success ? `可以回到 ${APP_DISPLAY_NAME} 查看结果。` : "授权未能完成，请回到管理器重试。",
         ));
       }).catch(() => {
         if (response.writableEnded) return;
@@ -531,6 +580,7 @@ module.exports = {
   completeOAuthManually,
   getOAuthStatus,
   setOpenUrlHandler,
+  setOAuthAccountSavedHandler,
   upsert,
   sameAccountIdentity,
   collapseDuplicateCodexAccounts,

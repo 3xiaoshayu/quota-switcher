@@ -58,6 +58,7 @@ export function oauthFinishedCopy(options: {
   mismatch?: boolean;
   isReauth?: boolean;
   updated?: boolean;
+  switched?: boolean;
 }): string {
   if (options.mismatch) {
     return options.email
@@ -67,6 +68,9 @@ export function oauthFinishedCopy(options: {
   const email = displayAuthEmail(options.product, options.email);
   if (options.isReauth) return email ? `已重新授权 ${email}` : '账号已重新授权';
   if (options.updated) return email ? `已更新已有账号 ${email}` : '已更新已有账号';
+  if (options.product === 'codex' && options.switched) {
+    return email ? `已添加 ${email}，并已切换为当前账号` : '账号已添加，并已切换为当前账号';
+  }
   return email ? `已添加 ${email}` : '账号已添加';
 }
 

@@ -9,7 +9,7 @@ import {
   Info
 } from 'lucide-react';
 import { AccountQuota, AutoSwitchRunResult, LogEntry, SystemSettings, DaemonState } from '../types';
-import { autoSwitchStatusBanner, canJoinAutoSwitch, isCurrentQuotaSufficient, lastCheckCaption, planLabel, quotaScopeCaption, statusDotForAccount, statusTextForAccount } from '../api/desktop';
+import { autoSwitchStatusBanner, canJoinAutoSwitch, isCurrentQuotaSufficient, lastCheckCaption, planCaption, quotaScopeCaption, statusDotForAccount, statusTextForAccount } from '../api/desktop';
 import { toUserMessage } from '../api/user-messages';
 
 interface AutoSwitchProps {
@@ -236,7 +236,9 @@ export default function AutoSwitchView({
 
                   <div className="flex flex-col items-end text-right gap-1.5 shrink-0 pt-0.5" id={`scope-acc-right-${account.id}`}>
                     {getScopeStatusBadge(account)}
-                    <span className="text-[11px] text-label-3">{planLabel(account.plan)}</span>
+                    {planCaption(account) ? (
+                      <span className="text-[11px] text-label-3">{planCaption(account)}</span>
+                    ) : null}
                   </div>
                 </motion.div>
               );

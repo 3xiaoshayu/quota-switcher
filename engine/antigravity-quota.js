@@ -4,13 +4,14 @@ const { extractErrorCode } = require("./http-client");
 const { getAntigravityRuntime } = require("./antigravity-runtime");
 const { saveAntigravityAcct, upsertAntigravityIndex } = require("./antigravity-storage");
 const { refreshAntigravityToken, markAntigravityReauth } = require("./antigravity-token");
-const { logWarn } = require("./logger");
+const { logInfo, logWarn } = require("./logger");
 
 const CLOUD_CODE_IDE_VERSION = "1.20.5";
 const CLOUD_CODE_USER_AGENT = "antigravity/1.20.5 windows/amd64";
 const LOAD_CODE_ASSIST_USER_AGENT = "antigravity/1.20.5 windows/amd64 google-api-nodejs-client/10.3.0";
 const ONBOARD_POLL_LIMIT = 8;
 const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
+const FIVE_HOUR_RESET_SLACK_MS = 20 * 60 * 1000;
 
 function clampPercent(value) {
   if (value == null || value === "") return null;
@@ -93,8 +94,22 @@ function pickCurrentTier(root) {
   return asTierObject(root.currentTier) || asTierObject(root.current_tier) || null;
 }
 
+function pickDefaultAllowedTier(root) {
+  const allowed = Array.isArray(root.allowedTiers) ? root.allowedTiers : [];
+  const objects = allowed.filter((item) => item && typeof item === "object");
+  return objects.find((item) => item.isDefault)
+    || objects.find((item) => /free/i.test(String(item.id || item.name || "")))
+    || null;
+}
+
 function pickSubscriptionTier(root) {
-  return pickPaidTier(root) || pickCurrentTier(root) || {};
+  return pickPaidTier(root) || pickCurrentTier(root) || pickDefaultAllowedTier(root) || {};
+}
+
+function isRecognizedAntigravityTier(tier) {
+  const value = String(tier || "").toLowerCase();
+  if (!value) return false;
+  return /free|standard|pro|ultra|plus|team|enterprise|g1-/.test(value);
 }
 
 function projectId(value) {
@@ -283,8 +298,11 @@ function classifyFamilyWindow(name) {
   const gemini = text.includes("gemini");
   const third = text.includes("3p") || text.includes("claude") || text.includes("gpt") || text.includes("third");
   if (!gemini && !third) return null;
-  const weekly = text.includes("weekly") || text.includes("week") || text.includes(":low") || text.endsWith("-low") || text.includes("7d");
-  const fiveHour = text.includes("5h") || text.includes("five") || text.includes("5-hour") || text.includes(":high") || text.endsWith("-high");
+  const weekly = text.includes("weekly") || /\bweek\b/.test(text) || /\b7d\b/.test(text);
+  const fiveHour = text.includes("5h")
+    || text.includes("five-hour")
+    || text.includes("5-hour")
+    || text.includes("5 hour");
   if (gemini && fiveHour) return "gemini_five_hour_remaining";
   if (gemini && weekly) return "gemini_weekly_remaining";
   if (third && fiveHour) return "third_party_five_hour_remaining";
@@ -293,7 +311,9 @@ function classifyFamilyWindow(name) {
 }
 
 function applyFamilyModel(windows, model) {
-  const key = classifyFamilyWindow(model?.name) || classifyFamilyWindow(model?.displayName);
+  const key = classifyFamilyWindow(model?.name)
+    || classifyFamilyWindow(model?.displayName)
+    || classifyFamilyWindow(`${model?.name || ""} ${model?.displayName || ""}`);
   if (!key || model?.remaining_percentage == null) return;
   setFamilyWindow(windows, key, model.remaining_percentage, model.reset_time);
 }
@@ -304,27 +324,68 @@ function familyWindowsFromModels(models) {
   return windows;
 }
 
+function summaryGroups(payload) {
+  const root = payload && typeof payload === "object" ? payload : {};
+  if (Array.isArray(root.groups)) return root.groups;
+  if (Array.isArray(root.quotaSummary?.groups)) return root.quotaSummary.groups;
+  if (Array.isArray(root.response?.groups)) return root.response.groups;
+  return [];
+}
+
+function remainingFromBucket(bucket) {
+  const nested = bucket?.remaining && typeof bucket.remaining === "object" ? bucket.remaining : {};
+  return remainingFromFraction(
+    pickNumber(
+      bucket?.remainingFraction,
+      bucket?.remaining_fraction,
+      bucket?.remainingPercent,
+      nested.remainingFraction,
+      nested.remaining_fraction,
+      nested.remainingPercent,
+      typeof bucket?.remaining === "number" ? bucket.remaining : null,
+    ),
+    pickNumber(bucket?.limit, bucket?.total, nested.limit, nested.total),
+  ) ?? remainingFromUsed(
+    pickNumber(bucket?.usedFraction, bucket?.used, bucket?.used_fraction, nested.usedFraction, nested.used),
+    pickNumber(bucket?.limit, bucket?.total, nested.limit, nested.total, 1),
+  );
+}
+
 function familyWindowsFromSummary(payload) {
   const windows = emptyFamilyWindows();
-  const root = payload && typeof payload === "object" ? payload : {};
-  const groups = Array.isArray(root.groups) ? root.groups : [];
-  for (const group of groups) {
+  for (const group of summaryGroups(payload)) {
+    const groupName = group?.displayName || group?.name || "";
     const buckets = Array.isArray(group?.buckets) ? group.buckets : [];
     for (const bucket of buckets) {
-      const remaining = remainingFromFraction(
-        pickNumber(bucket.remainingFraction, bucket.remaining_fraction, bucket.remainingPercent, bucket.remaining),
-        pickNumber(bucket.limit, bucket.total),
-      ) ?? remainingFromUsed(
-        pickNumber(bucket.usedFraction, bucket.used, bucket.used_fraction),
-        pickNumber(bucket.limit, bucket.total, 1),
-      );
+      if (!bucket || bucket.disabled === true) continue;
       applyFamilyModel(windows, {
-        name: bucket.bucketId || bucket.id || bucket.modelId || bucket.tokenType,
+        name: `${groupName} ${bucket.bucketId || bucket.id || bucket.modelId || bucket.tokenType || ""}`.trim(),
         displayName: bucket.displayName,
-        remaining_percentage: remaining,
-        reset_time: bucket.resetTime || bucket.reset_time || null,
+        remaining_percentage: remainingFromBucket(bucket),
+        reset_time: bucket.resetTime || bucket.reset_time || nestedResetTime(bucket),
       });
     }
+  }
+  return windows;
+}
+
+function nestedResetTime(bucket) {
+  const nested = bucket?.remaining && typeof bucket.remaining === "object" ? bucket.remaining : {};
+  return nested.resetTime || nested.reset_time || null;
+}
+
+function familyWindowsFromQuotaBuckets(payload) {
+  const windows = emptyFamilyWindows();
+  const root = payload && typeof payload === "object" ? payload : {};
+  const buckets = Array.isArray(root.buckets) ? root.buckets : [];
+  for (const bucket of buckets) {
+    if (!bucket || bucket.disabled === true) continue;
+    applyFamilyModel(windows, {
+      name: bucket.bucketId || bucket.id || bucket.modelId || bucket.tokenType,
+      displayName: bucket.displayName,
+      remaining_percentage: remainingFromBucket(bucket),
+      reset_time: bucket.resetTime || bucket.reset_time || nestedResetTime(bucket),
+    });
   }
   return windows;
 }
@@ -342,16 +403,35 @@ function mergeFamilyWindows(...sources) {
   return windows;
 }
 
-function applyGeminiFiveHourCap(windows, now = Date.now()) {
-  const reset = windows.gemini_five_hour_reset_time;
-  if (!reset) return windows;
+function dropImplausibleFiveHourWindow(windows, remainingKey, resetKey, now) {
+  const reset = windows[resetKey];
+  if (!reset) return;
   const resetTs = Date.parse(reset);
-  if (!Number.isFinite(resetTs)) return windows;
-  if (resetTs - now > FIVE_HOURS_MS) {
-    windows.gemini_five_hour_remaining = 100;
-    windows.gemini_five_hour_reset_time = null;
+  if (!Number.isFinite(resetTs)) return;
+  if (resetTs - now > FIVE_HOURS_MS + FIVE_HOUR_RESET_SLACK_MS) {
+    windows[remainingKey] = null;
+    windows[resetKey] = null;
   }
+}
+
+function applyGeminiFiveHourCap(windows, now = Date.now()) {
+  dropImplausibleFiveHourWindow(windows, "gemini_five_hour_remaining", "gemini_five_hour_reset_time", now);
+  dropImplausibleFiveHourWindow(windows, "third_party_five_hour_remaining", "third_party_five_hour_reset_time", now);
   return windows;
+}
+
+function summarizeQuotaBuckets(payload) {
+  const labels = [];
+  for (const group of summaryGroups(payload)) {
+    const groupName = String(group?.displayName || group?.name || "").trim();
+    const buckets = Array.isArray(group?.buckets) ? group.buckets : [];
+    for (const bucket of buckets) {
+      const id = String(bucket?.bucketId || bucket?.id || bucket?.displayName || "").trim();
+      if (!id && !groupName) continue;
+      labels.push(groupName ? `${groupName}:${id || "?"}` : id);
+    }
+  }
+  return labels;
 }
 
 function tighterRemaining(...values) {
@@ -366,6 +446,8 @@ function parseAntigravityUsage(assistPayload, modelsPayload, summaryPayload) {
   const windows = applyGeminiFiveHourCap(mergeFamilyWindows(
     familyWindowsFromSummary(summaryPayload),
     familyWindowsFromSummary(modelsPayload),
+    familyWindowsFromQuotaBuckets(modelsPayload),
+    familyWindowsFromQuotaBuckets(summaryPayload),
     familyWindowsFromModels(models),
   ));
   return {
@@ -544,7 +626,30 @@ async function refreshAntigravityQuota(account, options = {}) {
       try {
         const onboarded = await onboardAntigravityUser(account.tokens.access_token, assist);
         if (onboarded) assist = { ...assist, project: onboarded };
-      } catch {}
+      } catch (error) {
+        logWarn(`Antigravity onboard failed for ${account.email}: ${error.message}`);
+      }
+    }
+    if (!assist.project) {
+      try {
+        const retryResponse = await cloudCodePost("/v1internal:loadCodeAssist", account.tokens.access_token, {
+          metadata: cloudCodeMetadata(),
+          mode: "FULL_ELIGIBILITY_CHECK",
+        }, { userAgent: LOAD_CODE_ASSIST_USER_AGENT });
+        if (retryResponse.status >= 200 && retryResponse.status < 300) {
+          const retryPayload = parseJsonBody(retryResponse.body, null);
+          if (retryPayload && typeof retryPayload === "object") {
+            assistPayload = retryPayload;
+            const retried = parseLoadCodeAssist(retryPayload);
+            assist = {
+              ...retried,
+              project: retried.project || assist.project,
+            };
+          }
+        }
+      } catch (error) {
+        logWarn(`Antigravity loadCodeAssist retry failed for ${account.email}: ${error.message}`);
+      }
     }
     let modelsPayload = {};
     try {
@@ -578,7 +683,9 @@ async function refreshAntigravityQuota(account, options = {}) {
       } catch {}
     }
     const quota = parseAntigravityUsage(assistPayload, modelsPayload, summaryPayload);
-    if (!antigravityQuotaHasWindows(quota)) {
+    logInfo(`Antigravity quota windows for ${account.email}: tier=${quota.tier || ""} geminiW=${quota.gemini_weekly_remaining} gemini5h=${quota.gemini_five_hour_remaining} thirdW=${quota.third_party_weekly_remaining} third5h=${quota.third_party_five_hour_remaining} summary=${summarizeQuotaBuckets(summaryPayload).join(",") || "none"}`);
+    if (!antigravityQuotaHasWindows(quota) && !isRecognizedAntigravityTier(quota.tier)) {
+      logWarn(`Antigravity quota empty for ${account.email}: project=${assist.project || ""} tier=${quota.tier || ""} models=${Array.isArray(quota.models) ? quota.models.length : 0} assistKeys=${Object.keys(assistPayload).join(",")}`);
       throw Object.assign(new Error("这次没查清额度，请稍后重试。"), { code: "probe_failed" });
     }
     account.quota = quota;

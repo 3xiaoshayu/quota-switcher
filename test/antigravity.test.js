@@ -128,7 +128,9 @@ test("antigravity protobuf token topic round-trips access and refresh", () => {
 test("antigravity prefers Antigravity IDE user data when state.vscdb exists", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "ag-paths-"));
   const previous = process.env.APPDATA;
+  const previousLocal = process.env.LOCALAPPDATA;
   process.env.APPDATA = root;
+  process.env.LOCALAPPDATA = path.join(root, "Local");
   clearEngineModules();
   try {
     const ideDb = path.join(root, "Antigravity IDE", "User", "globalStorage", "state.vscdb");
@@ -141,6 +143,37 @@ test("antigravity prefers Antigravity IDE user data when state.vscdb exists", ()
   } finally {
     if (previous == null) delete process.env.APPDATA;
     else process.env.APPDATA = previous;
+    if (previousLocal == null) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = previousLocal;
+    fs.rmSync(root, { recursive: true, force: true });
+    clearEngineModules();
+  }
+});
+
+test("antigravity prefers Hub user data when Hub exe is installed even if leftover IDE vscdb exists", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ag-hub-paths-"));
+  const previous = process.env.APPDATA;
+  const previousLocal = process.env.LOCALAPPDATA;
+  process.env.APPDATA = path.join(root, "Roaming");
+  process.env.LOCALAPPDATA = path.join(root, "Local");
+  clearEngineModules();
+  try {
+    const ideDb = path.join(root, "Roaming", "Antigravity IDE", "User", "globalStorage", "state.vscdb");
+    fs.mkdirSync(path.dirname(ideDb), { recursive: true });
+    fs.writeFileSync(ideDb, "db");
+    const hubExe = path.join(root, "Local", "Programs", "antigravity", "Antigravity.exe");
+    fs.mkdirSync(path.dirname(hubExe), { recursive: true });
+    fs.writeFileSync(hubExe, "fake");
+    const runtime = require("../engine/antigravity-runtime");
+    assert.equal(runtime.firstExistingExe(), hubExe);
+    assert.equal(runtime.preferUserDataDir(), path.join(root, "Roaming", "Antigravity"));
+    assert.equal(runtime.usesWindowsSystemCredential(hubExe), true);
+    assert.equal(runtime.usesWindowsSystemCredential(path.join(root, "Antigravity IDE.exe")), false);
+  } finally {
+    if (previous == null) delete process.env.APPDATA;
+    else process.env.APPDATA = previous;
+    if (previousLocal == null) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = previousLocal;
     fs.rmSync(root, { recursive: true, force: true });
     clearEngineModules();
   }
@@ -222,11 +255,15 @@ test("antigravity switch writes only the oauth token item key", async (t) => {
     expiry_timestamp: 99,
   });
   let listed = [{ name: "Antigravity IDE.exe", pid: 5151, executablePath: exePath }];
+  let listCalls = 0;
   const launched = [];
   engine.setAntigravityRuntimeForTests({
     vscdbPath: () => dbPath,
     exePath: () => exePath,
-    listProcesses: async () => listed,
+    listProcesses: async () => {
+      listCalls += 1;
+      return listed;
+    },
     gracefulClose: async () => {
       listed = [];
       return true;
@@ -241,6 +278,8 @@ test("antigravity switch writes only the oauth token item key", async (t) => {
   const switched = await engine.doAntigravitySwitch(engine.loadAntigravityAcct(created.account.id));
   assert.equal(switched.launched, true);
   assert.deepEqual(launched, [exePath]);
+  assert.ok(listCalls <= 2, `listProcesses called ${listCalls} times`);
+  assert.match(readEngineLogs(root), /Antigravity switch timings kill=\d+ms write=\d+ms/);
   const stored = await engine.readAntigravityAuth(dbPath, { copyFirst: false });
   assert.equal(stored.access_token, "ya29.next");
   assert.equal(stored.refresh_token, "1//next");
@@ -274,6 +313,127 @@ test("antigravity quota parser reads official gemini and 3p windows", (t) => {
   assert.equal(quota.third_party_five_hour_remaining, 25);
   assert.equal(quota.primary_remaining_percentage, 64);
   assert.equal(quota.secondary_remaining_percentage, 25);
+});
+
+test("antigravity quota parser reads nested summary groups and remaining objects", (t) => {
+  const { engine } = freshEngine(t);
+  const quota = engine.parseAntigravityUsage({
+    currentTier: { id: "free-tier" },
+  }, {}, {
+    quotaSummary: {
+      groups: [
+        {
+          displayName: "Gemini Models",
+          buckets: [
+            { bucketId: "weekly", remaining: { remainingFraction: 0.4 }, resetTime: "2026-08-26T00:00:00Z" },
+          ],
+        },
+        {
+          displayName: "Claude and GPT models",
+          buckets: [
+            { displayName: "Weekly limit", remainingFraction: 0.2, resetTime: "2026-08-26T00:00:00Z" },
+          ],
+        },
+      ],
+    },
+  });
+  assert.equal(quota.tier, "free-tier");
+  assert.equal(quota.gemini_weekly_remaining, 40);
+  assert.equal(quota.third_party_weekly_remaining, 20);
+  assert.equal(quota.gemini_five_hour_remaining, null);
+  assert.equal(quota.third_party_five_hour_remaining, null);
+});
+
+test("antigravity availability models at 100% do not invent family windows", (t) => {
+  const { engine } = freshEngine(t);
+  const quota = engine.parseAntigravityUsage({
+    allowedTiers: [{ id: "free-tier", name: "Free", isDefault: true }],
+  }, {
+    models: [
+      { displayName: "Gemini 3.5 Flash (Low)", quotaInfo: { remainingFraction: 1, resetTime: "2026-08-25T06:35:12Z" } },
+      { displayName: "Claude Opus 4.6 (Thinking)", quotaInfo: { remainingFraction: 1 } },
+    ],
+  }, {});
+  assert.equal(quota.tier, "free-tier");
+  assert.equal(quota.gemini_weekly_remaining, null);
+  assert.equal(quota.gemini_five_hour_remaining, null);
+  assert.equal(quota.third_party_weekly_remaining, null);
+  assert.equal(quota.third_party_five_hour_remaining, null);
+  assert.equal(quota.models.length >= 2, true);
+});
+
+test("antigravity free-tier refresh without quota windows is not a probe failure", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "free@example.com",
+    access_token: "ya29.free",
+    refresh_token: "1//free",
+    expiry_timestamp: Math.floor(Date.now() / 1000) + 3600,
+  });
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async (url) => {
+      if (String(url).includes("loadCodeAssist")) {
+        return {
+          status: 200,
+          body: JSON.stringify({
+            allowedTiers: [{ id: "free-tier", name: "Free", isDefault: true }],
+          }),
+        };
+      }
+      if (String(url).includes("fetchAvailableModels")) {
+        return {
+          status: 200,
+          body: JSON.stringify({
+            models: [
+              { displayName: "Gemini 3.5 Flash (Low)", quotaInfo: { remainingFraction: 1 } },
+            ],
+          }),
+        };
+      }
+      return { status: 200, body: "{}" };
+    },
+  });
+  await engine.refreshAntigravityQuota(engine.loadAntigravityAcct(created.account.id), { force: true });
+  const latest = engine.loadAntigravityAcct(created.account.id);
+  assert.equal(latest.quota.tier, "free-tier");
+  assert.equal(latest.plan_type, "free-tier");
+  assert.equal(latest.quota_error, null);
+  assert.equal(latest.probe.status, "active");
+  assert.equal(latest.quota.gemini_weekly_remaining, null);
+});
+
+test("antigravity unpaid standard-tier refresh without windows is not a probe failure", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "unpaid@example.com",
+    access_token: "ya29.unpaid",
+    refresh_token: "1//unpaid",
+    expiry_timestamp: Math.floor(Date.now() / 1000) + 3600,
+  });
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async (url) => {
+      if (String(url).includes("loadCodeAssist")) {
+        return {
+          status: 200,
+          body: JSON.stringify({
+            allowedTiers: [
+              { id: "standard-tier", name: "Standard", isDefault: true },
+              { id: "g1-pro-tier", name: "Pro" },
+            ],
+          }),
+        };
+      }
+      return { status: 200, body: "{}" };
+    },
+  });
+  await engine.refreshAntigravityQuota(engine.loadAntigravityAcct(created.account.id), { force: true });
+  const latest = engine.loadAntigravityAcct(created.account.id);
+  assert.equal(latest.quota.tier, "standard-tier");
+  assert.equal(latest.plan_type, "standard-tier");
+  assert.equal(latest.quota_error, null);
+  assert.equal(latest.probe.status, "active");
 });
 
 test("antigravity quota refresh does not grow NO_PROXY", async (t) => {
@@ -563,7 +723,7 @@ test("antigravity switch waits for a brief vscdb lock then writes", async (t) =>
   assert.deepEqual(launched, [exePath]);
 });
 
-test("antigravity quota parser ignores catalog model names and caps gemini 5h", (t) => {
+test("antigravity quota parser ignores catalog model names and drops far 5h resets", (t) => {
   const { engine } = freshEngine(t);
   const farReset = new Date(Date.now() + 10 * 60 * 60 * 1000).toISOString();
   const quota = engine.parseAntigravityUsage({
@@ -577,10 +737,56 @@ test("antigravity quota parser ignores catalog model names and caps gemini 5h", 
     ],
   });
   assert.equal(quota.gemini_weekly_remaining, 70);
-  assert.equal(quota.gemini_five_hour_remaining, 100);
+  assert.equal(quota.gemini_five_hour_remaining, null);
   assert.equal(quota.gemini_five_hour_reset_time, null);
   assert.equal(quota.primary_model, null);
   assert.equal(quota.secondary_model, null);
+});
+
+test("antigravity catalog high/low model ids do not invent 5h windows", (t) => {
+  const { engine } = freshEngine(t);
+  const weeklyReset = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const nearFiveHour = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+  const quota = engine.parseAntigravityUsage({
+    currentTier: { id: "free-tier" },
+  }, {
+    models: [
+      { name: "gemini-3.1-pro-high", displayName: "Gemini 3.1 Pro (High)", quotaInfo: { remainingFraction: 1, resetTime: weeklyReset } },
+      { name: "gemini-3.5-flash-low", displayName: "Gemini 3.5 Flash (Low)", quotaInfo: { remainingFraction: 1, resetTime: weeklyReset } },
+      { name: "gemini-3.6-flash-high", quotaInfo: { remainingFraction: 1, resetTime: weeklyReset } },
+    ],
+  }, {
+    groups: [{
+      displayName: "Gemini Models",
+      buckets: [
+        { bucketId: "gemini-weekly", remainingFraction: 1, resetTime: weeklyReset },
+      ],
+    }, {
+      displayName: "Claude and GPT models",
+      buckets: [
+        { bucketId: "3p-weekly", remainingFraction: 1, resetTime: weeklyReset },
+      ],
+    }],
+  });
+  assert.equal(quota.gemini_weekly_remaining, 100);
+  assert.equal(quota.gemini_weekly_reset_time, weeklyReset);
+  assert.equal(quota.third_party_weekly_remaining, 100);
+  assert.equal(quota.gemini_five_hour_remaining, null);
+  assert.equal(quota.third_party_five_hour_remaining, null);
+
+  const pro = engine.parseAntigravityUsage({
+    currentTier: { id: "g1-pro-tier" },
+  }, {}, {
+    groups: [{
+      displayName: "Gemini Models",
+      buckets: [
+        { bucketId: "gemini-weekly", remainingFraction: 1, resetTime: weeklyReset },
+        { bucketId: "gemini-5h", remainingFraction: 0.8, resetTime: nearFiveHour },
+      ],
+    }],
+  });
+  assert.equal(pro.gemini_five_hour_remaining, 80);
+  assert.equal(pro.gemini_five_hour_reset_time, nearFiveHour);
 });
 
 test("antigravity default exe path does not query running processes", () => {
@@ -614,6 +820,9 @@ test("antigravity process matcher accepts official Hub and ignores random exe", 
   assert.equal(runtime.isAntigravityProcess({
     name: "Antigravity.exe",
     executablePath: "C:\\Users\\a\\AppData\\Local\\Programs\\antigravity\\Antigravity.exe",
+  }), true);
+  assert.equal(runtime.isAntigravityProcess({
+    name: "Antigravity.exe",
   }), true);
   assert.equal(runtime.isAntigravityProcess({
     name: "Antigravity.exe",
@@ -678,7 +887,7 @@ test("antigravity quota parser reads allowedTiers and availableCredits", (t) => 
       "3p-5h": { displayName: "Claude 5h", quotaInfo: { remainingPercent: 10 } },
     },
   });
-  assert.equal(quota.tier, null);
+  assert.equal(quota.tier, "free-tier");
   assert.equal(quota.credits_remaining, 40);
   assert.equal(quota.gemini_weekly_remaining, 50);
   assert.equal(quota.third_party_five_hour_remaining, 10);
@@ -784,6 +993,97 @@ test("antigravity credential parser reads nested hub token json", () => {
   assert.equal(parsed.refresh_token, "1//nested");
   assert.equal(parsed.access_token, "ya29.nested");
   assert.equal(parsed.expiry_timestamp, Date.parse("2026-08-18T12:00:00.000Z") / 1000);
+});
+
+test("antigravity hub credential payload uses consumer auth_method", () => {
+  const { buildAntigravityCredentialPayload, parseCredentialBlob } = require("../engine/antigravity-credential");
+  const payload = JSON.parse(buildAntigravityCredentialPayload({
+    tokens: {
+      access_token: "ya29.hub",
+      refresh_token: "1//hub",
+      token_type: "Bearer",
+      expiry_timestamp: 1_787_000_000,
+    },
+  }));
+  assert.equal(payload.auth_method, "consumer");
+  assert.equal(payload.token.access_token, "ya29.hub");
+  assert.equal(payload.token.refresh_token, "1//hub");
+  assert.equal(payload.token.token_type, "Bearer");
+  assert.match(payload.token.expiry, /Z$/);
+  const parsed = parseCredentialBlob(JSON.stringify(payload));
+  assert.equal(parsed.refresh_token, "1//hub");
+  assert.equal(parsed.access_token, "ya29.hub");
+});
+
+test("antigravity launch starts Hub through the Windows shell with user-data-dir", () => {
+  const runtime = require("../engine/antigravity-runtime");
+  const spawned = [];
+  const fakeCp = {
+    spawn(file, args, options) {
+      spawned.push({ file, args, options });
+      return { once() {}, unref() {} };
+    },
+  };
+  const exePath = "C:\\Users\\a\\AppData\\Local\\Programs\\antigravity\\Antigravity.exe";
+  const userDataDir = "C:\\Users\\a\\AppData\\Roaming\\Antigravity";
+  runtime.launchAntigravity(exePath, fakeCp, { userDataDir });
+  assert.equal(spawned.length, 1);
+  assert.match(String(spawned[0].file), /cmd(\.exe)?$/i);
+  assert.equal(spawned[0].args.includes("start"), true);
+  assert.equal(spawned[0].args.includes(exePath), true);
+  assert.equal(spawned[0].args.includes("--user-data-dir"), true);
+  assert.equal(spawned[0].args.includes(userDataDir), true);
+  assert.equal(spawned[0].args.includes("--reuse-window"), true);
+  assert.equal(spawned[0].options.windowsHide, true);
+  assert.equal(spawned[0].options.detached, true);
+});
+
+test("antigravity hub switch writes system credential and launches without touching leftover vscdb", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const leftover = path.join(root, "leftover.vscdb");
+  await engine.writeAntigravityAuth(leftover, {
+    access_token: "ya29.old-ide",
+    refresh_token: "1//old-ide",
+    expiry_timestamp: 10,
+  });
+  const exePath = path.join(root, "Programs", "antigravity", "Antigravity.exe");
+  fs.mkdirSync(path.dirname(exePath), { recursive: true });
+  fs.writeFileSync(exePath, "fake");
+  const created = await engine.upsertAntigravityAccount({
+    email: "hub@example.com",
+    access_token: "ya29.hub",
+    refresh_token: "1//hub",
+    expiry_timestamp: 99,
+  });
+  const launched = [];
+  const credentials = [];
+  const locks = [];
+  engine.setAntigravityRuntimeForTests({
+    vscdbPath: () => leftover,
+    exePath: () => exePath,
+    userDataDir: () => path.join(root, "Antigravity"),
+    listProcesses: async () => [],
+    writeSystemCredential: async (account) => {
+      credentials.push(account.email);
+      return true;
+    },
+    readSystemCredential: async () => null,
+    restoreSystemCredential: async () => true,
+    clearStaleLock: (dir) => { locks.push(dir); },
+    launch: (target, options) => {
+      launched.push({ target, options });
+      return true;
+    },
+    sleep: async () => {},
+  });
+  const switched = await engine.doAntigravitySwitch(engine.loadAntigravityAcct(created.account.id));
+  assert.equal(switched.launched, true);
+  assert.deepEqual(credentials, ["hub@example.com"]);
+  assert.equal(launched[0].target, exePath);
+  assert.equal(launched[0].options.userDataDir, path.join(root, "Antigravity"));
+  assert.deepEqual(locks, [path.join(root, "Antigravity")]);
+  const leftoverStored = await engine.readAntigravityAuth(leftover, { copyFirst: false });
+  assert.equal(leftoverStored.refresh_token, "1//old-ide");
 });
 
 test("antigravity local import prefers system credential over leftover vscdb", async (t) => {

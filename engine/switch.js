@@ -27,34 +27,62 @@ function execFileAsync(file, args, options = {}) {
   });
 }
 
+const GRACEFUL_WAIT_MS = 1500;
+const FORCE_WAIT_MS = 4000;
+const LEFTOVER_WAIT_MS = 2500;
+const PID_POLL_MS = 50;
+const START_POLL_MS = 50;
+
+const LIST_CODEX_PROCESSES_COMMAND = [
+  "$ErrorActionPreference = 'SilentlyContinue'",
+  "$rows = @(Get-Process -Name 'ChatGPT','Codex','node_repl' -ErrorAction SilentlyContinue | ForEach-Object { [pscustomobject]@{ Name = ($_.ProcessName + '.exe'); ProcessId = $_.Id; ExecutablePath = $_.Path; MainWindowTitle = [string]$_.MainWindowTitle } })",
+  "if ($rows.Count -eq 0) { '[]' } else { @($rows) | ConvertTo-Json -Compress }",
+].join("; ");
+
+function processPath(item) {
+  return String(item?.executablePath || "").replace(/\//g, "\\").toLowerCase();
+}
+
+function isStoreCodexPath(exe) {
+  return exe.includes("windowsapps") && (exe.includes("openai.codex") || exe.includes("openai.chatgpt"));
+}
+
+function isListedCodexProcess(item) {
+  const name = String(item?.name || "").toLowerCase();
+  const exe = processPath(item);
+  if (name === "chatgpt.exe") return true;
+  if (name === "codex.exe") {
+    if (!exe) return true;
+    if (isStoreCodexPath(exe)) return true;
+    return !exe.includes("\\resources\\");
+  }
+  if (name === "node_repl.exe") return isStoreCodexPath(exe);
+  return false;
+}
+
+function mapListedProcess(item) {
+  return {
+    name: item.Name || item.name,
+    pid: Number(item.ProcessId ?? item.pid),
+    parentPid: Number(item.ParentProcessId ?? item.parentPid) || 0,
+    executablePath: item.ExecutablePath || item.executablePath || null,
+    windowTitle: item.MainWindowTitle || item.windowTitle || "",
+  };
+}
+
 async function defaultListProcesses(runCommand = execFileAsync) {
-  const script = [
-    "$items = Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('ChatGPT.exe','Codex.exe','node_repl.exe') }",
-    "$codex = @($items | Where-Object { $_.Name -in @('ChatGPT.exe','Codex.exe') -and (($_.ExecutablePath -like '*WindowsApps*OpenAI.Codex*') -or ($_.ExecutablePath -like '*WindowsApps*OpenAI.ChatGPT*') -or ($_.CommandLine -like '*OpenAI.Codex*') -or ($_.CommandLine -like '*OpenAI.ChatGPT*')) })",
-    "$ids = New-Object 'System.Collections.Generic.HashSet[int]'",
-    "$codex | ForEach-Object { [void]$ids.Add([int]$_.ProcessId) }",
-    // Orphaned helpers (parent GUI already exited) never join the ancestor
-    // closure; seed them directly so they cannot survive a switch.
-    "$items | Where-Object { $_.Name -eq 'node_repl.exe' -and (($_.ExecutablePath -like '*WindowsApps*OpenAI.Codex*') -or ($_.ExecutablePath -like '*WindowsApps*OpenAI.ChatGPT*') -or ($_.CommandLine -like '*OpenAI.Codex*') -or ($_.CommandLine -like '*OpenAI.ChatGPT*')) } | ForEach-Object { [void]$ids.Add([int]$_.ProcessId) }",
-    "do { $changed = $false; foreach ($item in $items) { if ($ids.Contains([int]$item.ParentProcessId) -and -not $ids.Contains([int]$item.ProcessId)) { [void]$ids.Add([int]$item.ProcessId); $changed = $true } } } while ($changed)",
-    "@($items | Where-Object { $ids.Contains([int]$_.ProcessId) } | ForEach-Object { $title = ''; try { $title = [string](Get-Process -Id $_.ProcessId -ErrorAction Stop).MainWindowTitle } catch {}; [pscustomobject]@{ Name = $_.Name; ProcessId = $_.ProcessId; ParentProcessId = $_.ParentProcessId; ExecutablePath = $_.ExecutablePath; MainWindowTitle = $title } }) | ConvertTo-Json -Compress",
-  ].join("; ");
   try {
-    const { stdout } = await runCommand("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    const { stdout } = await runCommand("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", LIST_CODEX_PROCESSES_COMMAND], {
       encoding: "utf8",
       windowsHide: true,
-      timeout: 10000,
+      timeout: 8000,
     });
     const output = String(stdout || "").trim();
-    if (!output) return [];
+    if (!output || output === "[]") return [];
     const parsed = JSON.parse(output);
-    return (Array.isArray(parsed) ? parsed : [parsed]).map((item) => ({
-      name: item.Name,
-      pid: Number(item.ProcessId),
-      parentPid: Number(item.ParentProcessId),
-      executablePath: item.ExecutablePath || null,
-      windowTitle: item.MainWindowTitle || "",
-    })).filter((item) => Number.isInteger(item.pid) && item.pid > 0);
+    return (Array.isArray(parsed) ? parsed : [parsed])
+      .map(mapListedProcess)
+      .filter((item) => Number.isInteger(item.pid) && item.pid > 0 && isListedCodexProcess(item));
   } catch (error) {
     const wrapped = new Error(`Could not enumerate official Codex processes: ${error.message}`, { cause: error });
     wrapped.code = "codex_process_enumeration_failed";
@@ -63,8 +91,23 @@ async function defaultListProcesses(runCommand = execFileAsync) {
   }
 }
 
-function processPath(item) {
-  return String(item?.executablePath || "").replace(/\//g, "\\").toLowerCase();
+function pidIsAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+async function waitForPidsToExit(pids, timeoutMs) {
+  const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
+  let remaining = pids.filter(pidIsAlive);
+  while (remaining.length > 0 && Date.now() < deadline) {
+    await runtime.sleep(PID_POLL_MS);
+    remaining = remaining.filter(pidIsAlive);
+  }
+  return remaining;
 }
 
 function isOfficialGuiProcess(item) {
@@ -87,17 +130,6 @@ const defaultRuntime = {
   listProcesses: defaultListProcesses,
   async gracefulClose(pid) {
     try {
-      await execFileAsync("powershell.exe", [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `try { $p = Get-Process -Id ${Number(pid)} -ErrorAction Stop; [void]$p.CloseMainWindow() } catch {}`,
-      ], {
-        windowsHide: true,
-        timeout: 5000,
-      });
-    } catch {}
-    try {
       await execFileAsync("taskkill.exe", ["/PID", String(pid)], {
         stdio: "ignore",
         windowsHide: true,
@@ -110,7 +142,7 @@ const defaultRuntime = {
   },
   async forceClose(pid) {
     try {
-      await execFileAsync("taskkill.exe", ["/F", "/PID", String(pid)], {
+      await execFileAsync("taskkill.exe", ["/F", "/T", "/PID", String(pid)], {
         stdio: "ignore",
         windowsHide: true,
         timeout: 5000,
@@ -191,26 +223,26 @@ function clearApiBaseUrl() {
   return true;
 }
 
-async function waitForProcessesToExit(pids, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  let remaining = new Set(pids);
-  while (remaining.size > 0 && Date.now() < deadline) {
-    const running = new Set((await runtime.listProcesses()).map((item) => item.pid));
-    remaining = new Set([...remaining].filter((pid) => running.has(pid)));
-    if (remaining.size > 0) await runtime.sleep(200);
-  }
-  return [...remaining];
-}
-
 async function killCodex() {
   const processes = await runtime.listProcesses();
-  const pids = [...new Set(processes.map((item) => item.pid))];
+  const pids = [...new Set(processes.map((item) => item.pid).filter((pid) => Number.isInteger(pid) && pid > 0))];
+  if (pids.length === 0) return pids;
   await Promise.all(pids.map((pid) => runtime.gracefulClose(pid)));
-  const remaining = await waitForProcessesToExit(pids, 4000);
-  await Promise.all(remaining.map((pid) => runtime.forceClose(pid)));
-  const forceRemaining = await waitForProcessesToExit(remaining, 5000);
-  if (forceRemaining.length > 0) {
-    throw new Error(`Official Codex processes did not exit: ${forceRemaining.join(", ")}`);
+  let remaining = await waitForPidsToExit(pids, GRACEFUL_WAIT_MS);
+  if (remaining.length > 0) {
+    await Promise.all(remaining.map((pid) => runtime.forceClose(pid)));
+    remaining = await waitForPidsToExit(remaining, FORCE_WAIT_MS);
+  }
+  if (remaining.length > 0) {
+    throw new Error(`Official Codex processes did not exit: ${remaining.join(", ")}`);
+  }
+  const leftovers = await runtime.listProcesses();
+  if (leftovers.length > 0) {
+    await Promise.all(leftovers.map((item) => runtime.forceClose(item.pid)));
+    remaining = await waitForPidsToExit(leftovers.map((item) => item.pid), LEFTOVER_WAIT_MS);
+    if (remaining.length > 0) {
+      throw new Error(`Official Codex processes did not exit: ${remaining.join(", ")}`);
+    }
   }
   logInfo(`Closed ${pids.length} official Codex process(es)`);
   return pids;
@@ -239,7 +271,7 @@ async function startCodex(options = {}) {
       // and rolling back then leaves the running app on different credentials.
       lastEnumerationError = error;
     }
-    await runtime.sleep(250);
+    await runtime.sleep(START_POLL_MS);
   }
   if (lastEnumerationError) {
     logWarn(`Codex start verification skipped (process enumeration unavailable): ${lastEnumerationError.message}`);
@@ -297,8 +329,13 @@ async function doSwitch(account, options = {}) {
     [accountPath, captureFile(accountPath)],
   ]);
 
+  const started = Date.now();
+  let killMs = 0;
+  let startMs = 0;
   try {
+    const killStarted = Date.now();
     await killCodex();
+    killMs = Date.now() - killStarted;
     clearApiBaseUrl();
     const authValue = writeAuthJson(account);
     writeProjection(account, authValue);
@@ -309,7 +346,10 @@ async function doSwitch(account, options = {}) {
 
     account.last_used = ts();
     saveAcct(account);
+    const startStarted = Date.now();
     await startCodex();
+    startMs = Date.now() - startStarted;
+    logInfo(`Codex switch timings kill=${killMs}ms start=${startMs}ms total=${Date.now() - started}ms`);
     logInfo("Codex account switch transaction completed");
     return { already: false, account };
   } catch (error) {

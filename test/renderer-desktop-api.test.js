@@ -85,7 +85,7 @@ function bridge(overrides = {}) {
       selected_account_ids: [],
       sync_interval_minutes: 10,
     }),
-    getAppInfo: () => ok({ name: "Codex Account Manager", version: "test" }),
+    getAppInfo: () => ok({ name: "Quota Switcher", version: "test" }),
     getCodexStatus: () => ok({ installed: true }),
     getUpdateStatus: () => ok({ status: "idle" }),
     getAuthState: () => ok({ status: "aligned", requiresResolution: false }),
@@ -480,7 +480,8 @@ test("settings daemon card lists product jobs without following the sidebar", ()
   assert.match(settings, /daemonState\.status !== 'Running' && settings\.globalSwitch/);
   assert.doesNotMatch(settings, /settings\.globalSwitch && productById\(product\)\.features\.autoSwitch/);
   assert.doesNotMatch(sidebar, /Codex Daemon/);
-  assert.match(sidebar, /Daemon 运行中/);
+  assert.doesNotMatch(sidebar, /Daemon 运行中/);
+  assert.doesNotMatch(sidebar, /Daemon 已暂停|Daemon 已停止/);
   assert.match(settings, /跟随 \{productById\(product\)\.label\}/);
   assert.match(settings, /line-clamp-2/);
   assert.doesNotMatch(settings, /max-w-xs truncate/);
@@ -533,19 +534,24 @@ test("dashboard maps OpenAI plan types to official names", async () => {
       { id: "go", email: "go@example.com", plan_type: "go", token_status: tokenStatus },
       { id: "ent", email: "ent@example.com", plan_type: "enterprise", token_status: tokenStatus },
       { id: "free", email: "free@example.com", plan_type: "free", token_status: tokenStatus },
+      { id: "freeplan", email: "freeplan@example.com", plan_type: "chatgptfreeplan", token_status: tokenStatus },
+      { id: "goplan", email: "goplan@example.com", plan_type: "chatgptgoplan", token_status: tokenStatus },
     ]),
   }));
 
   const snapshot = await desktopApi.loadDashboardState();
   assert.deepEqual(
     snapshot.accounts.map((account) => account.plan),
-    ["Plus", "Pro", "Go", "Enterprise", "Standard"],
+    ["Plus", "Pro", "Go", "Enterprise", "Free", "Free", "Go"],
   );
   const { planLabel } = loadDesktopExports(bridge());
-  assert.equal(planLabel("Plus"), "Plus 套餐");
-  assert.equal(planLabel("Pro"), "Pro 套餐");
-  assert.equal(planLabel("Team Plan"), "Team 套餐");
-  assert.equal(planLabel(""), "套餐");
+  assert.equal(planLabel("Plus"), "Plus Plan");
+  assert.equal(planLabel("Pro"), "Pro Plan");
+  assert.equal(planLabel("Team Plan"), "Team Plan");
+  assert.equal(planLabel("Go"), "Go Plan");
+  assert.equal(planLabel("Free"), "Free Plan");
+  assert.equal(planLabel("免费"), "Free Plan");
+  assert.equal(planLabel(""), "");
 });
 
 test("quota auto-sync uses one minute for the current account and ten for others", () => {
@@ -1169,8 +1175,8 @@ test("cursor account mapping never uses ban status and rounds leftover quota", (
   const bars = loadDesktopExports(bridge()).quotaBarsForAccount(team);
   assert.equal(bars.length, 3);
   assert.equal(bars[0].label, "套餐用量");
-  assert.equal(bars[1].label, "Auto");
-  assert.equal(bars[2].label, "API");
+  assert.equal(bars[1].label, "Auto + Composer Usage");
+  assert.equal(bars[2].label, "API Usage");
   const failedBars = loadDesktopExports(bridge()).quotaBarsForAccount({
     ...team,
     status: "SYNC_FAILED",
@@ -1396,8 +1402,18 @@ test("antigravity plans map to Free Pro Ultra without Standard", () => {
   }, null);
   assert.equal(free.plan, "Free");
   assert.equal(free.priority, "Normal");
-  assert.equal(planLabel(free.plan), "免费");
-  assert.notEqual(planLabel(free.plan), "Standard 套餐");
+  assert.equal(planLabel(free.plan), "Free Plan");
+  assert.notEqual(planLabel(free.plan), "Standard Plan");
+  assert.notEqual(planLabel(free.plan), "免费");
+
+  const unpaid = mapAntigravityAccountForUi({
+    id: "antigravity_standard",
+    email: "ag@example.com",
+    plan_type: "standard-tier",
+    quota: { tier: "standard-tier" },
+  }, null);
+  assert.equal(unpaid.plan, "Free");
+  assert.equal(planLabel(unpaid.plan), "Free Plan");
 
   const pro = mapAntigravityAccountForUi({
     id: "antigravity_pro",
@@ -1405,7 +1421,7 @@ test("antigravity plans map to Free Pro Ultra without Standard", () => {
     plan_type: "PRO",
   }, null);
   assert.equal(pro.plan, "Pro");
-  assert.equal(planLabel(pro.plan), "Pro 套餐");
+  assert.equal(planLabel(pro.plan), "Pro Plan");
 
   const ultra = mapAntigravityAccountForUi({
     id: "antigravity_ultra",
@@ -1415,14 +1431,22 @@ test("antigravity plans map to Free Pro Ultra without Standard", () => {
   }, null);
   assert.equal(ultra.plan, "Ultra");
   assert.equal(ultra.priority, "High");
-  assert.equal(planLabel(ultra.plan), "Ultra 套餐");
+  assert.equal(planLabel(ultra.plan), "Ultra Plan");
 
   const empty = mapAntigravityAccountForUi({
     id: "antigravity_empty_plan",
     email: "ag@example.com",
   }, null);
   assert.equal(empty.plan, "");
-  assert.equal(planLabel(empty.plan), "套餐");
+  assert.equal(planLabel(empty.plan), "");
+});
+
+test("sync-failed accounts do not show a bare Plan label", () => {
+  const { planCaption, planLabel } = loadDesktopExports(bridge());
+  assert.equal(planCaption({ plan: "", status: "SYNC_FAILED" }), "");
+  assert.equal(planCaption({ plan: "Pro", status: "SYNC_FAILED" }), "");
+  assert.equal(planCaption({ plan: "Pro", status: "ACTIVE" }), "Pro Plan");
+  assert.equal(planLabel(""), "");
 });
 
 test("antigravity user messages never show 已封号 or Cursor quota copy", () => {
@@ -1609,6 +1633,11 @@ test("oauth and import copy distinguish updated existing accounts", () => {
     email: "old@example.com",
     isReauth: true,
   }), "已重新授权 old@example.com");
+  assert.equal(oauthFinishedCopy({
+    product: "codex",
+    email: "tra@example.com",
+    switched: true,
+  }), "已添加 tra@example.com，并已切换为当前账号");
   assert.equal(importAccountCopy({
     product: "antigravity",
     email: "same@example.com",
@@ -1637,6 +1666,62 @@ test("antigravity empty refresh maps to sync-failed not 暂无此项", () => {
   assert.equal(mapped.status, "SYNC_FAILED");
   assert.equal(cursorEmptyQuotaText(mapped), "这次没查清");
   assert.equal(accountHasVisibleQuota(mapped), false);
+});
+
+test("antigravity free-tier with no family windows shows 暂无此项 not 没查清", () => {
+  const { mapAntigravityAccountForUi, cursorEmptyQuotaText, planCaption, planLabel } = loadDesktopExports(bridge());
+  const mapped = mapAntigravityAccountForUi({
+    id: "antigravity_free_empty",
+    email: "free@example.com",
+    plan_type: "free-tier",
+    quota: { tier: "free-tier" },
+    quota_error: null,
+    probe: { status: "active" },
+    token_status: {
+      accessAvailable: true,
+      refreshAvailable: true,
+      expired: false,
+      timeLeft: 2400,
+    },
+  }, null);
+  assert.equal(mapped.status, "ACTIVE");
+  assert.equal(mapped.plan, "Free");
+  assert.equal(planCaption(mapped), "Free Plan");
+  assert.equal(planLabel(mapped.plan), "Free Plan");
+  assert.equal(cursorEmptyQuotaText(mapped), "暂无此项");
+  assert.notEqual(cursorEmptyQuotaText(mapped), "这次没查清");
+});
+
+test("antigravity free weekly-only quota leaves 5h bars empty", () => {
+  const { mapAntigravityAccountForUi, antigravityQuotaFamilies, cursorEmptyQuotaText } = loadDesktopExports(bridge());
+  const mapped = mapAntigravityAccountForUi({
+    id: "antigravity_free_weekly",
+    email: "free@example.com",
+    plan_type: "free-tier",
+    quota: {
+      tier: "free-tier",
+      gemini_weekly_remaining: 100,
+      gemini_weekly_reset_time: "2026-08-26T17:44:25Z",
+      gemini_five_hour_remaining: null,
+      third_party_weekly_remaining: 100,
+      third_party_weekly_reset_time: "2026-08-26T17:44:25Z",
+      third_party_five_hour_remaining: null,
+    },
+    quota_error: null,
+    probe: { status: "active" },
+    token_status: {
+      accessAvailable: true,
+      refreshAvailable: true,
+      expired: false,
+      timeLeft: 1260,
+    },
+  }, null);
+  const families = antigravityQuotaFamilies(mapped);
+  assert.equal(families[0].weekly.remaining, 100);
+  assert.equal(families[0].fiveHour.remaining, null);
+  assert.equal(families[1].weekly.remaining, 100);
+  assert.equal(families[1].fiveHour.remaining, null);
+  assert.equal(cursorEmptyQuotaText(mapped), "暂无此项");
 });
 
 test("antigravity preserved quota_error after upsert stays 这次没查清", () => {

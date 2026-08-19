@@ -79,6 +79,7 @@ import AutoSwitchView from './components/AutoSwitchView';
 import AccountsView from './components/AccountsView';
 import SettingsView from './components/SettingsView';
 import AuthStatusBanner from './components/AuthStatusBanner';
+import { APP_GITHUB_URL } from './brand';
 import { 
   Bell, 
   X, 
@@ -749,20 +750,29 @@ function DashboardApp() {
       return;
     }
     const isReauth = !!(status.targetAccountId || result?.targetAccountId);
+    if (kind === 'codex' && result?.accountId && !isReauth) {
+      applyCurrentAccountBadge('codex', result.accountId);
+    }
     const message = oauthFinishedCopy({
       product: kind,
       email: result?.email,
       isReauth,
       updated: !!result?.updated,
+      switched: !!result?.switched,
     });
     addToast(message, 'success', kind);
     addLogEntry(message, 'success', kind);
+    if (result?.switchError) {
+      const switchMessage = toUserMessage(result.switchError);
+      addToast(switchMessage, 'warning', kind);
+      addLogEntry(switchMessage, 'warning', kind);
+    }
     if (kind === 'antigravity' && result?.accountId) {
       void actions.refreshQuota('antigravity', result.accountId)
         .catch(() => {})
         .then(() => loadDashboardState(false));
     }
-  }, [addLogEntry, addToast, loadDashboardState]);
+  }, [addLogEntry, addToast, applyCurrentAccountBadge, loadDashboardState]);
 
   const oauthStatusFor = (kind: ProductKind) => {
     if (kind === 'antigravity') return antigravityOAuthStatusRef.current;
@@ -1666,7 +1676,7 @@ function DashboardApp() {
   const handleCheckUpdates = async () => {
     if (!desktopBridgeAvailable) return;
     if (!appInfo?.updateEnabled) {
-      await handleOpenExternal(`${appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}/releases`);
+      await handleOpenExternal(`${appInfo?.repository || APP_GITHUB_URL}/releases`);
       addToast('已打开 GitHub 发布页', 'info');
       return;
     }
@@ -1802,7 +1812,6 @@ function DashboardApp() {
         setActiveTab={setActiveTab}
         product={product}
         onProductChange={handleProductChange}
-        daemonState={daemonState}
         onShowSupport={() => setShowSupport(true)}
         onShowUpdates={() => setShowUpdates(true)}
       />
@@ -1972,7 +1981,7 @@ function DashboardApp() {
                   canInstallUpdate={updateStatus?.status === 'downloaded'}
                   updateEnabled={!!appInfo?.updateEnabled}
                   tokenAccountsByProduct={{ codex: codexAccounts, cursor: cursorAccounts, antigravity: antigravityAccounts }}
-                  repositoryUrl={appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}
+                  repositoryUrl={appInfo?.repository || APP_GITHUB_URL}
                   onOpenLogs={desktopBridgeAvailable ? async () => { await desktopApi.openLogs(); } : undefined}
                   onShowFloatWindow={async () => {
                     if (!desktopBridgeAvailable) return;
@@ -1997,7 +2006,7 @@ function DashboardApp() {
         >
           <button 
             onClick={() => {
-              void handleOpenExternal(`${appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}/blob/main/docs/privacy.md`);
+              void handleOpenExternal(`${appInfo?.repository || APP_GITHUB_URL}/blob/main/docs/privacy.md`);
             }}
             className="hover:text-label cursor-pointer"
             id="footer-privacy"
@@ -2202,7 +2211,7 @@ function DashboardApp() {
                   <button
                     type="button"
                     className="text-accent cursor-pointer"
-                    onClick={() => void handleOpenExternal(`${appInfo?.repository || 'https://github.com/3xiaoshayu/codex-account-manager'}/issues`)}
+                    onClick={() => void handleOpenExternal(`${appInfo?.repository || APP_GITHUB_URL}/issues`)}
                   >
                     去提交
                   </button>
@@ -2258,9 +2267,9 @@ function DashboardApp() {
                 <div>
                   <h4 className="font-bold text-white mb-1">本轮打磨</h4>
                   <ul className="list-disc pl-4 space-y-1 text-label-2 text-[11px]">
-                    <li>侧栏名称改回 Account Manager。</li>
+                    <li>侧栏和应用名改为 Quota Switcher。</li>
                     <li>额度稍后重试不再当成 Daemon 失败，设置里也不再挂着警告。</li>
-                    <li>Cursor 额度条和小窗统一叫 Auto，不再写 Auto + Composer。</li>
+                    <li>账号管理和配额总览里 Cursor 额度叫 Auto + Composer Usage / API Usage，小窗仍用 Auto / API。</li>
                     <li>帮助不再要求提交可复现信息，入口改成去提交。</li>
                     <li>需重新授权的账号不再重复写一整句说明。</li>
                   </ul>

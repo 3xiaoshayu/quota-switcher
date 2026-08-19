@@ -18,6 +18,7 @@ const { withAccountLock } = require("./operation-locks");
 const { getOAuthStatus } = require("./oauth");
 const { getCursorOAuthStatus } = require("./cursor-oauth");
 const { logInfo, logWarn } = require("./logger");
+const { APP_DISPLAY_NAME } = require("./app-brand");
 
 const OAUTH_TTL_MS = 5 * 60 * 1000;
 
@@ -213,7 +214,7 @@ function createCallbackListener(pending) {
       return;
     }
     response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    response.end(htmlPage("授权完成", "<p>可以关闭此页，回到 Codex Account Manager。</p>"));
+    response.end(htmlPage("授权完成", `<p>可以关闭此页，回到 ${APP_DISPLAY_NAME}。</p>`));
     finish(null, parsed.code);
   });
   server.on("error", (error) => {

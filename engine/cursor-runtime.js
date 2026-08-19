@@ -4,6 +4,7 @@ const path = require("node:path");
 const cp = require("node:child_process");
 const { httpJson } = require("./http-client");
 const { logWarn } = require("./logger");
+const { isThisAppPath } = require("./app-brand");
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -100,7 +101,7 @@ function isCursorProcess(item) {
   if (name === "cursor.exe") return true;
   if (name !== "electron.exe") return false;
   if (!exe.includes("\\cursor\\")) return false;
-  if (exe.includes("codex-account-manager") || exe.includes("codex-deskep")) return false;
+  if (isThisAppPath(exe)) return false;
   return true;
 }
 

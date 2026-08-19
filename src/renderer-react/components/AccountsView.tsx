@@ -16,7 +16,7 @@ import {
   MoreHorizontal
 } from 'lucide-react';
 import { AccountQuota, DesktopAuthState, DesktopOAuthStatus, ProductKind } from '../types';
-import { antigravityQuotaFamilies, avatarGradient, needsHandling, planLabel, quotaBarColor, quotaBarsForAccount, quotaSummaryPercent, quotaWindowSummary, canRefreshQuota, canSwitchAccount, cursorEmptyQuotaText, formatResetLine, isAntigravityAccount, isBannedStatus, isManagedProductAccount, isRedundantQuotaNotice, statusDotForAccount, statusTextForAccount } from '../api/desktop';
+import { antigravityQuotaFamilies, avatarGradient, needsHandling, planCaption, planLabel, quotaBarColor, quotaBarsForAccount, quotaSummaryPercent, quotaWindowSummary, canRefreshQuota, canSwitchAccount, cursorEmptyQuotaText, formatResetLine, isAntigravityAccount, isBannedStatus, isManagedProductAccount, isRedundantQuotaNotice, statusDotForAccount, statusTextForAccount } from '../api/desktop';
 import { isManagedProduct, officialClientLabel, productLabel, toProductUserMessage } from '../api/product-adapter';
 
 function formMessage(kind: ProductKind | undefined, raw: unknown) {
@@ -295,10 +295,13 @@ export default function AccountsView({
   const productName = productLabel(product);
   const clientName = officialClientLabel(product);
   const oauthLoginName = product === 'antigravity' ? 'Google' : clientName;
+  const currentPlan = currentAccount ? planCaption(currentAccount) : '';
   const accountsMeta = accounts.length === 0
     ? `还没有 ${productName} 账号`
     : currentAccount
-      ? `${accounts.length} 个 ${productName} 账号 · 当前 ${planLabel(currentAccount.plan)}`
+      ? (currentPlan
+        ? `${accounts.length} 个 ${productName} 账号 · 当前 ${currentPlan}`
+        : `${accounts.length} 个 ${productName} 账号`)
       : `${accounts.length} 个 ${productName} 账号 · 尚未指定当前`;
   const handlingCount = accounts.filter(needsHandling).length;
 
@@ -352,7 +355,7 @@ export default function AccountsView({
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="搜索邮箱或套餐..."
+            placeholder="搜索邮箱或 Plan..."
             className="w-full pl-10 pr-4 py-2.5 bg-fill border border-sep rounded-xl text-label placeholder-label-3 focus:outline-none focus:ring-2 focus:ring-accent/60 transition-all text-xs font-sans font-medium"
             id="accounts-search-input"
           />
@@ -460,6 +463,7 @@ export default function AccountsView({
             || (!cursorAccount && account.weeklyBlocksFiveHour ? '周额度已用尽，5 小时额度暂不可用。' : null);
           const switchBlocked = !canSwitchAccount(account);
           const refreshBlocked = !canRefreshQuota(account);
+          const planText = planCaption(account);
           const needsReauth = account.status === 'SUSPENDED' && !!onReauthorizeAccount;
           const officialAligned = cursorAccount
             ? !!account.isCurrent
@@ -509,7 +513,9 @@ export default function AccountsView({
                         <span className={`w-1.5 h-1.5 rounded-full ${statusDotForAccount(account)}`} />
                         {statusTextForAccount(account)}
                       </span>
-                      <span className="text-[11px] text-label-3">{planLabel(account.plan)}</span>
+                      {planText ? (
+                        <span className="text-[11px] text-label-3">{planText}</span>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -595,7 +601,7 @@ export default function AccountsView({
                     const compact = remaining === null || remaining === 0 || !/^\d+%$/.test(summaryText);
                     return (
                       <div className={`bg-fill rounded-xl p-4 text-left ${wide ? 'col-span-2' : ''}`} id={`quota-box-${bar.key}-${account.id}`} key={bar.key}>
-                        <span className="text-[12px] font-medium text-label-3">{bar.label}</span>
+                        <span className="text-[12px] font-medium leading-snug text-label-3">{bar.label}</span>
                         <span className={`block mt-1.5 tracking-tight ${
                           compact ? 'text-[13px] leading-5 font-medium text-label-3' : 'text-[22px] font-semibold tabular-nums text-label'
                         }`}>{summaryText}</span>

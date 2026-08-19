@@ -3,7 +3,7 @@ const { parseTsStr } = require("./time-utils");
 const { httpJson, buildCodexHeaders, extractErrorCode, setHttpJsonTransport } = require("./http-client");
 const { setSecretCodec, protectData, unprotectData, ensureDir, normalizeAccountId, accountFilePath, loadIdx, saveIdx, withIndexLock, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct, getStorageDiagnostics, rebuildIndex, flushPendingAccountRewrites, resetPendingAccountRewritesForTests } = require("./storage");
 const { writeAuthJson, writeProjection, clearApiBaseUrl, killCodex, startCodex, doSwitch, launchOfficialCodex, setSwitchRuntimeForTests } = require("./switch");
-const { oauthLoginFlow, restorePendingOAuth, cancelOAuth, completeOAuthManually, getOAuthStatus, setOpenUrlHandler, upsert, sameAccountIdentity, collapseDuplicateCodexAccounts } = require("./oauth");
+const { oauthLoginFlow, restorePendingOAuth, cancelOAuth, completeOAuthManually, getOAuthStatus, setOpenUrlHandler, setOAuthAccountSavedHandler, upsert, sameAccountIdentity, collapseDuplicateCodexAccounts } = require("./oauth");
 const { inspectAuthState, adoptOfficialAuth, reapplyManagedAuth, authFingerprint, identityMatchesAccount } = require("./auth-state");
 const { initLogger, logInfo, logWarn, logError, getLogDir, sanitizeMessage } = require("./logger");
 const { refreshOneTok, needsRefresh, refreshAll } = require("./token-refresh");
@@ -46,7 +46,7 @@ module.exports = {
   // switch
   writeAuthJson, writeProjection, clearApiBaseUrl, killCodex, startCodex, doSwitch, launchOfficialCodex, setSwitchRuntimeForTests,
   // oauth
-  oauthLoginFlow, restorePendingOAuth, cancelOAuth, completeOAuthManually, getOAuthStatus, setOpenUrlHandler, upsert, sameAccountIdentity, collapseDuplicateCodexAccounts,
+  oauthLoginFlow, restorePendingOAuth, cancelOAuth, completeOAuthManually, getOAuthStatus, setOpenUrlHandler, setOAuthAccountSavedHandler, upsert, sameAccountIdentity, collapseDuplicateCodexAccounts,
   // auth state
   inspectAuthState, adoptOfficialAuth, reapplyManagedAuth, authFingerprint, identityMatchesAccount,
   // logger

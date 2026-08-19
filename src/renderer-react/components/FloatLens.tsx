@@ -11,7 +11,7 @@ import {
   hideStaleQuota,
   isManagedProductAccount,
   lensQuotaWindows,
-  planLabel,
+  planCaption,
   quotaHero,
   quotaStroke,
   statusTextForAccount,
@@ -78,7 +78,7 @@ function blockedSwitchText(account: AccountQuota): string {
 }
 
 function planBadgeText(account: AccountQuota): string {
-  return planLabel(account.plan);
+  return planCaption(account);
 }
 
 function statusBadgeText(account: AccountQuota): string | null {

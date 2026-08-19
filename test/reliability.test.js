@@ -25,6 +25,29 @@ function freshEngine(t) {
     decrypt: value => Buffer.from(value, "base64").toString("utf8"),
   };
   engine.setSecretCodec(codec);
+  let launched = false;
+  engine.setSwitchRuntimeForTests({
+    assertInstalled() {},
+    listProcesses: async () => launched
+      ? [{
+        name: "ChatGPT.exe",
+        pid: 4242,
+        parentPid: 0,
+        executablePath: "C:\\Program Files\\WindowsApps\\OpenAI.ChatGPT\\ChatGPT.exe",
+        windowTitle: "ChatGPT",
+      }]
+      : [],
+    gracefulClose: async () => {
+      launched = false;
+      return true;
+    },
+    forceClose: async () => {
+      launched = false;
+      return true;
+    },
+    launch() { launched = true; },
+    sleep: async () => {},
+  });
   t.after(() => {
     try { engine.cancelOAuth(); } catch {}
     try { engine.resetPendingAccountRewritesForTests(); } catch {}
@@ -1940,6 +1963,36 @@ test("official Codex launcher does not treat the explorer activation exit code a
   assert.equal(unrefCalled, true);
 });
 
+test("codex process listing uses Get-Process instead of a full Win32_Process scan", async () => {
+  const { defaultListProcesses } = require("../engine/switch");
+  let command = "";
+  const processes = await defaultListProcesses(async (_file, args) => {
+    command = String(args[args.length - 1] || "");
+    return {
+      stdout: JSON.stringify([
+        {
+          Name: "ChatGPT.exe",
+          ProcessId: 4242,
+          ExecutablePath: "C:\\\\Program Files\\\\WindowsApps\\\\OpenAI.Codex_1\\\\ChatGPT.exe",
+          MainWindowTitle: "ChatGPT",
+        },
+        {
+          Name: "node_repl.exe",
+          ProcessId: 4243,
+          ExecutablePath: "C:\\\\Windows\\\\System32\\\\node_repl.exe",
+        },
+      ]),
+    };
+  });
+  assert.match(command, /Get-Process/);
+  assert.doesNotMatch(command, /Get-CimInstance/);
+  assert.doesNotMatch(command, /Win32_Process/);
+  assert.equal(processes.length, 1);
+  assert.equal(processes[0].pid, 4242);
+  assert.equal(processes[0].name, "ChatGPT.exe");
+  assert.equal(processes[0].windowTitle, "ChatGPT");
+});
+
 test("Codex start verification waits for the GUI process and rejects a crash window", async t => {
   const { engine } = freshEngine(t);
   const helperOnly = [{
@@ -2106,10 +2159,65 @@ test("OAuth callback page waits for token save and uses Chinese copy", async t =
     }
   }
   assert.match(html, /授权已保存/);
-  assert.match(html, /可以回到 Codex 账号管理器/);
+  assert.match(html, /可以回到 Quota Switcher/);
   assert.equal(html.includes("Authorization received"), false);
   const result = await pendingPromise;
   assert.equal(result.account.email, "callback-page@example.com");
+});
+
+test("Codex OAuth add switches the new account into official Codex", async t => {
+  const { engine, codec } = freshEngine(t);
+  const previous = await addAccount(engine, "ham@example.com", "acct-ham", "ham");
+  await engine.doSwitch(previous);
+  assert.equal(engine.currentAcct().id, previous.id);
+
+  const pendingPromise = engine.oauthLoginFlow({
+    openBrowser: false,
+    exchangeCode: async () => tokens("tra@example.com", "acct-tra", "tra"),
+  });
+  const pendingPath = require("../engine/oauth").PENDING_PATH;
+  const startedAt = Date.now();
+  while (!fs.existsSync(pendingPath) && Date.now() - startedAt < 2000) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  const envelope = JSON.parse(fs.readFileSync(pendingPath, "utf8"));
+  const decoded = JSON.parse(codec.decrypt(envelope.protected_payload));
+  const callbackUrl = `${decoded.redirectUri}?code=oauth-code&state=${decoded.state}`;
+  const result = await engine.completeOAuthManually(callbackUrl);
+  await pendingPromise;
+  assert.equal(result.account.email, "tra@example.com");
+  assert.equal(engine.currentAcct().id, result.account.id);
+  assert.notEqual(engine.currentAcct().id, previous.id);
+  assert.equal(result.switched, true);
+  assert.equal(result.switchError || null, null);
+});
+
+test("Codex OAuth reauth of the same account does not switch away", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "ham@example.com", "acct-ham", "ham");
+  const other = await addAccount(engine, "other@example.com", "acct-other", "other");
+  await engine.doSwitch(current);
+  assert.equal(engine.currentAcct().id, current.id);
+
+  const pendingPromise = engine.oauthLoginFlow({
+    openBrowser: false,
+    targetAccountId: other.id,
+    exchangeCode: async () => tokens("other@example.com", "acct-other", "other-reauth"),
+  });
+  const pendingPath = require("../engine/oauth").PENDING_PATH;
+  const startedAt = Date.now();
+  while (!fs.existsSync(pendingPath) && Date.now() - startedAt < 2000) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  const envelope = JSON.parse(fs.readFileSync(pendingPath, "utf8"));
+  const decoded = JSON.parse(Buffer.from(envelope.protected_payload, "base64").toString("utf8"));
+  const callbackUrl = `${decoded.redirectUri}?code=oauth-code&state=${decoded.state}`;
+  const result = await engine.completeOAuthManually(callbackUrl);
+  await pendingPromise;
+  assert.equal(result.account.id, other.id);
+  assert.equal(result.mismatch, false);
+  assert.equal(engine.currentAcct().id, current.id);
+  assert.equal(!!result.switched, false);
 });
 
 test("persistent logger removes credentials and personal email from messages", t => {

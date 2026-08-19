@@ -1,6 +1,7 @@
 const path = require("node:path");
 const { logError, sanitizeMessage } = require("../../engine/logger");
 const { describeCaughtError } = require("../../engine/sqlite-native");
+const { APP_DISPLAY_NAME, APP_GITHUB_URL } = require("../../engine/app-brand");
 let engine = null;
 
 const SWITCH_CHANNELS = new Set(["cursor:switch", "antigravity:switch"]);
@@ -228,6 +229,12 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         if (!account) return;
         try { broadcast("quota:updated", { product, account, quota: account.quota || null }); } catch {}
     };
+    if (typeof eng.setOAuthAccountSavedHandler === "function") {
+        eng.setOAuthAccountSavedHandler((result) => {
+            const published = publicAccount(eng, result.account);
+            emitAccountUpdated("codex", published, { current: !result.switchError });
+        });
+    }
 
     async function withTimeout(task, ms, fallback = null) {
         let timer = null;
@@ -250,12 +257,12 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         return ok(true);
     });
     handle("app:info", () => ok(updateService?.getAppInfo?.() || {
-        name: "Codex Account Manager",
+        name: APP_DISPLAY_NAME,
         version: app.getVersion(),
         releaseChannel: String(app.getVersion()).includes("-") ? "beta" : "stable",
         isPackaged: app.isPackaged,
         updateEnabled: false,
-        repository: "https://github.com/3xiaoshayu/codex-account-manager",
+        repository: APP_GITHUB_URL,
     }));
     handle("update:status", () => ok(updateService?.getStatus?.() || {
         status: "disabled",
@@ -855,7 +862,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                 if (!account) return fail("Account does not exist");
                 const result = await eng.doSwitch(account);
                 const published = publicAccount(eng, result.account);
-                emitAccountUpdated("codex", published);
+                emitAccountUpdated("codex", published, { current: true });
                 return ok({ ...result, account: published });
             });
         } catch (error) { return fail(error.message); }
@@ -1152,12 +1159,12 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             },
             config: typeof eng.loadAutoSwitchCfg === "function" ? eng.loadAutoSwitchCfg() : null,
             appInfo: updateService?.getAppInfo?.() || {
-                name: "Codex Account Manager",
+                name: APP_DISPLAY_NAME,
                 version: app.getVersion(),
                 releaseChannel: String(app.getVersion()).includes("-") ? "beta" : "stable",
                 isPackaged: app.isPackaged,
                 updateEnabled: false,
-                repository: "https://github.com/3xiaoshayu/codex-account-manager",
+                repository: APP_GITHUB_URL,
             },
             oauthStatus: typeof eng.getOAuthStatus === "function" ? eng.getOAuthStatus() : null,
             cursorOAuthStatus: typeof eng.getCursorOAuthStatus === "function" ? eng.getCursorOAuthStatus() : null,

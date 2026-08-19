@@ -11,7 +11,7 @@ import {
   KeyRound
 } from 'lucide-react';
 import { AccountQuota, ProductKind } from '../types';
-import { antigravityQuotaFamilies, averageRemainingCaption, avatarGradient, canRefreshQuota, cursorEmptyQuotaText, formatDateTime, formatResetLine, hideStaleQuota, isAntigravityAccount, isBannedStatus, isManagedProductAccount, isRedundantQuotaNotice, needsHandling, planLabel, quotaBarColor, quotaBarsForAccount, quotaSummaryPercent, quotaWindowSummary, statusDotForAccount, statusTextForAccount } from '../api/desktop';
+import { antigravityQuotaFamilies, averageRemainingCaption, avatarGradient, canRefreshQuota, cursorEmptyQuotaText, formatDateTime, formatResetLine, hideStaleQuota, isAntigravityAccount, isBannedStatus, isManagedProductAccount, isRedundantQuotaNotice, needsHandling, planCaption, quotaBarColor, quotaBarsForAccount, quotaSummaryPercent, quotaWindowSummary, statusDotForAccount, statusTextForAccount } from '../api/desktop';
 import { isManagedProduct, officialClientLabel } from '../api/product-adapter';
 
 function remainingCaption(remaining: number | null, emptyText: string) {
@@ -266,7 +266,9 @@ export default function QuotasView({
                   {getAccountIcon(account)}
                   <div className="flex flex-col select-all min-w-0" id={`quota-card-titles-${account.id}`}>
                     <h3 className="font-bold text-label tracking-wide text-sm font-sans truncate" title={account.email}>{account.email}</h3>
-                    <span className="text-xs text-label-2 mt-0.5">{planLabel(account.plan)}</span>
+                    {planCaption(account) ? (
+                      <span className="text-xs text-label-2 mt-0.5">{planCaption(account)}</span>
+                    ) : null}
                   </div>
                 </div>
                 {getStatusBadge(account)}

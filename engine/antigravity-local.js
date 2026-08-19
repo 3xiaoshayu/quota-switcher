@@ -174,22 +174,30 @@ let officialSyncInFlight = null;
 
 async function syncCurrentAntigravityFromOfficialUncached() {
   const existing = currentAntigravityAcct();
-  const dbPath = getAntigravityRuntime().vscdbPath();
+  const runtime = getAntigravityRuntime();
+  let credential = null;
+  try {
+    credential = typeof runtime.readSystemCredential === "function"
+      ? await runtime.readSystemCredential(runtime.execFile)
+      : await readWindowsAntigravityCredential(runtime.execFile);
+  } catch {
+    credential = null;
+  }
+  const dbPath = runtime.vscdbPath();
   let local = null;
   try {
     local = await readAntigravityAuth(dbPath);
   } catch {
-    return existing;
+    local = null;
   }
-  if (!local?.refresh_token && !local?.access_token) return existing;
-  const authId = refreshFingerprint(local.refresh_token || local.access_token);
+  const usedCredential = !!(credential?.refresh_token || credential?.access_token);
+  const refresh = String((usedCredential ? credential.refresh_token : local?.refresh_token) || "").trim();
+  const access = String((usedCredential ? credential.access_token : local?.access_token) || "").trim();
+  if (!refresh && !access) return existing;
+  const authId = refreshFingerprint(refresh || access);
   if (!authId) return existing;
-  let email = "";
-  try {
-    const credential = await readWindowsAntigravityCredential(getAntigravityRuntime().execFile);
-    email = usableEmail(credential?.email);
-  } catch {}
-  if (!email) email = await resolveEmail(local.access_token, "");
+  let email = usableEmail(credential?.email);
+  if (!email) email = await resolveEmail(access, "");
   return withAccountLock("__antigravity_switch__", async () => {
     const current = currentAntigravityAcct();
     const match = listAntigravityAccts().find((account) => sameAntigravityIdentity(account, {

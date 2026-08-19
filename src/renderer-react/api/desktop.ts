@@ -796,8 +796,8 @@ function planForUi(planType: string | null | undefined): AccountQuota['plan'] {
   if (value.includes('team') || value.includes('business')) return 'Team';
   if (value.includes('plus')) return 'Plus';
   if (value.includes('pro')) return 'Pro';
-  if (value === 'go') return 'Go';
-  return 'Standard';
+  if (value === 'go' || value.includes('chatgptgo') || value.includes('goplan')) return 'Go';
+  return 'Free';
 }
 
 function cursorPlanForUi(planType: string | null | undefined): AccountQuota['plan'] {
@@ -805,15 +805,20 @@ function cursorPlanForUi(planType: string | null | undefined): AccountQuota['pla
   if (value.includes('pro')) return 'Pro';
   if (value.includes('plus')) return 'Plus';
   if (value.includes('team') || value.includes('business') || value.includes('enterprise')) return 'Team';
-  if (value === 'go') return 'Go';
-  return 'Standard';
+  if (value === 'go' || value.includes('chatgptgo') || value.includes('goplan')) return 'Go';
+  return 'Free';
 }
 
 export function planLabel(plan: AccountQuota['plan'] | string | null | undefined): string {
   const name = String(plan || '').trim().replace(/\s+(Plan|套餐)$/i, '');
-  if (!name) return '套餐';
-  if (name === 'Free' || name === '免费') return '免费';
-  return `${name} 套餐`;
+  if (!name) return '';
+  const official = name === '免费' ? 'Free' : name;
+  return `${official} Plan`;
+}
+
+export function planCaption(account: Pick<AccountQuota, 'plan' | 'status'>): string {
+  if (account.status === 'SYNC_FAILED') return '';
+  return planLabel(account.plan);
 }
 
 function priorityForUi(account: DesktopAccount): AccountQuota['priority'] {
@@ -1475,8 +1480,8 @@ export function quotaBarsForAccount(account: AccountQuota): Array<{ key: string;
     if (isCursorAccount(account)) {
       return [
         { key: 'plan', label: '套餐用量', remaining: null },
-        { key: 'auto', label: 'Auto', remaining: null },
-        { key: 'api', label: 'API', remaining: null },
+        { key: 'auto', label: 'Auto + Composer Usage', remaining: null },
+        { key: 'api', label: 'API Usage', remaining: null },
       ];
     }
     return [
@@ -1495,8 +1500,8 @@ export function quotaBarsForAccount(account: AccountQuota): Array<{ key: string;
   if (isCursorAccount(account)) {
     return [
       { key: 'plan', label: '套餐用量', remaining: account.cursorPlanRemaining ?? null },
-      { key: 'auto', label: 'Auto', remaining: account.cursorAutoRemaining ?? null },
-      { key: 'api', label: 'API', remaining: account.cursorApiRemaining ?? null },
+      { key: 'auto', label: 'Auto + Composer Usage', remaining: account.cursorAutoRemaining ?? null },
+      { key: 'api', label: 'API Usage', remaining: account.cursorApiRemaining ?? null },
     ];
   }
   return [

@@ -3,7 +3,13 @@ const os = require("node:os");
 const path = require("node:path");
 const cp = require("node:child_process");
 const { httpJson } = require("./http-client");
-const { logWarn } = require("./logger");
+const {
+  readWindowsAntigravityCredential,
+  writeWindowsAntigravityCredential,
+  restoreWindowsAntigravityCredential,
+} = require("./antigravity-credential");
+const { logInfo, logWarn } = require("./logger");
+const { isThisAppPath } = require("./app-brand");
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -42,7 +48,17 @@ function stateDbForUserData(userDataDir) {
   return path.join(userDataDir, "User", "globalStorage", "state.vscdb");
 }
 
-function preferUserDataDir() {
+function preferUserDataDirForExe(exePath) {
+  const [ideDir, hubDir] = userDataCandidates();
+  const exe = processPath({ executablePath: exePath });
+  if (isOfficialHubPath(exe) && !isOfficialIdePath(exe)) return hubDir;
+  if (isOfficialIdePath(exe)) return ideDir;
+  return null;
+}
+
+function preferUserDataDir(exePath) {
+  const fromExe = preferUserDataDirForExe(exePath || firstExistingExe());
+  if (fromExe) return fromExe;
   const candidates = userDataCandidates();
   for (const candidate of candidates) {
     if (fs.existsSync(stateDbForUserData(candidate))) return candidate;
@@ -60,10 +76,10 @@ function defaultVscdbPath() {
 function defaultExeCandidates() {
   const local = localAppData();
   return [
-    path.join(local, "Programs", "Antigravity IDE", "Antigravity IDE.exe"),
-    path.join(local, "Programs", "Antigravity", "Antigravity IDE.exe"),
     path.join(local, "Programs", "antigravity", "Antigravity.exe"),
     path.join(local, "Programs", "Antigravity", "Antigravity.exe"),
+    path.join(local, "Programs", "Antigravity IDE", "Antigravity IDE.exe"),
+    path.join(local, "Programs", "Antigravity", "Antigravity IDE.exe"),
   ];
 }
 
@@ -126,7 +142,7 @@ function processPath(item) {
 }
 
 function isThisManagerPath(exe) {
-  return exe.includes("codex-account-manager") || exe.includes("codex-deskep");
+  return isThisAppPath(exe);
 }
 
 function isOfficialIdePath(exe) {
@@ -146,28 +162,29 @@ function isAntigravityProcess(item) {
   const exe = processPath(item);
   if (isThisManagerPath(exe)) return false;
   if (name === "antigravity ide.exe") return true;
-  if (name === "antigravity.exe") return isOfficialAntigravityPath(exe);
+  if (name === "antigravity.exe") {
+    if (!exe) return true;
+    return isOfficialAntigravityPath(exe);
+  }
   if (name !== "electron.exe") return false;
   return isOfficialAntigravityPath(exe);
 }
 
+const LIST_ANTIGRAVITY_PROCESSES_COMMAND = [
+  "$ErrorActionPreference = 'SilentlyContinue'",
+  "$rows = @(Get-Process -Name 'Antigravity','Antigravity IDE' -ErrorAction SilentlyContinue | ForEach-Object { [pscustomobject]@{ Name = ($_.ProcessName + '.exe'); ProcessId = $_.Id; ParentProcessId = 0; ExecutablePath = $_.Path } })",
+  "if ($rows.Count -eq 0) { '[]' } else { @($rows) | ConvertTo-Json -Compress }",
+].join("; ");
+
 async function defaultListProcesses(runCommand = execFileAsync) {
-  const script = [
-    "$items = Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('Antigravity IDE.exe','Antigravity.exe','electron.exe') }",
-    "$match = @($items | Where-Object { $_.Name -eq 'Antigravity IDE.exe' -or ($_.Name -eq 'Antigravity.exe' -and ($_.ExecutablePath -like '*\\Antigravity IDE\\*' -or $_.ExecutablePath -like '*\\Programs\\antigravity\\*' -or $_.ExecutablePath -like '*\\Programs\\Antigravity\\*')) -or ($_.Name -eq 'electron.exe' -and ($_.ExecutablePath -like '*\\Antigravity IDE\\*' -or $_.ExecutablePath -like '*\\Programs\\antigravity\\*')) })",
-    "$ids = New-Object 'System.Collections.Generic.HashSet[int]'",
-    "$match | ForEach-Object { [void]$ids.Add([int]$_.ProcessId) }",
-    "do { $changed = $false; foreach ($item in $items) { if ($ids.Contains([int]$item.ParentProcessId) -and -not $ids.Contains([int]$item.ProcessId)) { [void]$ids.Add([int]$item.ProcessId); $changed = $true } } } while ($changed)",
-    "@($items | Where-Object { $ids.Contains([int]$_.ProcessId) } | ForEach-Object { [pscustomobject]@{ Name = $_.Name; ProcessId = $_.ProcessId; ParentProcessId = $_.ParentProcessId; ExecutablePath = $_.ExecutablePath } }) | ConvertTo-Json -Compress",
-  ].join("; ");
   try {
-    const { stdout } = await runCommand("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    const { stdout } = await runCommand("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", LIST_ANTIGRAVITY_PROCESSES_COMMAND], {
       encoding: "utf8",
       windowsHide: true,
-      timeout: 10000,
+      timeout: 8000,
     });
     const output = String(stdout || "").trim();
-    if (!output) return [];
+    if (!output || output === "[]") return [];
     const parsed = JSON.parse(output);
     return (Array.isArray(parsed) ? parsed : [parsed]).map((item) => ({
       name: item.Name,
@@ -186,22 +203,75 @@ async function defaultListProcesses(runCommand = execFileAsync) {
   }
 }
 
-function launchAntigravity(exePath, childProcess = cp) {
+function usesWindowsSystemCredential(exePath) {
+  const exe = processPath({ executablePath: exePath || "" });
+  return !!exe && isOfficialHubPath(exe) && !isOfficialIdePath(exe);
+}
+
+function clearStaleAntigravityLock(userDataDir) {
+  if (!userDataDir) return false;
+  let cleared = false;
+  for (const name of ["lockfile", "DevToolsActivePort"]) {
+    const target = path.join(userDataDir, name);
+    try {
+      if (fs.existsSync(target)) {
+        fs.unlinkSync(target);
+        cleared = true;
+      }
+    } catch (error) {
+      logWarn(`Could not clear official Antigravity lock ${name}: ${error.message}`);
+    }
+  }
+  return cleared;
+}
+
+function launchArgsFor(userDataDir) {
+  const args = [];
+  if (userDataDir) {
+    args.push("--user-data-dir", userDataDir);
+  }
+  args.push("--reuse-window");
+  return args;
+}
+
+function spawnOfficialGui(target, args, childProcess) {
+  if (process.platform === "win32") {
+    return childProcess.spawn(process.env.ComSpec || "cmd.exe", [
+      "/d",
+      "/c",
+      "start",
+      "",
+      "/D",
+      path.dirname(target),
+      target,
+      ...args,
+    ], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+  }
+  return childProcess.spawn(target, args, {
+    detached: true,
+    stdio: "ignore",
+  });
+}
+
+function launchAntigravity(exePath, childProcess = cp, options = {}) {
   const target = exePath || defaultExePath();
   if (!target) {
     const error = new Error("Official Antigravity IDE was not found");
     error.code = "antigravity_app_path_not_found";
     throw error;
   }
-  const child = childProcess.spawn(target, [], {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
-  });
+  const userDataDir = options.userDataDir || preferUserDataDirForExe(target) || preferUserDataDir();
+  const args = launchArgsFor(userDataDir);
+  const child = spawnOfficialGui(target, args, childProcess);
   child.once?.("error", (error) => {
-    logWarn(`Could not launch official Antigravity IDE: ${error.message}`);
+    logWarn(`Could not launch official Antigravity: ${error.message}`);
   });
   child.unref?.();
+  logInfo(`Launching official Antigravity: ${target}`);
   return true;
 }
 
@@ -210,9 +280,15 @@ const defaultRuntime = {
   sleep,
   now: () => Date.now(),
   openUrl: null,
+  execFile: execFileAsync,
   vscdbPath: defaultVscdbPath,
   exePath: defaultExePath,
+  userDataDir: preferUserDataDir,
   listProcesses: defaultListProcesses,
+  writeSystemCredential: writeWindowsAntigravityCredential,
+  restoreSystemCredential: restoreWindowsAntigravityCredential,
+  readSystemCredential: readWindowsAntigravityCredential,
+  clearStaleLock: clearStaleAntigravityLock,
   async gracefulClose(pid) {
     try {
       await execFileAsync("taskkill.exe", ["/PID", String(pid)], {
@@ -237,8 +313,8 @@ const defaultRuntime = {
       return false;
     }
   },
-  launch(exePath) {
-    return launchAntigravity(exePath);
+  launch(exePath, options) {
+    return launchAntigravity(exePath, cp, options);
   },
 };
 
@@ -269,5 +345,8 @@ module.exports = {
   isOfficialHubPath,
   launchAntigravity,
   preferUserDataDir,
+  preferUserDataDirForExe,
+  usesWindowsSystemCredential,
+  clearStaleAntigravityLock,
   userDataCandidates,
 };

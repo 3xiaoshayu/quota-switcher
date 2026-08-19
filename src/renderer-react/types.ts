@@ -82,6 +82,8 @@ export interface DesktopOAuthStatus {
     mismatch?: boolean;
     updated?: boolean;
     targetAccountId?: string | null;
+    switched?: boolean;
+    switchError?: string | null;
   } | null;
 }
 
