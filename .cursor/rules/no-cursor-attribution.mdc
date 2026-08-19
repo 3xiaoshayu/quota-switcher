@@ -1,0 +1,14 @@
+---
+description: Never add Cursor attribution trailers to git commits or pull requests
+alwaysApply: true
+---
+
+# 不要把 Cursor 写进 Git 署名
+
+提交说明、PR 正文、代码注释里都不要加这些行：
+
+- `Co-authored-by: Cursor <cursoragent@cursor.com>`
+- `Co-authored-by: Cursor Agent`
+- `Made-with: Cursor`
+
+作者只用仓库维护者自己的 Git 身份。GitHub 贡献者列表里不要出现 cursoragent。
