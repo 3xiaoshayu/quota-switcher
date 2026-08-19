@@ -13,6 +13,9 @@ export interface ProductDefinition {
   };
 }
 
+export const PRODUCT_ICON_DOCK_LIMIT = 5;
+export const PRODUCT_PICKER_SEARCH_THRESHOLD = 6;
+
 export const PRODUCTS: ProductDefinition[] = [
   {
     id: 'codex',

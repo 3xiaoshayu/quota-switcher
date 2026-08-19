@@ -7,6 +7,11 @@ release is published.
 
 ## Unreleased
 
+## [0.1.0-beta.34] - 2026-08-19
+
+- Replace the sidebar product switch with a dock of official Codex, Cursor,
+  and Antigravity app icons so more agents stay readable later.
+
 ## [0.1.0-beta.33] - 2026-08-19
 
 - Keep Antigravity on paired Gemini / Claude 与 GPT rings in the float,
