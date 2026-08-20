@@ -7,6 +7,19 @@ release is published.
 
 ## Unreleased
 
+## [2.0.2] - 2026-08-20
+
+- Keep the dashboard, current-account badge, and quota refresh correct when
+  Windows briefly locks local files, and skip extra vault unlocks on those
+  paths.
+- Snapshot Codex after the official client closes, wait for Cursor and
+  Antigravity databases to finish writing, then switch. If a later step fails,
+  roll the whole switch back.
+- Restart the background worker at most three times if it crashes, instead of
+  looping forever.
+- The installer is still unsigned. Download only from GitHub Releases and check
+  SHA-256.
+
 ## [2.0.1] - 2026-08-20
 
 - Remove the unused browser preview lock screen. The desktop app opens on the
