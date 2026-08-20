@@ -121,69 +121,14 @@ $g.Dispose(); $bmp.Dispose(); $left.Dispose(); $right.Dispose()
   }
 }
 
-function withSearchParam(url, key, value) {
-  const parsed = new URL(url);
-  parsed.searchParams.set(key, value);
-  return parsed.toString();
-}
-
-function withoutSearchParam(url, key) {
-  const parsed = new URL(url);
-  parsed.searchParams.delete(key);
-  return parsed.toString();
-}
-
-async function captureLogin(page) {
-  const current = page.url();
-  const saved = await page.evaluate(() => ({
-    status: localStorage.getItem("codex_auth_status"),
-    email: localStorage.getItem("codex_auth_email"),
-  }));
-  await page.evaluate(() => {
-    localStorage.removeItem("codex_auth_status");
-    localStorage.removeItem("codex_auth_email");
-  });
-  await page.goto(withSearchParam(current, "desktopLogin", "1"), { waitUntil: "domcontentloaded" });
-  await page.waitForSelector("#login-card", { timeout: 8000 });
-  const input = page.locator("#login-email-input");
-  if (await input.count()) await input.fill("");
-  await page.waitForTimeout(300);
-  await save(page, "login.png");
-  await page.evaluate((auth) => {
-    if (auth.status) localStorage.setItem("codex_auth_status", auth.status);
-    if (auth.email) localStorage.setItem("codex_auth_email", auth.email);
-  }, saved);
-  return current;
-}
-
-async function restoreSession(page, previousUrl) {
-  if (!previousUrl) return;
-  await page.goto(withoutSearchParam(previousUrl, "desktopLogin"), { waitUntil: "domcontentloaded" });
-  await page.waitForSelector("#dashboard-main-container", { timeout: 8000 }).catch(() => {});
-}
-
 async function main() {
   fs.mkdirSync(outDir, { recursive: true });
   const browser = await chromium.connectOverCDP(cdpUrl);
   try {
     const page = await mainPage(browser);
     await page.waitForTimeout(500);
-    const onLogin = await page.locator("#login-card").count();
-    if (onLogin) {
-      await save(page, "login.png");
-      const input = page.locator("#login-email-input");
-      if (await input.count()) {
-        const value = await input.inputValue();
-        if (value) {
-          await page.click("#login-submit-button");
-          await page.waitForSelector("#dashboard-main-container", { timeout: 8000 });
-        }
-      }
-    }
     await captureDashboard(page);
     await captureFloat(browser, page);
-    const previousUrl = await captureLogin(page);
-    if (previousUrl) await restoreSession(page, previousUrl);
     await selectProduct(page, "cursor");
     await page.click("#sidebar-nav-accounts");
   } finally {

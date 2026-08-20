@@ -15,26 +15,18 @@ const VIEWPORT = { width: 1320, height: 860 };
 const SCALE = 2;
 const FRAME = { padX: 56, padY: 48, titleH: 38, radius: 12 };
 
-async function openPage(browser, url, ready) {
+async function openPage(browser, url) {
   const page = await browser.newPage({
     viewport: VIEWPORT,
     deviceScaleFactor: SCALE,
   });
-  await page.addInitScript((auth) => {
-    if (auth) {
-      localStorage.setItem("codex_auth_status", "true");
-      localStorage.setItem("codex_auth_email", "maya@example.com");
-      localStorage.setItem("cam_product", "cursor");
-    } else {
-      localStorage.removeItem("codex_auth_status");
-      localStorage.removeItem("codex_auth_email");
-    }
-  }, ready === "dashboard");
+  await page.addInitScript(() => {
+    localStorage.setItem("cam_product", "cursor");
+  });
   await page.goto(url, { waitUntil: "networkidle" });
   await page.addStyleTag({
     content: [
       "*, *::before, *::after { animation: none !important; transition: none !important; }",
-      "#header-btn-logout { display: none !important; }",
       "#footer-privacy { visibility: hidden !important; }",
       "#header-btn-notifications span { display: none !important; }",
     ].join("\n"),
@@ -123,7 +115,7 @@ async function selectProduct(page, id) {
 }
 
 async function captureAppPages(browser) {
-  const page = await openPage(browser, `${baseUrl}/`, "dashboard");
+  const page = await openPage(browser, `${baseUrl}/`);
   await page.waitForSelector("#dashboard-main-container");
   await page.waitForTimeout(400);
 
@@ -155,37 +147,8 @@ async function captureAppPages(browser) {
   await page.close();
 }
 
-async function captureLogin(browser) {
-  const page = await openPage(browser, `${baseUrl}/?desktopLogin=1`, "login");
-  await page.waitForSelector("#login-card");
-  await page.waitForTimeout(300);
-  await page.evaluate(() => {
-    document.documentElement.style.background = "#0b0b0d";
-    document.body.style.background = "#0b0b0d";
-  });
-  const card = page.locator("#login-card");
-  const shot = await card.screenshot({ type: "png" });
-  const uri = `data:image/png;base64,${shot.toString("base64")}`;
-  const board = await browser.newPage({
-    viewport: { width: 920, height: 720 },
-    deviceScaleFactor: SCALE,
-  });
-  await board.setContent(`<!doctype html>
-<html><head><style>
-  html, body { margin: 0; background: #0b0b0d; }
-  .wrap { width: 920px; height: 720px; display: flex; align-items: center; justify-content: center; }
-  img { width: 420px; height: auto; display: block; }
-</style></head>
-<body><div class="wrap"><img src="${uri}" alt=""></div></body></html>`);
-  await board.waitForTimeout(80);
-  await board.screenshot({ path: path.join(outDir, "login.png"), type: "png" });
-  await board.close();
-  await page.close();
-  console.log("wrote login.png");
-}
-
 async function captureFloatLens(browser) {
-  const page = await openPage(browser, `${baseUrl}/#float`, "dashboard");
+  const page = await openPage(browser, `${baseUrl}/#float`);
   await page.waitForSelector(".float-lens-shell");
   await page.evaluate(() => {
     document.documentElement.style.background = "#0b0b0d";
@@ -360,7 +323,6 @@ async function main() {
       await captureSocialPreview(browser);
       return;
     }
-    await captureLogin(browser);
     await captureAppPages(browser);
     await captureFloatLens(browser);
     await captureTrayMenu(browser);

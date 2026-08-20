@@ -35,6 +35,20 @@
 
 Antigravity 目前对接官方 **Antigravity IDE**（导入本机登录、Google 网页授权、切换、刷新额度、浮窗）。不管理旧版 `Antigravity.exe`。额度未查清时，不会显示为封号。
 
+## 与 Cockpit Tools
+
+社区里常被对照的是 [Cockpit Tools](https://github.com/jlcodes99/cockpit-tools)。那是覆盖很多 AI IDE 的通用驾驶舱。Quota Switcher 走另一条路径：把 **Windows 上 Codex、Cursor、Antigravity 的本机账号库、额度与切号** 做成完整产品。相对通用驾驶舱，下面这些是我们专门做深的部分。
+
+**Windows 本机保险柜。** 账号与 token 使用当前 Windows 用户的 DPAPI（Electron `safeStorage`）加密；换 Windows 用户或换电脑，一般解不开。界面只接收账号元数据，token 不会解密进渲染进程。没有遥测，也没有项目方云服务。
+
+**Codex 切号按事务提交。** 切换前先快照官方登录、管理器投影和账号索引；后面任一步失败则整段回滚，而不是先写完 `auth.json` 再设法补救。官方登录与管理器记录不一致时，窗口提供「采用官方账号」或「写回管理账号」，不会静默覆盖。
+
+**Cursor / Antigravity 原地写入官方登录库。** 切号时在 `state.vscdb` 上使用 WAL 与 `BEGIN IMMEDIATE` 原地更新，不再把大型数据库整文件拷来拷去。Cursor 切号会恢复目标账号的资料、团队会话和用量身份，并清掉上一个号留下的团队缓存，避免 Pro 账号停在别人的团队里。
+
+**额度请求不走 Chromium 会话。** 出站 HTTP 由 Node 直连，并按代理签名保持 keep-alive，主窗口不容易因此卡成「未响应」。三家额度按 5 路并发刷新；窗口和桌面额度镜使用快照加补丁更新，而不是每次整页重拉。批量刷新会跳过已经需要重新授权或已封号的账号，避免把注定失败的请求推进队列。
+
+**关窗以后 Codex 仍可自动切换。** 后台按你设定的阈值换号，不依赖窗口一直开着。同一个窗口同时管理 Codex、Cursor 与 Antigravity IDE 的账号卡片、配额总览与桌面额度镜。
+
 ## 界面
 
 顶图为 Cursor 账号页。关闭按钮将窗口收到托盘，不会退出。

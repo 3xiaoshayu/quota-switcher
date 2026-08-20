@@ -17,7 +17,6 @@ const requiredFiles = [
   "docs/images/quota-overview.png",
   "docs/images/auto-switch.png",
   "docs/images/settings.png",
-  "docs/images/login.png",
   "docs/images/float-lens.png",
   "docs/images/tray-menu.png",
   "docs/images/social-preview.png",

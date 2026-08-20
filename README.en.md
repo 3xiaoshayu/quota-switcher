@@ -47,6 +47,43 @@ Antigravity currently targets official **Antigravity IDE** (local import,
 Google browser sign-in, switch, quota refresh, float window). It does not
 manage legacy `Antigravity.exe`. A failed quota read is not shown as a ban.
 
+## Compared with Cockpit Tools
+
+A common community reference is
+[Cockpit Tools](https://github.com/jlcodes99/cockpit-tools), a general cockpit
+for many AI IDEs. Quota Switcher takes a different path: a complete
+**Windows-local vault, quota view, and switch path** for Codex, Cursor, and
+Antigravity. Relative to a general-purpose cockpit, these are the parts we
+built in depth.
+
+**A Windows vault.** Accounts and tokens are encrypted with current-user DPAPI
+via Electron `safeStorage`. Another Windows user or another PC generally
+cannot decrypt them. The UI receives metadata only; tokens are not decrypted
+into the renderer. There is no telemetry and no project-operated cloud.
+
+**Codex switches as a transaction.** The official login, managed projection,
+and index are snapshotted first. If a later step fails, the whole transaction
+rolls back. It does not write `auth.json` first and try to repair afterwards.
+When official Codex and this app disagree, the window offers **采用官方账号**
+or **写回管理账号**. It does not overwrite in silence.
+
+**Cursor and Antigravity update the official login database in place.** A
+switch uses WAL and `BEGIN IMMEDIATE` on `state.vscdb` instead of copying a
+large file. A Cursor switch restores the target account's profile, team
+session, and usage identity, and clears leftover team cache from the previous
+login so a Pro account is not left on someone else's team.
+
+**Quota HTTP does not use the Chromium session.** Outbound calls go through
+Node keep-alive agents keyed by proxy signature, so the main window is less
+likely to freeze as “未响应”. All three products refresh five at a time. The
+window and desktop lens apply a snapshot plus patches instead of a full
+reload. Batch refresh skips accounts that already need re-auth or are banned,
+instead of queuing requests that will fail.
+
+**Codex auto-switch keeps running after the window is closed.** A background
+worker switches at the threshold you set. The same window holds account cards,
+quota overview, and the desktop lens for Codex, Cursor, and Antigravity IDE.
+
 ## Interface
 
 The hero image is the Cursor account page. The close button hides the window

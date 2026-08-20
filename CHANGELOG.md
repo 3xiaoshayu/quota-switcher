@@ -7,6 +7,14 @@ release is published.
 
 ## Unreleased
 
+## [2.0.1] - 2026-08-20
+
+- Remove the unused browser preview lock screen. The desktop app opens on the
+  account and quota window.
+- Spell out, in the GitHub intro, the Windows vault, Codex switch transaction,
+  in-place Cursor/Antigravity login writes, and background Codex auto-switch
+  relative to a general-purpose cockpit.
+
 ## [2.0.0] - 2026-08-20
 
 Quota Switcher's first product release. The GitHub repo, Windows app id, and

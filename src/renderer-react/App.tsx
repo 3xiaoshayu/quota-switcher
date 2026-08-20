@@ -71,7 +71,6 @@ import {
   setUpdateStatus,
   useDesktopStore,
 } from './state/desktop-store';
-import Login from './components/Login';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import QuotasView from './components/QuotasView';
@@ -137,22 +136,7 @@ function settingsFromDesktopState(
   };
 }
 
-function wantsDesktopLoginPreview() {
-  return new URLSearchParams(window.location.search).has('desktopLogin');
-}
-
 function DashboardApp() {
-  // Authentication state - persistence in localStorage for robustness
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    if (desktopBridgeAvailable && !wantsDesktopLoginPreview()) return true;
-    const saved = localStorage.getItem('codex_auth_status');
-    return saved === 'true';
-  });
-  
-  const [userEmail, setUserEmail] = useState<string>(() => {
-    return localStorage.getItem('codex_auth_email') || '';
-  });
-
   // Main UI States
   const [activeTab, setActiveTab] = useState<'accounts' | 'quotas' | 'autoswitch' | 'settings'>(() => {
     if (desktopBridgeAvailable) return 'quotas';
@@ -457,7 +441,6 @@ function DashboardApp() {
     setSelectedAccountIds(prunedSelected);
     selectedAccountIdsRef.current = prunedSelected;
     if (snapshot.currentAccount?.email) {
-      setUserEmail(snapshot.currentAccount.email);
       localStorage.setItem('codex_auth_email', snapshot.currentAccount.email);
     }
   }, [persistProduct]);
@@ -561,36 +544,6 @@ function DashboardApp() {
     });
   }, [addLogEntry, loadDashboardState]);
 
-  // Login handler
-  const handleLogin = (email: string) => {
-    setIsAuthenticated(true);
-    setUserEmail(email);
-    localStorage.setItem('codex_auth_status', 'true');
-    localStorage.setItem('codex_auth_email', email);
-    
-    // Add toast and log
-    addToast('已解锁', 'success');
-    addLogEntry(`用户 ${email} 已进入。`, 'success');
-    if (desktopBridgeAvailable) {
-      hasLoadedDashboard.current = false;
-      setDashboardLoadState('loading');
-      setDashboardLoadError(null);
-    }
-  };
-
-  // Logout handler
-  const handleLogout = () => {
-    setIsAuthenticated(false);
-    localStorage.removeItem('codex_auth_status');
-    localStorage.removeItem('codex_auth_email');
-    if (desktopBridgeAvailable) {
-      hasLoadedDashboard.current = false;
-      setDashboardLoadState('loading');
-      setDashboardLoadError(null);
-    }
-    addToast('已锁定界面', 'info');
-  };
-
   // Escape closes the topmost dismissible overlay.
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -628,7 +581,7 @@ function DashboardApp() {
   }, []);
 
   useEffect(() => {
-    if (!isAuthenticated || !desktopBridgeAvailable) return;
+    if (!desktopBridgeAvailable) return;
     let disposed = false;
 
     loadDashboardState(true, { skipOfficialSync: true }).then(async (snapshot) => {
@@ -707,7 +660,7 @@ function DashboardApp() {
       window.clearInterval(syncTimer);
       unsubscribe();
     };
-  }, [addLogEntry, addToast, applyCurrentAccountBadge, isAuthenticated, loadDashboardState, queueQuotaAutoSync]);
+  }, [addLogEntry, addToast, applyCurrentAccountBadge, loadDashboardState, queueQuotaAutoSync]);
 
   const reportOAuthFinished = useCallback((status: DesktopOAuthStatus, source: ProductKind | 'auto' = 'auto') => {
     if (status.pending) return;
@@ -810,7 +763,7 @@ function DashboardApp() {
   }, []);
 
   useEffect(() => {
-    if (!isAuthenticated || !desktopBridgeAvailable || !oauthStatus?.pending) return;
+    if (!desktopBridgeAvailable || !oauthStatus?.pending) return;
     let disposed = false;
     let failCount = 0;
     const pollOAuthStatus = async () => {
@@ -840,10 +793,10 @@ function DashboardApp() {
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [addToast, isAuthenticated, loadDashboardState, oauthStatus?.pending, reportOAuthFinished]);
+  }, [addToast, loadDashboardState, oauthStatus?.pending, reportOAuthFinished]);
 
   useEffect(() => {
-    if (!isAuthenticated || !desktopBridgeAvailable || !cursorOAuthStatus?.pending) return;
+    if (!desktopBridgeAvailable || !cursorOAuthStatus?.pending) return;
     let disposed = false;
     let failCount = 0;
     const pollCursorOAuthStatus = async () => {
@@ -870,10 +823,10 @@ function DashboardApp() {
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [addToast, isAuthenticated, loadDashboardState, cursorOAuthStatus?.pending, reportOAuthFinished]);
+  }, [addToast, loadDashboardState, cursorOAuthStatus?.pending, reportOAuthFinished]);
 
   useEffect(() => {
-    if (!isAuthenticated || !desktopBridgeAvailable || !antigravityOAuthStatus?.pending) return;
+    if (!desktopBridgeAvailable || !antigravityOAuthStatus?.pending) return;
     let disposed = false;
     let failCount = 0;
     const pollAntigravityOAuthStatus = async () => {
@@ -900,7 +853,7 @@ function DashboardApp() {
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [addToast, isAuthenticated, loadDashboardState, antigravityOAuthStatus?.pending, reportOAuthFinished]);
+  }, [addToast, loadDashboardState, antigravityOAuthStatus?.pending, reportOAuthFinished]);
 
   // Global Refresh All trigger
   const handleRefreshAll = async () => {
@@ -1759,10 +1712,6 @@ function DashboardApp() {
     setIsRefreshingAll(refreshAllKindRef.current === next);
   };
 
-  if (!isAuthenticated) {
-    return <Login onLogin={handleLogin} userEmail={userEmail} appVersion={settings.version} showDemoShortcuts={!desktopBridgeAvailable && !wantsDesktopLoginPreview()} />;
-  }
-
   return (
     <div 
       className="h-screen w-screen flex overflow-hidden relative isolate select-none text-label font-sans"
@@ -1821,7 +1770,6 @@ function DashboardApp() {
         {/* Navigation Utilities Header */}
         <Header 
           currentUserEmail={accounts.find((account) => account.isCurrent)?.email || ''}
-          onLogout={desktopBridgeAvailable && !wantsDesktopLoginPreview() ? undefined : handleLogout}
           unreadNotificationsCount={showNotifications ? 0 : countUnreadAlertLogs(logs, lastReadLogId)}
           onToggleNotifications={() => setShowNotifications(!showNotifications)}
           onCopyCurrentEmail={() => {

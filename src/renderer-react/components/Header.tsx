@@ -1,9 +1,8 @@
-import { Bell, LogOut, Minus, Square, X } from 'lucide-react';
+import { Bell, Minus, Square, X } from 'lucide-react';
 import { avatarGradient, desktopApi, hasDesktopBridge } from '../api/desktop';
 
 interface HeaderProps {
   currentUserEmail: string;
-  onLogout?: () => void;
   unreadNotificationsCount: number;
   onToggleNotifications: () => void;
   onCopyCurrentEmail?: () => void;
@@ -13,7 +12,6 @@ const windowControlsAvailable = hasDesktopBridge();
 
 export default function Header({
   currentUserEmail,
-  onLogout,
   unreadNotificationsCount,
   onToggleNotifications,
   onCopyCurrentEmail,
@@ -61,18 +59,6 @@ export default function Header({
               {currentUserEmail || '未指定当前账号'}
             </span>
           </button>
-
-          {onLogout ? (
-          <button
-            onClick={onLogout}
-            className="p-2 hover:bg-danger/12 hover:text-danger rounded-lg text-label-2 transition-colors cursor-pointer"
-            title="锁定界面"
-            aria-label="锁定界面"
-            id="header-btn-logout"
-          >
-            <LogOut className="w-4 h-4" />
-          </button>
-          ) : null}
         </div>
 
         {/* Window controls */}
