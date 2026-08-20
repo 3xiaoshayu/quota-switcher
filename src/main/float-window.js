@@ -1,5 +1,5 @@
 const path = require("path");
-const fs = require("fs");
+const { readJsonWithRetry } = require("../../engine/atomic-file");
 
 const FLOAT_WIDTH = 316;
 const FLOAT_HEIGHT = 512;
@@ -59,7 +59,7 @@ function floatWindowTitle(product) {
 
 function loadFloatState(userDataPath) {
     try {
-        const state = JSON.parse(fs.readFileSync(floatStatePath(userDataPath), "utf8"));
+        const state = readJsonWithRetry(floatStatePath(userDataPath));
         if (!state || typeof state !== "object") {
             return { alwaysOnTop: false, x: null, y: null, height: null, product: "codex" };
         }

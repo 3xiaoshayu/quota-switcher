@@ -46,6 +46,35 @@ test("float height is clamped to the window range", () => {
   assert.equal(clampFloatHeight(600), 600);
 });
 
+test("float window state retries a transient lock", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "float-window-"));
+  const target = path.join(dir, "float-window.json");
+  fs.writeFileSync(target, JSON.stringify({
+    alwaysOnTop: true,
+    x: 80,
+    y: 40,
+    height: 500,
+    product: "cursor",
+  }));
+  const originalRead = fs.readFileSync;
+  let failures = 0;
+  fs.readFileSync = (file, encoding) => {
+    if (path.resolve(String(file)) === path.resolve(target) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+  const saved = loadFloatState(dir);
+  assert.equal(saved.alwaysOnTop, true);
+  assert.equal(saved.product, "cursor");
+  assert.equal(saved.height, 500);
+  assert.equal(failures, 2);
+});
+
 test("float window state restores a saved height", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "float-window-"));
   fs.writeFileSync(path.join(dir, "float-window.json"), JSON.stringify({

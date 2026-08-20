@@ -182,7 +182,7 @@ function needsRefresh(acct) {
 }
 
 async function refreshAll(force) {
-  const accts = listAccts();
+  const accts = listAccts({ secrets: false });
   if (!accts.length) return { okCount: 0, revivedCount: 0, deadCount: 0, results: [] };
 
   const rows = await mapLimit(accts, 5, async (listed) => {

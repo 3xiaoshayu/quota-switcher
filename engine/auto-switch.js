@@ -64,16 +64,19 @@ async function autoSwitchTick(cfg, options = {}) {
   if (isCancelled()) return cancelled();
   // inspectAuthState can write the current account file (official token
   // rotation sync), so hold the account lock while it runs.
-  const preIdx = loadIdx();
-  const authState = preIdx.current_account_id
-    ? await withAccountLock(preIdx.current_account_id, async () => inspectAuthState({ migrateProjection: false }))
-    : inspectAuthState({ migrateProjection: false });
+  let authState = options.authState || null;
+  if (!authState) {
+    const preIdx = loadIdx();
+    authState = preIdx.current_account_id
+      ? await withAccountLock(preIdx.current_account_id, async () => inspectAuthState({ migrateProjection: false }))
+      : inspectAuthState({ migrateProjection: false });
+  }
   if (authState.requiresResolution) {
     return { switched: false, reason: "auth_conflict", authState };
   }
 
   if (isCancelled()) return cancelled();
-  const accts = listAccts();
+  const accts = listAccts({ secrets: false });
   if (accts.length === 0) return { switched: false, reason: "no_accounts" };
 
   const monitoredIds = resolveMonitoredIds(cfg, accts);

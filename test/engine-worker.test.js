@@ -38,6 +38,8 @@ test("engine worker stays off DPAPI, account files, and switch transactions", ()
   assert.match(host, /utilityProcess/);
   assert.match(host, /engine_worker_down/);
   assert.match(host, /httpJsonLocal/);
+  assert.match(host, /scheduleWorkerRestart/);
+  assert.match(host, /shouldScheduleWorkerRestart/);
   assert.doesNotMatch(worker, /safeStorage/);
   assert.doesNotMatch(worker, /setSecretCodec/);
   assert.doesNotMatch(worker, /doSwitch/);
@@ -45,6 +47,15 @@ test("engine worker stays off DPAPI, account files, and switch transactions", ()
   assert.doesNotMatch(worker, /doAntigravitySwitch/);
   assert.doesNotMatch(worker, /require\(.*storage/);
   assert.doesNotMatch(worker, /account-file-store/);
+});
+
+test("engine worker restart policy recovers a limited number of crashes", () => {
+  const { MAX_RESTARTS, shouldScheduleWorkerRestart } = require("../src/main/engine-worker-host");
+  assert.equal(shouldScheduleWorkerRestart({ stopping: false, alive: false, restartCount: 0, restartPending: false }), true);
+  assert.equal(shouldScheduleWorkerRestart({ stopping: true, alive: false, restartCount: 0, restartPending: false }), false);
+  assert.equal(shouldScheduleWorkerRestart({ stopping: false, alive: true, restartCount: 0, restartPending: false }), false);
+  assert.equal(shouldScheduleWorkerRestart({ stopping: false, alive: false, restartCount: 0, restartPending: true }), false);
+  assert.equal(shouldScheduleWorkerRestart({ stopping: false, alive: false, restartCount: MAX_RESTARTS, restartPending: false }), false);
 });
 
 test("Node tests cannot fork the Electron utilityProcess and stay in-process", () => {

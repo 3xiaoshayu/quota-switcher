@@ -9,7 +9,7 @@ const {
   ANTIGRAVITY_SCOPES,
 } = require("./config");
 const { protectData, unprotectData, ensureDir } = require("./storage");
-const { writeJsonAtomic } = require("./atomic-file");
+const { writeJsonAtomic, readJsonWithRetry } = require("./atomic-file");
 const { getAntigravityRuntime } = require("./antigravity-runtime");
 const { readOfficialOauthClient } = require("./antigravity-oauth-client");
 const { upsertAntigravityAccount } = require("./antigravity-local");
@@ -72,7 +72,7 @@ function clearPendingFile() {
 function loadPending() {
   if (!fs.existsSync(ANTIGRAVITY_OAUTH_PENDING_PATH)) return null;
   try {
-    const envelope = JSON.parse(fs.readFileSync(ANTIGRAVITY_OAUTH_PENDING_PATH, "utf8"));
+    const envelope = readJsonWithRetry(ANTIGRAVITY_OAUTH_PENDING_PATH);
     const pending = JSON.parse(unprotectData(envelope.protected_payload));
     if (!pending.expiresAt || pending.expiresAt <= Date.now()) {
       clearPendingFile();

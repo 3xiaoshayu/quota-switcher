@@ -1,0 +1,13 @@
+---
+description: After user-visible app changes, rebuild and open the desktop app to show the result
+alwaysApply: true
+---
+
+# 改完要打开软件给人看
+
+用户可见的改动（界面、文案、交互、窗口行为）做完后：
+
+1. 需要时先重建渲染进程（`npm run renderer:build`）
+2. 启动 Electron 桌面应用（源码 `electron .` / `npm run start`），不要只在对话里描述
+3. 尽量把改到的页面/弹窗打开到能看见的状态
+4. 展示时不要真的切 Codex 账号、不要点完 OAuth 授权、不要替用户处理登录冲突（采用/重写）

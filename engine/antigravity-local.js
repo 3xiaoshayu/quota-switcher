@@ -9,6 +9,7 @@ const {
   listAntigravityAccts,
   upsertAntigravityIndex,
   currentAntigravityAcct,
+  loadAntigravityIdx,
   setCurrentAntigravityAccountId,
   deleteAntigravityAcct,
 } = require("./antigravity-storage");
@@ -29,20 +30,22 @@ function sameAntigravityIdentity(left, right) {
   return !!leftFp && leftFp === rightFp;
 }
 
-function findSameAntigravityId(preview) {
-  const matches = listAntigravityAccts().filter((account) => sameAntigravityIdentity(preview, account));
-  const self = loadAntigravityAcct(preview.id);
-  if (self && !matches.some((account) => account.id === self.id)) matches.push(self);
-  return pickIdentityKeeper(matches, currentAntigravityAcct()?.id)?.id || preview.id;
+function findSameAntigravityId(preview, accounts = listAntigravityAccts({ secrets: false })) {
+  const matches = accounts.filter((account) => sameAntigravityIdentity(preview, account));
+  if (preview.id && !matches.some((account) => account.id === preview.id)) {
+    const self = accounts.find((account) => account.id === preview.id) || loadAntigravityAcct(preview.id);
+    if (self) matches.push(self);
+  }
+  return pickIdentityKeeper(matches, loadAntigravityIdx().current_antigravity_account_id)?.id || preview.id;
 }
 
 function collapseDuplicateAntigravityAccounts() {
   return foldDuplicateAccounts(
     listAntigravityAccts(),
     sameAntigravityIdentity,
-    currentAntigravityAcct()?.id || null,
+    loadAntigravityIdx().current_antigravity_account_id || null,
     (keeper, extras) => {
-      const currentId = currentAntigravityAcct()?.id;
+      const currentId = loadAntigravityIdx().current_antigravity_account_id;
       if (currentId && extras.some((item) => item.id === currentId)) {
         setCurrentAntigravityAccountId(keeper.id);
       }
@@ -93,29 +96,32 @@ function accountFromAntigravityTokens(tokens, existing = null) {
 }
 
 async function upsertAntigravityAccount(tokens, options = {}) {
-  const preview = accountFromAntigravityTokens(tokens);
-  const targetAccountId = options.targetAccountId || null;
-  const targetAccount = targetAccountId ? loadAntigravityAcct(targetAccountId) : null;
-  const mismatch = !!targetAccountId && (!targetAccount || !sameAntigravityIdentity(preview, targetAccount));
-  const saveId = !mismatch && targetAccountId ? targetAccountId : findSameAntigravityId(preview);
-  const updated = !!loadAntigravityAcct(saveId);
-  const lockIds = [saveId, ...extraIdentityIds(preview, saveId, listAntigravityAccts(), sameAntigravityIdentity)];
+  return withAccountLock("__antigravity_oauth_upsert__", async () => {
+    const preview = accountFromAntigravityTokens(tokens);
+    const listed = listAntigravityAccts({ secrets: false });
+    const targetAccountId = options.targetAccountId || null;
+    const targetAccount = targetAccountId ? loadAntigravityAcct(targetAccountId) : null;
+    const mismatch = !!targetAccountId && (!targetAccount || !sameAntigravityIdentity(preview, targetAccount));
+    const saveId = !mismatch && targetAccountId ? targetAccountId : findSameAntigravityId(preview, listed);
+    const updated = listed.some((account) => account.id === saveId);
+    const lockIds = [saveId, ...extraIdentityIds(preview, saveId, listed, sameAntigravityIdentity)];
 
-  const account = await withAccountLocks(lockIds, async () => {
-    const existing = loadAntigravityAcct(saveId);
-    const merged = accountFromAntigravityTokens(tokens, existing);
-    merged.id = saveId;
-    saveAntigravityAcct(merged);
-    upsertAntigravityIndex(merged);
-    collapseDuplicateAntigravityAccounts();
-    return loadAntigravityAcct(saveId) || merged;
+    const account = await withAccountLocks(lockIds, async () => {
+      const existing = loadAntigravityAcct(saveId);
+      const merged = accountFromAntigravityTokens(tokens, existing);
+      merged.id = saveId;
+      saveAntigravityAcct(merged);
+      upsertAntigravityIndex(merged);
+      collapseDuplicateAntigravityAccounts();
+      return loadAntigravityAcct(saveId) || merged;
+    });
+
+    if (!mismatch && !loadAntigravityIdx().current_antigravity_account_id) {
+      setCurrentAntigravityAccountId(account.id);
+    }
+
+    return { account, mismatch, targetAccountId, updated };
   });
-
-  if (!mismatch && !currentAntigravityAcct()) {
-    setCurrentAntigravityAccountId(account.id);
-  }
-
-  return { account, mismatch, targetAccountId, updated };
 }
 
 async function resolveEmail(accessToken, fallback) {
@@ -200,7 +206,7 @@ async function syncCurrentAntigravityFromOfficialUncached() {
   if (!email) email = await resolveEmail(access, "");
   return withAccountLock("__antigravity_switch__", async () => {
     const current = currentAntigravityAcct();
-    const match = listAntigravityAccts().find((account) => sameAntigravityIdentity(account, {
+    const match = listAntigravityAccts({ secrets: false }).find((account) => sameAntigravityIdentity(account, {
       email,
       auth_id: authId,
     }));

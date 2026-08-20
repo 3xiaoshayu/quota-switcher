@@ -15,12 +15,11 @@ const {
   saveAcct,
   listAccts,
   deleteAcct,
-  currentAcct,
 } = require("./storage");
 const { extraIdentityIds, foldDuplicateAccounts, mergePreservedQuota, pickIdentityKeeper, usableEmail } = require("./account-identity");
 const { APP_DISPLAY_NAME } = require("./app-brand");
 const { remapSelectedAccountIds } = require("./config-manager");
-const { writeJsonAtomic } = require("./atomic-file");
+const { writeJsonAtomic, readJsonWithRetry } = require("./atomic-file");
 const { logInfo, logWarn, logError } = require("./logger");
 
 const PENDING_PATH = path.join(DATA_DIR, "codex_oauth_pending.json");
@@ -89,7 +88,7 @@ async function switchCodexAfterOAuth(result) {
   if (!shouldSwitchAfterOAuth(result)) return result;
   const { withAccountLocks } = require("./operation-locks");
   const { doSwitch } = require("./switch");
-  const currentId = currentAcct()?.id || null;
+  const currentId = loadIdx().current_account_id || null;
   const lockIds = ["__switch__", result.account.id];
   if (currentId && currentId !== result.account.id) lockIds.push(currentId);
   try {
@@ -164,7 +163,7 @@ function clearPendingFile() {
 function loadPending() {
   if (!fs.existsSync(PENDING_PATH)) return null;
   try {
-    const envelope = JSON.parse(fs.readFileSync(PENDING_PATH, "utf8"));
+    const envelope = readJsonWithRetry(PENDING_PATH);
     const pending = JSON.parse(unprotectData(envelope.protected_payload));
     if (!pending.expiresAt || pending.expiresAt <= Date.now()) {
       clearPendingFile();
@@ -333,11 +332,13 @@ function sameAccountIdentity(left, right) {
 
 // Merge into an existing record for the same identity so identity-hash
 // changes (e.g. improved organization extraction) cannot split an account.
-function findSameIdentityId(preview) {
-  const matches = listAccts().filter((account) => sameAccountIdentity(preview, account));
-  const self = loadAcct(preview.id);
-  if (self && !matches.some((account) => account.id === self.id)) matches.push(self);
-  return pickIdentityKeeper(matches, currentAcct()?.id)?.id || preview.id;
+function findSameIdentityId(preview, accounts = listAccts({ secrets: false })) {
+  const matches = accounts.filter((account) => sameAccountIdentity(preview, account));
+  if (preview.id && !matches.some((account) => account.id === preview.id)) {
+    const self = accounts.find((account) => account.id === preview.id) || loadAcct(preview.id);
+    if (self) matches.push(self);
+  }
+  return pickIdentityKeeper(matches, loadIdx().current_account_id)?.id || preview.id;
 }
 
 function persistCodexIndexEntry(account) {
@@ -360,7 +361,7 @@ function collapseDuplicateCodexAccounts() {
   return foldDuplicateAccounts(
     listAccts(),
     sameAccountIdentity,
-    currentAcct()?.id || null,
+    loadIdx().current_account_id || null,
     (keeper, extras) => {
       const index = loadIdx();
       if (extras.some((item) => item.id === index.current_account_id)) {
@@ -379,28 +380,33 @@ function collapseDuplicateCodexAccounts() {
 }
 
 async function upsert(tokens, options = {}) {
-  const preview = accountFromTokens(tokens);
-  const targetAccountId = options.targetAccountId || null;
-  const targetAccount = targetAccountId ? loadAcct(targetAccountId) : null;
-  const mismatch = !!targetAccountId && (!targetAccount || !sameAccountIdentity(preview, targetAccount));
-  const saveId = !mismatch && targetAccountId ? targetAccountId : findSameIdentityId(preview);
-  const updated = !!loadAcct(saveId);
-  const lockIds = [saveId, ...extraIdentityIds(preview, saveId, listAccts(), sameAccountIdentity)];
+  const { withAccountLock, withAccountLocks } = require("./operation-locks");
+  // Serialize identity lookup against other OAuth upserts so two callbacks
+  // for the same person cannot pick different files before locks are held.
+  return withAccountLock("__oauth_upsert__", async () => {
+    const preview = accountFromTokens(tokens);
+    const listed = listAccts({ secrets: false });
+    const targetAccountId = options.targetAccountId || null;
+    const targetAccount = targetAccountId ? loadAcct(targetAccountId) : null;
+    const mismatch = !!targetAccountId && (!targetAccount || !sameAccountIdentity(preview, targetAccount));
+    const saveId = !mismatch && targetAccountId ? targetAccountId : findSameIdentityId(preview, listed);
+    const updated = listed.some((account) => account.id === saveId);
+    const lockIds = [saveId, ...extraIdentityIds(preview, saveId, listed, sameAccountIdentity)];
 
-  // Hold the account lock while merging so an in-flight token refresh cannot
-  // overwrite this login with a stale snapshot (and vice versa).
-  const { withAccountLocks } = require("./operation-locks");
-  const account = await withAccountLocks(lockIds, async () => {
-    const existing = loadAcct(saveId);
-    const merged = accountFromTokens(tokens, existing);
-    merged.id = saveId;
-    saveAcct(merged);
-    persistCodexIndexEntry(merged);
-    collapseDuplicateCodexAccounts();
-    return loadAcct(saveId) || merged;
+    // Hold the account lock while merging so an in-flight token refresh cannot
+    // overwrite this login with a stale snapshot (and vice versa).
+    const account = await withAccountLocks(lockIds, async () => {
+      const existing = loadAcct(saveId);
+      const merged = accountFromTokens(tokens, existing);
+      merged.id = saveId;
+      saveAcct(merged);
+      persistCodexIndexEntry(merged);
+      collapseDuplicateCodexAccounts();
+      return loadAcct(saveId) || merged;
+    });
+
+    return { account, mismatch, targetAccountId, updated };
   });
-
-  return { account, mismatch, targetAccountId, updated };
 }
 
 function settleActive(error, result) {

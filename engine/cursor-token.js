@@ -120,7 +120,7 @@ async function fetchCursorUserMeta(account) {
 }
 
 async function refreshAllCursorTokens(force = false) {
-  const listedAccounts = listCursorAccts();
+  const listedAccounts = listCursorAccts({ secrets: false });
   const results = await mapLimit(listedAccounts, 5, async (listed) => {
     return withAccountLock(listed.id, async () => {
       const account = loadCursorAcct(listed.id) || listed;

@@ -3,8 +3,8 @@ const path = require("node:path");
 const cp = require("node:child_process");
 const { tsIso, ts } = require("./crypto-utils");
 const { CODEX_DIR, CODEX_AUMID, IDX_PATH } = require("./config");
-const { loadIdx, saveIdx, saveAcct, currentAcct, ensureDir, accountFilePath } = require("./storage");
-const { writeJsonAtomic, writeTextAtomic, renameWithRetry } = require("./atomic-file");
+const { loadIdx, saveIdx, saveAcct, ensureDir, accountFilePath } = require("./storage");
+const { writeJsonAtomic, writeTextAtomic, renameWithRetry, captureFile, readFileWithRetry } = require("./atomic-file");
 const { writeManagedProjection, inspectAuthState } = require("./auth-state");
 const { assertOfficialCodexInstalledAsync } = require("./codex-installation");
 const { logInfo, logWarn, logError } = require("./logger");
@@ -212,7 +212,7 @@ function writeProjection(account, authValue = null) {
 function clearApiBaseUrl() {
   const configPath = path.join(CODEX_DIR, "config.toml");
   if (!fs.existsSync(configPath)) return false;
-  const lines = fs.readFileSync(configPath, "utf8").split(/\r?\n/);
+  const lines = readFileWithRetry(configPath, "utf8").split(/\r?\n/);
   let inRoot = true;
   const filtered = lines.filter((line) => {
     if (/^\s*\[/.test(line)) inRoot = false;
@@ -254,6 +254,7 @@ async function startCodex(options = {}) {
   const deadline = Date.now() + (options.timeoutMs || 10000);
   let lastEnumerationError = null;
   let sawCrashWindow = false;
+  let pollMs = START_POLL_MS;
   while (Date.now() < deadline) {
     try {
       const processes = await runtime.listProcesses();
@@ -271,7 +272,8 @@ async function startCodex(options = {}) {
       // and rolling back then leaves the running app on different credentials.
       lastEnumerationError = error;
     }
-    await runtime.sleep(START_POLL_MS);
+    await runtime.sleep(pollMs);
+    pollMs = Math.min(pollMs * 2, 400);
   }
   if (lastEnumerationError) {
     logWarn(`Codex start verification skipped (process enumeration unavailable): ${lastEnumerationError.message}`);
@@ -281,10 +283,6 @@ async function startCodex(options = {}) {
     throw new Error("Official Codex opened a crash recovery window instead of a working session");
   }
   throw new Error("Official Codex did not start within the expected time");
-}
-
-function captureFile(filePath) {
-  return fs.existsSync(filePath) ? fs.readFileSync(filePath) : null;
 }
 
 function restoreFile(filePath, content) {
@@ -309,8 +307,8 @@ async function doSwitch(account, options = {}) {
   if (account.requires_reauth) {
     throw new Error("The target account requires reauthorization before it can be switched to");
   }
-  const current = currentAcct();
-  if (!options.force && current?.id === account.id) {
+  const currentId = loadIdx().current_account_id;
+  if (!options.force && currentId === account.id) {
     const authState = inspectAuthState({ migrateProjection: true });
     if (authState.status === "aligned") return { already: true, account };
   }
@@ -321,13 +319,7 @@ async function doSwitch(account, options = {}) {
   const projectionPath = path.join(CODEX_DIR, "codex_auth_projection.json");
   const configPath = path.join(CODEX_DIR, "config.toml");
   const accountPath = accountFilePath(account.id);
-  const snapshot = new Map([
-    [authPath, captureFile(authPath)],
-    [projectionPath, captureFile(projectionPath)],
-    [configPath, captureFile(configPath)],
-    [IDX_PATH, captureFile(IDX_PATH)],
-    [accountPath, captureFile(accountPath)],
-  ]);
+  const snapshot = new Map();
 
   const started = Date.now();
   let killMs = 0;
@@ -336,6 +328,11 @@ async function doSwitch(account, options = {}) {
     const killStarted = Date.now();
     await killCodex();
     killMs = Date.now() - killStarted;
+    snapshot.set(authPath, captureFile(authPath));
+    snapshot.set(projectionPath, captureFile(projectionPath));
+    snapshot.set(configPath, captureFile(configPath));
+    snapshot.set(IDX_PATH, captureFile(IDX_PATH));
+    snapshot.set(accountPath, captureFile(accountPath));
     clearApiBaseUrl();
     const authValue = writeAuthJson(account);
     writeProjection(account, authValue);

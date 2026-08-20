@@ -5,9 +5,14 @@ const { reviveError } = require("./engine-worker");
 
 const RPC_TIMEOUT_MS = 90_000;
 const WORKER_DOWN = "engine_worker_down";
+const RESTART_DELAY_MS = 400;
+const MAX_RESTARTS = 3;
 
 let child = null;
 let alive = false;
+let stopping = false;
+let restartTimer = null;
+let restartCount = 0;
 let nextId = 1;
 const pending = new Map();
 
@@ -25,13 +30,33 @@ function failAllPending(error) {
   }
 }
 
+function shouldScheduleWorkerRestart(state = {}) {
+  const stoppingNow = state.stopping ?? stopping;
+  const aliveNow = state.alive ?? alive;
+  const count = state.restartCount ?? restartCount;
+  const pendingTimer = state.restartPending ?? !!restartTimer;
+  return !stoppingNow && !aliveNow && count < MAX_RESTARTS && !pendingTimer;
+}
+
+function scheduleWorkerRestart() {
+  if (!shouldScheduleWorkerRestart()) return;
+  restartTimer = setTimeout(() => {
+    restartTimer = null;
+    if (stopping || alive) return;
+    restartCount += 1;
+    startEngineWorker();
+  }, RESTART_DELAY_MS);
+}
+
 function onWorkerExit() {
   alive = false;
   child = null;
   failAllPending(workerDownError("Engine worker exited"));
+  scheduleWorkerRestart();
 }
 
 function onWorkerMessage(data) {
+  restartCount = 0;
   const payload = data && Object.prototype.hasOwnProperty.call(data, "data") ? data.data : data;
   const waiter = pending.get(payload?.id);
   if (!waiter) return;
@@ -75,6 +100,7 @@ function canUseUtilityProcess() {
 
 function startEngineWorker() {
   if (alive) return true;
+  stopping = false;
   if (!canUseUtilityProcess()) return false;
   try {
     const { utilityProcess } = require("electron");
@@ -96,6 +122,11 @@ function startEngineWorker() {
 }
 
 function stopEngineWorker() {
+  stopping = true;
+  if (restartTimer) {
+    clearTimeout(restartTimer);
+    restartTimer = null;
+  }
   alive = false;
   failAllPending(workerDownError("Engine worker stopped"));
   try { if (child && typeof child.kill === "function") child.kill(); } catch {}
@@ -133,4 +164,6 @@ module.exports = {
   httpJson,
   readVscdbItems,
   WORKER_DOWN,
+  MAX_RESTARTS,
+  shouldScheduleWorkerRestart,
 };

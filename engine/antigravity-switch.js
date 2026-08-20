@@ -2,11 +2,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { ts } = require("./crypto-utils");
 const { getAntigravityRuntime, usesWindowsSystemCredential, preferUserDataDirForExe } = require("./antigravity-runtime");
-const { writeAntigravityAuth, snapshotVscdb, restoreVscdbSnapshot, waitForAntigravityVscdbWritable } = require("./antigravity-db");
+const { writeAntigravityAuth, snapshotVscdb, restoreVscdbSnapshot, waitForAntigravityVscdbWritable, waitForWalToClear } = require("./antigravity-db");
 const {
-  loadAntigravityAcct,
   saveAntigravityAcct,
-  currentAntigravityAcct,
+  loadAntigravityIdx,
   setCurrentAntigravityAccountId,
   upsertAntigravityIndex,
   snapshotAntigravityMeta,
@@ -20,6 +19,7 @@ const GRACEFUL_WAIT_MS = 1500;
 const FORCE_WAIT_MS = 4000;
 const LEFTOVER_WAIT_MS = 2500;
 const PID_POLL_MS = 50;
+const WAL_CLEAR_WAIT_MS = 2000;
 const LOCK_RETRY_MS = 200;
 const LOCK_POLL_MS = 50;
 
@@ -127,7 +127,7 @@ async function doAntigravitySwitch(account) {
     throw new Error("The target account requires reauthorization before it can be switched to");
   }
 
-  const current = currentAntigravityAcct();
+  const currentId = loadAntigravityIdx().current_antigravity_account_id;
   const runtime = getAntigravityRuntime();
   const dbPath = runtime.vscdbPath();
   const started = Date.now();
@@ -151,13 +151,13 @@ async function doAntigravitySwitch(account) {
   let metaSnapshot = null;
 
   try {
-    const credentialSnapshotPromise = snapshotCredentialIfNeeded(runtime, writeCredential);
     await killAntigravity();
     await clearStaleLockWithRetry(runtime, userDataDir);
     killMs = Date.now() - started;
-    credentialSnapshot = await credentialSnapshotPromise;
+    credentialSnapshot = await snapshotCredentialIfNeeded(runtime, writeCredential);
     const writeStarted = Date.now();
     if (writeVscdb) {
+      await waitForWalToClear(dbPath, WAL_CLEAR_WAIT_MS, runtime.sleep);
       await waitForAntigravityVscdbWritable(dbPath, { sleep: runtime.sleep });
       snapshot = await snapshotVscdb(dbPath);
     }
@@ -194,10 +194,10 @@ async function doAntigravitySwitch(account) {
     logInfo(`Antigravity switch timings kill=${killMs}ms write=${writeMs}ms total=${Date.now() - started}ms`);
     logInfo(`Switched official Antigravity to ${account.email}`);
     return {
-      already: !!current && current.id === account.id,
+      already: !!currentId && currentId === account.id,
       launched,
       launchError,
-      account: loadAntigravityAcct(account.id),
+      account,
     };
   } catch (error) {
     logError(`Antigravity switch failed wrote=${wrote} kill=${killMs}ms write=${writeMs}ms ${describeCaughtError(error)}`);

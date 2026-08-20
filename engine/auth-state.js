@@ -1,8 +1,7 @@
-const fs = require("node:fs");
 const path = require("node:path");
 const { CODEX_DIR } = require("./config");
 const { sha256hex, jwtPayload, extractChatgptAccountId } = require("./crypto-utils");
-const { writeJsonAtomic } = require("./atomic-file");
+const { writeJsonAtomic, readJsonWithRetry } = require("./atomic-file");
 const { loadIdx, saveIdx, loadAcct, saveAcct, listAccts } = require("./storage");
 const { logInfo, logWarn } = require("./logger");
 
@@ -51,7 +50,7 @@ function authFingerprint(value) {
 
 function readJson(filePath) {
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return readJsonWithRetry(filePath);
   } catch {
     return null;
   }
@@ -171,7 +170,6 @@ function inspectAuthState(options = {}) {
   const current = index.current_account_id ? loadAcct(index.current_account_id) : null;
   const official = readOfficialAuth();
   const projection = readManagedProjection();
-  const accounts = listAccts();
 
   if (!official) {
     return returnNonConflict({
@@ -197,7 +195,6 @@ function inspectAuthState(options = {}) {
     });
   }
 
-  const matching = findMatchingAccount(official, accounts);
   const projectionAligned = !!current
     && projection?.account_id === current.id
     && projection?.auth_fingerprint === official.fingerprint;
@@ -231,6 +228,9 @@ function inspectAuthState(options = {}) {
       message: null,
     });
   }
+
+  const matching = findMatchingAccount(official, listAccts({ secrets: false }))
+    || findMatchingAccount(official, listAccts());
 
   if (!current) {
     return returnNonConflict({

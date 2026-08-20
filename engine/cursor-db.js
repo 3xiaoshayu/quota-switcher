@@ -1,4 +1,5 @@
 const fs = require("node:fs");
+const { hasPendingWalFile } = require("./atomic-file");
 const {
   withVscdb,
   snapshotItems,
@@ -120,11 +121,7 @@ const SQLITE_LABELS = {
 
 function hasPendingWal(dbPath) {
   if (!dbPath) return false;
-  try {
-    return fs.statSync(`${dbPath}-wal`).size > 32;
-  } catch {
-    return false;
-  }
+  return hasPendingWalFile(`${dbPath}-wal`);
 }
 
 async function waitForWalToClear(dbPath, timeoutMs, sleep) {

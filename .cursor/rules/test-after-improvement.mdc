@@ -1,0 +1,13 @@
+---
+description: After every improvement, test that specific change; keep it only if original behavior holds and the change is a real gain
+alwaysApply: true
+---
+
+# 改完必须测这一处
+
+任何“优化 / 加固 / 提速”下手之后：
+
+1. 针对**这一处改动**写或跑行为测试，不能只靠全量套件碰巧绿、也不能只 grep 源码字符串
+2. 先证明原本功能还在（切号、回滚、额度、登录态），再证明新改动真有收益
+3. 测不过、或测下来没有收益，就撤回，不要留着
+4. 不要用真实 Codex / Cursor / 反重力账号做破坏性试验

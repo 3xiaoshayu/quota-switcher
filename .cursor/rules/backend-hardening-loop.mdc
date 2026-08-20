@@ -1,0 +1,15 @@
+---
+description: Keep looping backend hardening; test each change; revert if no gain
+alwaysApply: true
+---
+
+# 后端加固循环
+
+用户说继续、循环、或按这个规则做时，不要停下来等下一句「继续」：
+
+1. 只做后端加固。不加新功能、不改界面、文案、交互，除非用户明确要求。
+2. 每一处下手后写或跑针对这一处的行为测试。先证明切号、回滚、额度、登录态还在，再证明真有收益。
+3. 测不过、或测下来没有收益，就撤回，不要留着。
+4. 不要用真实 Codex / Cursor / 反重力账号做破坏性试验；展示时不要真切号、不要点完 OAuth、不要替用户处理登录冲突。
+5. 不要给 Cursor / 反重力加自动切号。自动切号只保留 Codex。
+6. 不要擅自升版本、发 GitHub Release、重装桌面，除非用户明确要求。

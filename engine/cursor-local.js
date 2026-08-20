@@ -7,6 +7,7 @@ const {
   listCursorAccts,
   upsertCursorIndex,
   currentCursorAcct,
+  loadCursorIdx,
   setCurrentCursorAccountId,
   deleteCursorAcct,
 } = require("./cursor-storage");
@@ -110,7 +111,7 @@ function persistOfficialCursorState(values, session) {
   if (!account) {
     const local = authFromLocalValues(values);
     if (!local) return null;
-    const match = listCursorAccts().find((item) => sameCursorIdentity(item, {
+    const match = listCursorAccts({ secrets: false }).find((item) => sameCursorIdentity(item, {
       email: local.email,
       auth_id: local.authId,
     }));
@@ -130,7 +131,7 @@ function persistCursorUiFromValues(values) {
   if (!ui) return null;
   const local = authFromLocalValues(values);
   if (!local) return null;
-  const match = listCursorAccts().find((account) => sameCursorIdentity(account, {
+  const match = listCursorAccts({ secrets: false }).find((account) => sameCursorIdentity(account, {
     email: local.email,
     auth_id: local.authId,
   }));
@@ -175,20 +176,22 @@ function sameCursorIdentity(left, right) {
   return !!leftAuth && leftAuth === rightAuth;
 }
 
-function findSameCursorId(preview) {
-  const matches = listCursorAccts().filter((account) => sameCursorIdentity(preview, account));
-  const self = loadCursorAcct(preview.id);
-  if (self && !matches.some((account) => account.id === self.id)) matches.push(self);
-  return pickIdentityKeeper(matches, currentCursorAcct()?.id)?.id || preview.id;
+function findSameCursorId(preview, accounts = listCursorAccts({ secrets: false })) {
+  const matches = accounts.filter((account) => sameCursorIdentity(preview, account));
+  if (preview.id && !matches.some((account) => account.id === preview.id)) {
+    const self = accounts.find((account) => account.id === preview.id) || loadCursorAcct(preview.id);
+    if (self) matches.push(self);
+  }
+  return pickIdentityKeeper(matches, loadCursorIdx().current_cursor_account_id)?.id || preview.id;
 }
 
 function collapseDuplicateCursorAccounts() {
   return foldDuplicateAccounts(
     listCursorAccts(),
     sameCursorIdentity,
-    currentCursorAcct()?.id || null,
+    loadCursorIdx().current_cursor_account_id || null,
     (keeper, extras) => {
-      const currentId = currentCursorAcct()?.id;
+      const currentId = loadCursorIdx().current_cursor_account_id;
       if (currentId && extras.some((item) => item.id === currentId)) {
         setCurrentCursorAccountId(keeper.id);
       }
@@ -239,25 +242,28 @@ function accountFromCursorTokens(tokens, existing = null) {
 }
 
 async function upsertCursorAccount(tokens, options = {}) {
-  const preview = accountFromCursorTokens(tokens);
-  const targetAccountId = options.targetAccountId || null;
-  const targetAccount = targetAccountId ? loadCursorAcct(targetAccountId) : null;
-  const mismatch = !!targetAccountId && (!targetAccount || !sameCursorIdentity(preview, targetAccount));
-  const saveId = !mismatch && targetAccountId ? targetAccountId : findSameCursorId(preview);
-  const updated = !!loadCursorAcct(saveId);
-  const lockIds = [saveId, ...extraIdentityIds(preview, saveId, listCursorAccts(), sameCursorIdentity)];
+  return withAccountLock("__cursor_oauth_upsert__", async () => {
+    const preview = accountFromCursorTokens(tokens);
+    const listed = listCursorAccts({ secrets: false });
+    const targetAccountId = options.targetAccountId || null;
+    const targetAccount = targetAccountId ? loadCursorAcct(targetAccountId) : null;
+    const mismatch = !!targetAccountId && (!targetAccount || !sameCursorIdentity(preview, targetAccount));
+    const saveId = !mismatch && targetAccountId ? targetAccountId : findSameCursorId(preview, listed);
+    const updated = listed.some((account) => account.id === saveId);
+    const lockIds = [saveId, ...extraIdentityIds(preview, saveId, listed, sameCursorIdentity)];
 
-  const account = await withAccountLocks(lockIds, async () => {
-    const existing = loadCursorAcct(saveId);
-    const merged = accountFromCursorTokens(tokens, existing);
-    merged.id = saveId;
-    saveCursorAcct(merged);
-    upsertCursorIndex(merged);
-    collapseDuplicateCursorAccounts();
-    return loadCursorAcct(saveId) || merged;
+    const account = await withAccountLocks(lockIds, async () => {
+      const existing = loadCursorAcct(saveId);
+      const merged = accountFromCursorTokens(tokens, existing);
+      merged.id = saveId;
+      saveCursorAcct(merged);
+      upsertCursorIndex(merged);
+      collapseDuplicateCursorAccounts();
+      return loadCursorAcct(saveId) || merged;
+    });
+
+    return { account, mismatch, targetAccountId, updated };
   });
-
-  return { account, mismatch, targetAccountId, updated };
 }
 
 async function importLocalCursorAccount() {
@@ -317,7 +323,7 @@ async function syncCurrentCursorFromOfficialUncached() {
   return withAccountLock("__cursor_switch__", async () => {
     if (generation !== officialCursorGeneration) return currentCursorAcct();
     const current = currentCursorAcct();
-    const match = listCursorAccts().find((account) => sameCursorIdentity(account, {
+    const match = listCursorAccts({ secrets: false }).find((account) => sameCursorIdentity(account, {
       email: local.email,
       auth_id: local.authId,
     }));

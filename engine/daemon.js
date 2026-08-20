@@ -59,7 +59,7 @@ async function runDaemonWorker(options = {}) {
     };
   }
 
-  const accounts = listAccts();
+  const accounts = listAccts({ secrets: false });
   for (const listed of accounts) {
     if (isCancelled()) return stopped();
     try {
@@ -100,15 +100,14 @@ async function runDaemonWorker(options = {}) {
           accountsUpdated++;
         } catch (error) {
           if (error?.code === "quota_retry_pending") return;
-          const latest = loadAcct(account.id);
-          const probeStatus = error?.probe?.status || latest?.probe?.status;
+          const probeStatus = error?.probe?.status || account.probe?.status;
           if (
             error?.code === "usage_limited"
             || error?.code === "reauthorization_required"
             || error?.code === "account_banned"
             || probeStatus === "usage_limited"
             || probeStatus === "banned"
-            || latest?.banned
+            || account.banned
           ) return;
           failures.push(failure("ban_probe", account, error));
         }
@@ -166,7 +165,7 @@ async function runDaemonWorker(options = {}) {
   const config = loadAutoSwitchCfg();
   if (config.enabled) {
     try {
-      autoSwitchResult = await autoSwitchTick(config, { isCancelled });
+      autoSwitchResult = await autoSwitchTick(config, { isCancelled, authState });
       if (isCancelled() || autoSwitchResult?.reason === "cancelled") return stopped();
       if (autoSwitchResult?.reason === "current_quota_refresh_failed") {
         const retrying = /waiting for retry|quota_retry_pending/i.test(String(autoSwitchResult.error || ""));

@@ -440,9 +440,6 @@ function DashboardApp() {
     });
     setSelectedAccountIds(prunedSelected);
     selectedAccountIdsRef.current = prunedSelected;
-    if (snapshot.currentAccount?.email) {
-      localStorage.setItem('codex_auth_email', snapshot.currentAccount.email);
-    }
   }, [persistProduct]);
 
   const loadDashboardState = useCallback(async (showLoading = false, options?: { skipOfficialSync?: boolean }) => {

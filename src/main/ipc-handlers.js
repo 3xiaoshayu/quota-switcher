@@ -62,7 +62,15 @@ function loadAcctById(eng, id) {
         const account = eng.loadAcct(id);
         if (account) return account;
     } catch {}
-    return eng.listAccts().find(account => account.email === id || account.id === id) || null;
+    const listed = typeof eng.listAccts === "function"
+        ? eng.listAccts({ secrets: false }).find((account) => account.email === id || account.id === id)
+        : null;
+    if (!listed?.id) return null;
+    try {
+        return eng.loadAcct(listed.id);
+    } catch {
+        return null;
+    }
 }
 
 function publicQuota(eng, quota) {
@@ -136,27 +144,53 @@ function publicAccount(eng, account) {
     };
 }
 
+async function inspectAuthStateWithBusyTimeout(eng, accountId) {
+    let cancelled = false;
+    let busyTimer = null;
+    const inspectPromise = eng.withAccountLock(accountId, async () => {
+        if (cancelled) return null;
+        return eng.inspectAuthState({ migrateProjection: false });
+    });
+    inspectPromise.catch(() => {});
+    try {
+        const state = await Promise.race([
+            inspectPromise,
+            new Promise((_, reject) => {
+                busyTimer = setTimeout(() => {
+                    cancelled = true;
+                    reject(new Error("Authentication state is busy"));
+                }, 1500);
+            }),
+        ]);
+        if (!state) {
+            const error = new Error("Authentication state is busy");
+            throw error;
+        }
+        return state;
+    } finally {
+        if (busyTimer) clearTimeout(busyTimer);
+    }
+}
+
 async function inspectAuthStateForBackground(eng) {
     const index = typeof eng.loadIdx === "function" ? eng.loadIdx() : null;
     const currentId = index?.current_account_id;
     if (currentId && typeof eng.withAccountLock === "function") {
-        let busyTimer = null;
-        try {
-            const inspectPromise = eng.withAccountLock(currentId, async () =>
-                eng.inspectAuthState({ migrateProjection: false })
-            );
-            inspectPromise.catch(() => {});
-            return await Promise.race([
-                inspectPromise,
-                new Promise((_, reject) => {
-                    busyTimer = setTimeout(() => reject(new Error("Authentication state is busy")), 1500);
-                }),
-            ]);
-        } finally {
-            if (busyTimer) clearTimeout(busyTimer);
-        }
+        return inspectAuthStateWithBusyTimeout(eng, currentId);
     }
     return eng.inspectAuthState({ migrateProjection: false });
+}
+
+function listedCurrent(listed, currentId, fallbackLoad) {
+    if (!currentId) return null;
+    return listed.find((account) => account.id === currentId)
+        || (typeof fallbackLoad === "function" ? fallbackLoad(currentId) : null);
+}
+
+function listedAccountRef(listed, id, options = {}) {
+    if (!id || !Array.isArray(listed)) return null;
+    return listed.find((account) => account.id === id
+        || (options.allowEmail === true && account.email === id)) || null;
 }
 
 function publicAutoSwitchResult(eng, result) {
@@ -424,7 +458,15 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     });
     handle("cursor:current", async (event, options) => {
         if (!options?.skipOfficialSync) await eng.syncCurrentCursorFromOfficial();
-        return ok(publicCursorAccount(eng.currentCursorAcct()));
+        const listed = eng.listCursorAccts({ secrets: false });
+        const currentId = typeof eng.loadCursorIdx === "function"
+            ? eng.loadCursorIdx()?.current_cursor_account_id
+            : null;
+        return ok(publicCursorAccount(listedCurrent(
+            listed,
+            currentId,
+            typeof eng.loadCursorAcct === "function" ? (id) => eng.loadCursorAcct(id) : null,
+        )));
     });
     handle("cursor:importLocal", async () => {
         return eng.withAccountLock("__cursor_switch__", async () => {
@@ -447,7 +489,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         });
     });
     handle("cursor:reauthorize", async (event, id) => {
-        const target = eng.loadCursorAcct(id);
+        const target = listedAccountRef(eng.listCursorAccts({ secrets: false }), id);
         if (!target) return fail("Account does not exist");
         const result = await eng.cursorLoginFlow({ targetAccountId: target.id });
         return ok({
@@ -459,14 +501,18 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     handle("cursor:oauthStatus", () => ok(eng.getCursorOAuthStatus()));
     handle("cursor:oauthCancel", () => ok(eng.cancelCursorOAuth()));
     handle("cursor:delete", async (event, id) => {
-        return withFreshCursorAccount(id, async (account) => {
-            return ok(eng.deleteCursorAcct(account.id, { allowCurrent: false }));
+        const target = listedAccountRef(eng.listCursorAccts({ secrets: false }), id);
+        if (!target) return fail("Account does not exist");
+        return eng.withAccountLocks(["__cursor_switch__", target.id], async () => {
+            return ok(eng.deleteCursorAcct(target.id, { allowCurrent: false }));
         });
     });
     handle("cursor:switch", async (event, id) => {
-        const target = eng.loadCursorAcct(id);
+        const target = listedAccountRef(eng.listCursorAccts({ secrets: false }), id);
         if (!target) return fail("Account does not exist");
-        const currentId = eng.currentCursorAcct()?.id;
+        const currentId = typeof eng.loadCursorIdx === "function"
+            ? eng.loadCursorIdx()?.current_cursor_account_id
+            : null;
         const lockIds = ["__cursor_switch__", target.id];
         if (currentId && currentId !== target.id) lockIds.push(currentId);
         return eng.withAccountLocks(lockIds, async () => {
@@ -484,14 +530,14 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     handle("cursor:refreshQuota", async (event, id, force = true) => {
         return withFreshCursorAccount(id, async (account) => {
             const quota = await eng.refreshCursorQuota(account, { force: force !== false });
-            const fresh = publicCursorAccount(eng.loadCursorAcct(account.id) || account);
+            const fresh = publicCursorAccount(account);
             emitQuotaUpdated("cursor", fresh);
             emitAccountUpdated("cursor", fresh);
             return ok(publicCursorQuota(quota));
         });
     });
     handle("cursor:refreshAllQuotas", async () => {
-        const listedAccounts = eng.listCursorAccts();
+        const listedAccounts = eng.listCursorAccts({ secrets: false });
         const results = await runMapped(eng, listedAccounts, async (listed) => {
             try {
                 return await eng.withAccountLock(listed.id, async () => {
@@ -514,7 +560,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                         };
                     }
                     const quota = await eng.refreshCursorQuota(account, { force: true });
-                    const fresh = eng.loadCursorAcct(account.id) || account;
+                    const fresh = account;
                     if (fresh.requires_reauth || fresh.quota_error?.code === "reauthorization_required") {
                         return {
                             id: account.id,
@@ -621,7 +667,15 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     });
     handle("antigravity:current", async (event, options) => {
         if (!options?.skipOfficialSync) await eng.syncCurrentAntigravityFromOfficial();
-        return ok(publicAntigravityAccount(eng.currentAntigravityAcct()));
+        const listed = eng.listAntigravityAccts({ secrets: false });
+        const currentId = typeof eng.loadAntigravityIdx === "function"
+            ? eng.loadAntigravityIdx()?.current_antigravity_account_id
+            : null;
+        return ok(publicAntigravityAccount(listedCurrent(
+            listed,
+            currentId,
+            typeof eng.loadAntigravityAcct === "function" ? (id) => eng.loadAntigravityAcct(id) : null,
+        )));
     });
     handle("antigravity:importLocal", async () => {
         return eng.withAccountLock("__antigravity_switch__", async () => {
@@ -644,7 +698,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         });
     });
     handle("antigravity:reauthorize", async (event, id) => {
-        const target = eng.loadAntigravityAcct(id);
+        const target = listedAccountRef(eng.listAntigravityAccts({ secrets: false }), id);
         if (!target) return fail("Account does not exist");
         const result = await eng.antigravityLoginFlow({ targetAccountId: target.id });
         return ok({
@@ -656,14 +710,18 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     handle("antigravity:oauthStatus", () => ok(eng.getAntigravityOAuthStatus()));
     handle("antigravity:oauthCancel", () => ok(eng.cancelAntigravityOAuth()));
     handle("antigravity:delete", async (event, id) => {
-        return withFreshAntigravityAccount(id, async (account) => {
-            return ok(eng.deleteAntigravityAcct(account.id, { allowCurrent: false }));
+        const target = listedAccountRef(eng.listAntigravityAccts({ secrets: false }), id);
+        if (!target) return fail("Account does not exist");
+        return eng.withAccountLocks(["__antigravity_switch__", target.id], async () => {
+            return ok(eng.deleteAntigravityAcct(target.id, { allowCurrent: false }));
         });
     });
     handle("antigravity:switch", async (event, id) => {
-        const target = eng.loadAntigravityAcct(id);
+        const target = listedAccountRef(eng.listAntigravityAccts({ secrets: false }), id);
         if (!target) return fail("Account does not exist");
-        const currentId = eng.currentAntigravityAcct()?.id;
+        const currentId = typeof eng.loadAntigravityIdx === "function"
+            ? eng.loadAntigravityIdx()?.current_antigravity_account_id
+            : null;
         const lockIds = ["__antigravity_switch__", target.id];
         if (currentId && currentId !== target.id) lockIds.push(currentId);
         return eng.withAccountLocks(lockIds, async () => {
@@ -681,14 +739,14 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     handle("antigravity:refreshQuota", async (event, id, force = true) => {
         return withFreshAntigravityAccount(id, async (account) => {
             const quota = await eng.refreshAntigravityQuota(account, { force: force !== false });
-            const fresh = publicAntigravityAccount(eng.loadAntigravityAcct(account.id) || account);
+            const fresh = publicAntigravityAccount(account);
             emitQuotaUpdated("antigravity", fresh);
             emitAccountUpdated("antigravity", fresh);
             return ok(publicAntigravityQuota(quota));
         });
     });
     handle("antigravity:refreshAllQuotas", async () => {
-        const listedAccounts = eng.listAntigravityAccts();
+        const listedAccounts = eng.listAntigravityAccts({ secrets: false });
         const results = await runMapped(eng, listedAccounts, async (listed) => {
             try {
                 return await eng.withAccountLock(listed.id, async () => {
@@ -711,7 +769,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                         };
                     }
                     const quota = await eng.refreshAntigravityQuota(account, { force: true });
-                    const fresh = eng.loadAntigravityAcct(account.id) || account;
+                    const fresh = account;
                     if (fresh.requires_reauth || fresh.quota_error?.code === "reauthorization_required") {
                         return {
                             id: account.id,
@@ -758,32 +816,33 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     handle("account:list", async () => {
         return ok(eng.listAccts({ secrets: false }).map(account => publicAccount(eng, account)));
     });
-    handle("account:current", () => ok(publicAccount(eng, eng.currentAcct())));
+    handle("account:current", () => {
+        const listed = eng.listAccts({ secrets: false });
+        const currentId = typeof eng.loadIdx === "function" ? eng.loadIdx()?.current_account_id : null;
+        return ok(publicAccount(eng, listedCurrent(
+            listed,
+            currentId,
+            typeof eng.loadAcct === "function" ? (id) => eng.loadAcct(id) : null,
+        )));
+    });
     handle("account:get", (event, id) => {
-        const account = eng.loadAcct(id);
+        const listed = listedAccountRef(eng.listAccts({ secrets: false }), id);
+        const account = listed
+            || (typeof eng.loadAcct === "function" ? eng.loadAcct(id) : null);
         return account ? ok(publicAccount(eng, account)) : fail("Account does not exist");
     });
     handle("account:authState", async () => {
-        let busyTimer = null;
         try {
             // inspectAuthState may write the current account file (official
             // token rotation sync); serialize it against in-flight refreshes.
             // If the daemon already holds that lock for a quota HTTP call,
             // do not keep the first dashboard paint waiting on chatgpt.com.
             const index = eng.loadIdx();
-            const inspectPromise = index.current_account_id
-                ? eng.withAccountLock(index.current_account_id, async () => eng.inspectAuthState({ migrateProjection: false }))
-                : Promise.resolve(eng.inspectAuthState({ migrateProjection: false }));
-            inspectPromise.catch(() => {});
-            const state = await Promise.race([
-                inspectPromise,
-                new Promise((_, reject) => {
-                    busyTimer = setTimeout(() => reject(new Error("Authentication state is busy")), 1500);
-                }),
-            ]);
+            const state = index.current_account_id
+                ? await inspectAuthStateWithBusyTimeout(eng, index.current_account_id)
+                : eng.inspectAuthState({ migrateProjection: false });
             return ok(state);
         } catch (error) { return fail(error.message); }
-        finally { if (busyTimer) clearTimeout(busyTimer); }
     });
     handle("account:adoptOfficial", async () => {
         try {
@@ -812,7 +871,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     });
     handle("account:reauthorize", async (event, id) => {
         try {
-            const target = loadAcctById(eng, id);
+            const target = listedAccountRef(eng.listAccts({ secrets: false }), id, { allowEmail: true });
             if (!target) return fail("Account does not exist");
             const result = await eng.oauthLoginFlow({ targetAccountId: target.id });
             return ok({
@@ -841,8 +900,10 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
 
     handle("account:delete", async (event, id) => {
         try {
-            return await withFreshAccount(eng, id, async account => {
-                return ok(eng.deleteAcct(account.id, { allowCurrent: false }));
+            const target = listedAccountRef(eng.listAccts({ secrets: false }), id, { allowEmail: true });
+            if (!target) return fail("Account does not exist");
+            return await eng.withAccountLock(target.id, async () => {
+                return ok(eng.deleteAcct(target.id, { allowCurrent: false }));
             });
         } catch (error) { return fail(error.message); }
     });
@@ -852,7 +913,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             // also accepts emails) and hold the outgoing current account's
             // lock too, so a token refresh cannot rotate its credentials in
             // the middle of the transaction and get destroyed by a rollback.
-            const target = loadAcctById(eng, id);
+            const target = listedAccountRef(eng.listAccts({ secrets: false }), id, { allowEmail: true });
             if (!target) return fail("Account does not exist");
             const currentId = eng.loadIdx().current_account_id;
             const lockIds = ["__switch__", target.id];
@@ -878,7 +939,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             }
             return await withFreshAccount(eng, id, async account => {
                 const quota = await refreshAccountQuota(eng, account, force !== false);
-                const published = publicAccount(eng, eng.loadAcct(account.id) || account);
+                const published = publicAccount(eng, account);
                 emitQuotaUpdated("codex", published);
                 emitAccountUpdated("codex", published);
                 return ok(publicQuota(eng, quota));
@@ -886,51 +947,60 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         } catch (error) { return fail(error.message); }
     });
     handle("quota:refreshAll", async () => {
-        const listedAccounts = eng.listAccts();
+        const listedAccounts = eng.listAccts({ secrets: false });
         const results = await runMapped(eng, listedAccounts, async (listed) => {
             try {
                 return await eng.withAccountLock(listed.id, async () => {
                     const account = eng.loadAcct(listed.id);
                     if (!account) return null;
-                    if (quotaRetryPending(eng, account)) {
-                        return {
-                            id: account.id,
-                            email: account.email,
-                            skipped: true,
-                            reason: "quota_retry_pending",
-                        };
-                    }
-                    if (account.banned || account.requires_reauth) {
-                        if (typeof eng.canProbeUsageWithoutRefresh === "function"
-                            && typeof eng.probeUsageOnly === "function"
-                            && eng.canProbeUsageWithoutRefresh(account)) {
-                            const quota = await eng.probeUsageOnly(account, { force: true });
-                            const published = publicAccount(eng, eng.loadAcct(account.id) || account);
-                            emitQuotaUpdated("codex", published);
-                            emitAccountUpdated("codex", published);
-                            return { id: account.id, email: account.email, quota: publicQuota(eng, quota) };
+                    try {
+                        if (quotaRetryPending(eng, account)) {
+                            return {
+                                id: account.id,
+                                email: account.email,
+                                skipped: true,
+                                reason: "quota_retry_pending",
+                            };
                         }
+                        if (account.banned || account.requires_reauth) {
+                            if (typeof eng.canProbeUsageWithoutRefresh === "function"
+                                && typeof eng.probeUsageOnly === "function"
+                                && eng.canProbeUsageWithoutRefresh(account)) {
+                                const quota = await eng.probeUsageOnly(account, { force: true });
+                                const published = publicAccount(eng, account);
+                                emitQuotaUpdated("codex", published);
+                                emitAccountUpdated("codex", published);
+                                return { id: account.id, email: account.email, quota: publicQuota(eng, quota) };
+                            }
+                            return {
+                                id: account.id,
+                                email: account.email,
+                                skipped: true,
+                                reason: account.banned ? "account_banned" : "reauthorization_required",
+                                banned: !!account.banned,
+                            };
+                        }
+                        const quota = await eng.refreshQuota(account, { force: true });
+                        const published = publicAccount(eng, account);
+                        emitQuotaUpdated("codex", published);
+                        emitAccountUpdated("codex", published);
+                        return { id: account.id, email: account.email, quota: publicQuota(eng, quota) };
+                    } catch (error) {
                         return {
                             id: account.id,
                             email: account.email,
-                            skipped: true,
-                            reason: account.banned ? "account_banned" : "reauthorization_required",
+                            error: error.message,
                             banned: !!account.banned,
+                            reason: error.code || undefined,
                         };
                     }
-                    const quota = await eng.refreshQuota(account, { force: true });
-                    const published = publicAccount(eng, eng.loadAcct(account.id) || account);
-                    emitQuotaUpdated("codex", published);
-                    emitAccountUpdated("codex", published);
-                    return { id: account.id, email: account.email, quota: publicQuota(eng, quota) };
                 });
             } catch (error) {
-                const latest = typeof eng.loadAcct === "function" ? eng.loadAcct(listed.id) : null;
                 return {
                     id: listed.id,
                     email: listed.email,
                     error: error.message,
-                    banned: !!latest?.banned,
+                    banned: !!listed.banned,
                     reason: error.code || undefined,
                 };
             }
@@ -1145,13 +1215,35 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                 return typeof eng.getAntigravityInstallationStatus === "function" ? eng.getAntigravityInstallationStatus() : null;
             }, 2500, null),
         ]);
+        const accounts = eng.listAccts({ secrets: false });
+        const cursorAccounts = eng.listCursorAccts({ secrets: false });
+        const antigravityAccounts = eng.listAntigravityAccts({ secrets: false });
+        const currentAccountId = typeof eng.loadIdx === "function" ? eng.loadIdx()?.current_account_id : null;
+        const currentCursorId = typeof eng.loadCursorIdx === "function"
+            ? eng.loadCursorIdx()?.current_cursor_account_id
+            : null;
+        const currentAntigravityId = typeof eng.loadAntigravityIdx === "function"
+            ? eng.loadAntigravityIdx()?.current_antigravity_account_id
+            : null;
         return ok({
-            accounts: eng.listAccts({ secrets: false }).map((account) => publicAccount(eng, account)),
-            currentAccount: publicAccount(eng, eng.currentAcct()),
-            cursorAccounts: eng.listCursorAccts({ secrets: false }).map((account) => publicCursorAccount(account)),
-            currentCursorAccount: publicCursorAccount(eng.currentCursorAcct()),
-            antigravityAccounts: eng.listAntigravityAccts({ secrets: false }).map((account) => publicAntigravityAccount(account)),
-            currentAntigravityAccount: publicAntigravityAccount(eng.currentAntigravityAcct()),
+            accounts: accounts.map((account) => publicAccount(eng, account)),
+            currentAccount: publicAccount(eng, listedCurrent(
+                accounts,
+                currentAccountId,
+                typeof eng.loadAcct === "function" ? (id) => eng.loadAcct(id) : null,
+            )),
+            cursorAccounts: cursorAccounts.map((account) => publicCursorAccount(account)),
+            currentCursorAccount: publicCursorAccount(listedCurrent(
+                cursorAccounts,
+                currentCursorId,
+                typeof eng.loadCursorAcct === "function" ? (id) => eng.loadCursorAcct(id) : null,
+            )),
+            antigravityAccounts: antigravityAccounts.map((account) => publicAntigravityAccount(account)),
+            currentAntigravityAccount: publicAntigravityAccount(listedCurrent(
+                antigravityAccounts,
+                currentAntigravityId,
+                typeof eng.loadAntigravityAcct === "function" ? (id) => eng.loadAntigravityAcct(id) : null,
+            )),
             daemon: {
                 running: daemonTimer !== null,
                 syncIntervalMinutes: daemonIntervalMinutes(),
@@ -1187,4 +1279,4 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     return { startDaemon, stopDaemon, runDaemon };
 }
 
-module.exports = { registerIpcHandlers, tokenRefreshResponse };
+module.exports = { registerIpcHandlers, tokenRefreshResponse, inspectAuthStateWithBusyTimeout };

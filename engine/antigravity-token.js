@@ -150,7 +150,7 @@ async function fetchGoogleUserInfo(accessToken) {
 }
 
 async function refreshAllAntigravityTokens(force = false) {
-  const listedAccounts = listAntigravityAccts();
+  const listedAccounts = listAntigravityAccts({ secrets: false });
   const results = await mapLimit(listedAccounts, 5, async (listed) => {
     return withAccountLock(listed.id, async () => {
       const account = loadAntigravityAcct(listed.id) || listed;

@@ -1,6 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
-const { writeJsonAtomic, quarantineFile, restoreBackup, renameWithRetry, sleepSync } = require("./atomic-file");
+const { writeJsonAtomic, quarantineFile, restoreBackup, renameWithRetry, sleepSync, captureFile, statSyncWithRetry } = require("./atomic-file");
 const { jwtPayload } = require("./crypto-utils");
 const { withPathLock } = require("./operation-locks");
 const { logInfo, logWarn, logError } = require("./logger");
@@ -197,7 +197,7 @@ function decodeAccount(raw, filePath, options = {}) {
 
 function rewriteFingerprint(filePath) {
   try {
-    const stat = fs.statSync(filePath);
+    const stat = statSyncWithRetry(filePath);
     return `${stat.mtimeMs}:${stat.size}`;
   } catch {
     return null;
@@ -349,10 +349,6 @@ function loadAccountPath(filePath, options = {}) {
     if (typeof options.onUnreadable === "function") options.onUnreadable(filePath, error);
     return null;
   }
-}
-
-function captureFile(filePath) {
-  return fs.existsSync(filePath) ? fs.readFileSync(filePath) : null;
 }
 
 function restoreFile(filePath, content) {
@@ -513,7 +509,7 @@ function createAccountFileStore(spec) {
     try {
       const raw = useIndexBackup
         ? tryReadJsonWithBackup(indexPath, "account_index").value
-        : JSON.parse(fs.readFileSync(indexPath, "utf8"));
+        : readJson(indexPath);
       const index = normalizeIndex(raw);
       if (index.accounts.length === 0 && fs.existsSync(accountsDir)) {
         const accountFiles = fs.readdirSync(accountsDir).some((name) => name.startsWith(prefix) && name.endsWith(".json"));
@@ -610,36 +606,20 @@ function createAccountFileStore(spec) {
       secrets,
       allowRestore: secrets,
     });
-    if (!secrets) return accounts;
-    if (eagerIndexLoad) {
-      const index = loadIdx();
-      if (stats.credentialFailures > 0) {
-        if (logIndexSync) {
-          logWarn(`Account index synchronization skipped: ${stats.credentialFailures} account file(s) could not be decrypted`);
-        }
-        return accounts;
-      }
-      if (stats.transientReads > 0) {
-        if (logIndexSync) {
-          logWarn(`Account index synchronization skipped: ${stats.transientReads} account file(s) were temporarily locked`);
-        }
-        return accounts;
-      }
-      const summaries = accounts.map(accountSummary);
-      const indexedIds = index.accounts.map((account) => account.id).sort().join("|");
-      const scannedIds = summaries.map((account) => account.id).sort().join("|");
-      if (indexedIds !== scannedIds) {
-        index.accounts = summaries;
-        if (index[currentField] && !accounts.some((account) => account.id === index[currentField])) {
-          index[currentField] = null;
-        }
-        saveIdx(index);
-        if (logIndexSync) logInfo("Account index synchronized with readable account files");
+    if (!secrets && options.syncIndex !== true) return accounts;
+    const index = loadIdx();
+    if (stats.credentialFailures > 0) {
+      if (logIndexSync) {
+        logWarn(`Account index synchronization skipped: ${stats.credentialFailures} account file(s) could not be decrypted`);
       }
       return accounts;
     }
-    if (stats.credentialFailures > 0 || stats.transientReads > 0) return accounts;
-    const index = loadIdx();
+    if (stats.transientReads > 0) {
+      if (logIndexSync) {
+        logWarn(`Account index synchronization skipped: ${stats.transientReads} account file(s) were temporarily locked`);
+      }
+      return accounts;
+    }
     const summaries = accounts.map(accountSummary);
     const indexedIds = index.accounts.map((account) => account.id).sort().join("|");
     const scannedIds = summaries.map((account) => account.id).sort().join("|");
@@ -649,6 +629,7 @@ function createAccountFileStore(spec) {
         index[currentField] = null;
       }
       saveIdx(index);
+      if (logIndexSync) logInfo("Account index synchronized with readable account files");
     }
     return accounts;
   }

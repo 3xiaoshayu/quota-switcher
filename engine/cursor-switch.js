@@ -1,8 +1,8 @@
 const fs = require("node:fs");
 const { ts } = require("./crypto-utils");
 const { getCursorRuntime, firstExistingCursorExe } = require("./cursor-runtime");
-const { applyOfficialCursorSwitch, restoreVscdbSnapshot, waitForCursorVscdbWritable, finiteTeamId } = require("./cursor-db");
-const { loadCursorAcct, saveCursorAcct, currentCursorAcct, setCurrentCursorAccountId, upsertCursorIndex, snapshotCursorMeta, restoreCursorMeta } = require("./cursor-storage");
+const { applyOfficialCursorSwitch, restoreVscdbSnapshot, waitForCursorVscdbWritable, waitForWalToClear, finiteTeamId } = require("./cursor-db");
+const { loadCursorAcct, saveCursorAcct, loadCursorIdx, setCurrentCursorAccountId, upsertCursorIndex, snapshotCursorMeta, restoreCursorMeta } = require("./cursor-storage");
 const { applyCursorUiToValues, cursorUiFromValues, mergeCursorUi, mergeCursorSession, persistOfficialCursorState, invalidateCursorOfficialSync, sessionFromAccount } = require("./cursor-local");
 const { usableEmail } = require("./account-identity");
 const { logInfo, logWarn, logError } = require("./logger");
@@ -12,6 +12,7 @@ const GRACEFUL_WAIT_MS = 1500;
 const FORCE_WAIT_MS = 4000;
 const LEFTOVER_WAIT_MS = 2500;
 const PID_POLL_MS = 50;
+const WAL_CLEAR_WAIT_MS = 2000;
 
 function pidIsAlive(pid) {
   try {
@@ -157,7 +158,7 @@ async function doCursorSwitch(account) {
     throw new Error("The target account requires reauthorization before it can be switched to");
   }
 
-  const current = currentCursorAcct();
+  const currentId = loadCursorIdx().current_cursor_account_id;
   const runtime = getCursorRuntime();
   const dbPath = runtime.vscdbPath();
   const started = Date.now();
@@ -175,6 +176,7 @@ async function doCursorSwitch(account) {
     const killed = await killCursor();
     killMs = Date.now() - started;
     launchPath = resolveCursorLaunchPath(killed.launchPath);
+    await waitForWalToClear(dbPath, WAL_CLEAR_WAIT_MS, runtime.sleep);
     await waitForCursorVscdbWritable(dbPath, { sleep: runtime.sleep });
     writableMs = Date.now() - started - killMs;
     const writeStarted = Date.now();
@@ -227,10 +229,10 @@ async function doCursorSwitch(account) {
     logInfo(`Cursor switch timings kill=${killMs}ms writable=${writableMs}ms write=${writeMs}ms total=${Date.now() - started}ms`);
     logInfo(`Switched official Cursor to ${account.email}${session.teamId != null ? ` team=${session.teamId}` : " team=none"}`);
     return {
-      already: !!current && current.id === account.id,
+      already: !!currentId && currentId === account.id,
       launched,
       launchError,
-      account: loadCursorAcct(account.id),
+      account,
     };
   } catch (error) {
     logError(`Cursor switch failed wrote=${wrote} kill=${killMs}ms writable=${writableMs}ms write=${writeMs}ms ${describeCaughtError(error)}`);

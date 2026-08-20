@@ -50,6 +50,211 @@ function cursorToken(email, suffix) {
   });
 }
 
+function countDecrypts(engine) {
+  let count = 0;
+  engine.setSecretCodec({
+    name: "test-codec",
+    encrypt: (value) => Buffer.from(value, "utf8").toString("base64"),
+    decrypt: (value) => {
+      count += 1;
+      return Buffer.from(value, "base64").toString("utf8");
+    },
+  });
+  return {
+    get count() { return count; },
+    reset() { count = 0; },
+  };
+}
+
+test("waitForWalToClear returns immediately when no WAL exists", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "no-wal.vscdb");
+  fs.writeFileSync(dbPath, "x");
+  let sleeps = 0;
+  const cleared = await engine.waitForWalToClear(dbPath, 2000, async () => {
+    sleeps += 1;
+  });
+  assert.equal(cleared, true);
+  assert.equal(sleeps, 0);
+});
+
+test("waitForWalToClear waits until a leftover WAL file is gone", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "pending-wal.vscdb");
+  fs.writeFileSync(dbPath, "x");
+  fs.writeFileSync(`${dbPath}-wal`, Buffer.alloc(64, 1));
+  let sleeps = 0;
+  const cleared = await engine.waitForWalToClear(dbPath, 2000, async () => {
+    sleeps += 1;
+    if (sleeps === 2) fs.unlinkSync(`${dbPath}-wal`);
+  });
+  assert.equal(cleared, true);
+  assert.equal(sleeps, 2);
+});
+
+test("waitForWalToClear retries a transient WAL stat lock", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "locked-wal.vscdb");
+  fs.writeFileSync(dbPath, "x");
+  fs.writeFileSync(`${dbPath}-wal`, Buffer.alloc(64, 1));
+  const walPath = `${dbPath}-wal`;
+  const originalStat = fs.statSync;
+  let failures = 0;
+  fs.statSync = (file, ...args) => {
+    if (path.resolve(String(file)) === path.resolve(walPath) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalStat(file, ...args);
+  };
+  t.after(() => { fs.statSync = originalStat; });
+  let sleeps = 0;
+  const cleared = await engine.waitForWalToClear(dbPath, 2000, async () => {
+    sleeps += 1;
+    if (sleeps === 1 && fs.existsSync(walPath)) fs.unlinkSync(walPath);
+  });
+  assert.equal(failures, 2);
+  assert.equal(sleeps, 1);
+  assert.equal(cleared, true);
+  assert.equal(fs.existsSync(walPath), false);
+});
+
+test("cursor lists without secrets skip decrypt when token metadata is present", async (t) => {
+  const { engine } = freshEngine(t);
+  await engine.upsertCursorAccount({
+    email: "meta@example.com",
+    auth_id: "user_meta",
+    access_token: cursorToken("meta@example.com", "meta"),
+    refresh_token: "refresh-meta",
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const listed = engine.listCursorAccts({ secrets: false });
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].email, "meta@example.com");
+  assert.equal(listed[0].tokens, null);
+  assert.equal(decrypts.count, 0);
+});
+
+test("concurrent Cursor upserts of the same identity keep one account", async (t) => {
+  const { engine } = freshEngine(t);
+  const [first, second] = await Promise.all([
+    engine.upsertCursorAccount({
+      email: "same-cursor@example.com",
+      auth_id: "user_same_cursor",
+      access_token: cursorToken("same-cursor@example.com", "same-a"),
+      refresh_token: "refresh-same-a",
+    }),
+    engine.upsertCursorAccount({
+      email: "same-cursor@example.com",
+      auth_id: "user_same_cursor",
+      access_token: cursorToken("same-cursor@example.com", "same-b"),
+      refresh_token: "refresh-same-b",
+    }),
+  ]);
+  assert.equal(engine.listCursorAccts().length, 1);
+  assert.equal(first.account.id, second.account.id);
+});
+
+test("Cursor upsert identity scan does not decrypt the rest of the vault", async (t) => {
+  const { engine } = freshEngine(t);
+  const keep = await engine.upsertCursorAccount({
+    email: "keep-upsert@example.com",
+    auth_id: "user_keep_upsert",
+    access_token: cursorToken("keep-upsert@example.com", "keep-upsert"),
+    refresh_token: "refresh-keep-upsert",
+  });
+  await engine.upsertCursorAccount({
+    email: "spare-upsert-a@example.com",
+    auth_id: "user_spare_upsert_a",
+    access_token: cursorToken("spare-upsert-a@example.com", "spare-a"),
+    refresh_token: "refresh-spare-a",
+  });
+  await engine.upsertCursorAccount({
+    email: "spare-upsert-b@example.com",
+    auth_id: "user_spare_upsert_b",
+    access_token: cursorToken("spare-upsert-b@example.com", "spare-b"),
+    refresh_token: "refresh-spare-b",
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const created = await engine.upsertCursorAccount({
+    email: "fresh-upsert@example.com",
+    auth_id: "user_fresh_upsert",
+    access_token: cursorToken("fresh-upsert@example.com", "fresh-upsert"),
+    refresh_token: "refresh-fresh-upsert",
+  });
+  assert.equal(created.updated, false);
+  assert.notEqual(created.account.id, keep.account.id);
+  assert.ok(decrypts.count <= 6);
+  decrypts.reset();
+  const again = await engine.upsertCursorAccount({
+    email: "keep-upsert@example.com",
+    auth_id: "user_keep_upsert",
+    access_token: cursorToken("keep-upsert@example.com", "keep-upsert-again"),
+    refresh_token: "refresh-keep-upsert-again",
+  });
+  assert.equal(again.updated, true);
+  assert.equal(again.account.id, keep.account.id);
+  assert.ok(decrypts.count <= 6);
+});
+
+test("cursor official sync matches identity without decrypting other accounts", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "sync-secrets.vscdb");
+  const keep = await engine.upsertCursorAccount({
+    email: "keep-sync@example.com",
+    auth_id: "user_keep_sync",
+    access_token: cursorToken("keep-sync@example.com", "keep-sync"),
+    refresh_token: "refresh-keep-sync",
+  });
+  await engine.upsertCursorAccount({
+    email: "spare-sync@example.com",
+    auth_id: "user_spare_sync",
+    access_token: cursorToken("spare-sync@example.com", "spare-sync"),
+    refresh_token: "refresh-spare-sync",
+  });
+  await engine.writeCursorAuth(dbPath, {
+    "cursorAuth/accessToken": cursorToken("keep-sync@example.com", "keep-sync"),
+    "cursorAuth/cachedEmail": "keep-sync@example.com",
+    "cursorAuth/authId": "user_keep_sync",
+  });
+  engine.setCursorRuntimeForTests({ vscdbPath: () => dbPath });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const current = await engine.syncCurrentCursorFromOfficial({ force: true });
+  assert.equal(current.id, keep.account.id);
+  // current + matched load/save path; listing two encrypted files would add 2 more.
+  assert.ok(decrypts.count >= 1);
+  assert.ok(decrypts.count < 6);
+});
+
+test("cursor token batch check lists without decrypting then loads each account", async (t) => {
+  const { engine } = freshEngine(t);
+  await engine.upsertCursorAccount({
+    email: "batch-live@example.com",
+    auth_id: "user_batch_live",
+    access_token: jwt({ email: "batch-live@example.com", sub: "user_batch_live", exp: Math.floor(Date.now() / 1000) + 3600 }),
+    refresh_token: "refresh-batch-live",
+  });
+  await engine.upsertCursorAccount({
+    email: "batch-dead@example.com",
+    auth_id: "user_batch_dead",
+    access_token: jwt({ email: "batch-dead@example.com", sub: "user_batch_dead", exp: Math.floor(Date.now() / 1000) - 10 }),
+  });
+  engine.setCursorRuntimeForTests({
+    httpJson: async () => ({ status: 200, body: JSON.stringify({ accessToken: "new" }) }),
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const summary = await engine.refreshAllCursorTokens(false);
+  assert.equal(summary.results.length, 2);
+  assert.ok(decrypts.count >= 2);
+  assert.ok(decrypts.count < 5);
+});
+
 function itemText(dbPath, key) {
   const { asText, getItem, withVscdbSync } = require("../engine/sqlite-native");
   return withVscdbSync(dbPath, { readOnly: true }, (db) => {
@@ -511,6 +716,48 @@ test("cursor switch writes vscdb after close and rolls back on write failure", a
   assert.equal(values["glass.lastSignedInAuthId"], "auth0|user_next");
   assert.equal(engine.currentCursorAcct().id, created.account.id);
   assert.equal(engine.listAccts().length, 0);
+});
+
+test("cursor switch returns the in-memory account without a final decrypt", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "cursor-state.vscdb");
+  const exePath = path.join(root, "Cursor.exe");
+  fs.writeFileSync(exePath, "fake");
+  await engine.writeCursorAuth(dbPath, {
+    "cursorAuth/accessToken": "old-token",
+    "cursorAuth/cachedEmail": "old@example.com",
+  });
+  const created = await engine.upsertCursorAccount({
+    email: "mem-switch@example.com",
+    auth_id: "user_mem_switch",
+    access_token: cursorToken("mem-switch@example.com", "mem-switch"),
+    refresh_token: "refresh-mem-switch",
+  });
+  await engine.upsertCursorAccount({
+    email: "mem-spare@example.com",
+    auth_id: "user_mem_spare",
+    access_token: cursorToken("mem-spare@example.com", "mem-spare"),
+    refresh_token: "refresh-mem-spare",
+  });
+  engine.setCursorRuntimeForTests({
+    vscdbPath: () => dbPath,
+    cursorExePath: () => exePath,
+    listProcesses: async () => [],
+    launch: () => true,
+    sleep: async () => {},
+  });
+  const account = engine.loadCursorAcct(created.account.id);
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const switched = await engine.doCursorSwitch(account);
+  assert.ok(decrypts.count <= 1);
+  assert.equal(switched.account.id, created.account.id);
+  assert.equal(switched.account.email, "mem-switch@example.com");
+  assert.ok(switched.account.tokens?.access_token);
+  assert.ok(switched.account.last_used);
+  assert.equal(engine.currentCursorAcct().id, created.account.id);
+  const values = await engine.readCursorAuth(dbPath, { copyFirst: false });
+  assert.equal(values["cursorAuth/cachedEmail"], "mem-switch@example.com");
 });
 
 test("cursor switch clears leftover team and display-name cache from the previous login", async (t) => {
@@ -1457,4 +1704,231 @@ test("cursor official sync in flight does not revert current after switch", asyn
   releaseRead();
   await syncing;
   assert.equal(engine.currentCursorAcct().id, next.account.id);
+});
+
+test("cursor current IPC reuses listed accounts without extra decrypts", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await engine.upsertCursorAccount({
+    email: "ipc-current@example.com",
+    auth_id: "user_ipc_current",
+    access_token: cursorToken("ipc-current@example.com", "ipc-current"),
+    refresh_token: "refresh-ipc-current",
+  });
+  await engine.upsertCursorAccount({
+    email: "ipc-spare@example.com",
+    auth_id: "user_ipc_spare",
+    access_token: cursorToken("ipc-spare@example.com", "ipc-spare"),
+    refresh_token: "refresh-ipc-spare",
+  });
+  engine.setCurrentCursorAccountId(current.account.id);
+  const handlers = new Map();
+  delete require.cache[require.resolve("../src/main/ipc-handlers")];
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.1", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const result = await handlers.get("cursor:current")({}, { skipOfficialSync: true });
+  assert.equal(result.success, true);
+  assert.equal(result.data.id, current.account.id);
+  assert.equal(result.data.email, "ipc-current@example.com");
+  assert.equal(result.data.tokens, undefined);
+  assert.equal(decrypts.count, 0);
+});
+
+test("cursor switch IPC decrypts the target once before switching", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await engine.upsertCursorAccount({
+    email: "switch-current@example.com",
+    auth_id: "user_switch_current",
+    access_token: cursorToken("switch-current@example.com", "switch-current"),
+    refresh_token: "refresh-switch-current",
+  });
+  const target = await engine.upsertCursorAccount({
+    email: "switch-target@example.com",
+    auth_id: "user_switch_target",
+    access_token: cursorToken("switch-target@example.com", "switch-target"),
+    refresh_token: "refresh-switch-target",
+  });
+  await engine.upsertCursorAccount({
+    email: "switch-spare@example.com",
+    auth_id: "user_switch_spare",
+    access_token: cursorToken("switch-spare@example.com", "switch-spare"),
+    refresh_token: "refresh-switch-spare",
+  });
+  engine.setCurrentCursorAccountId(current.account.id);
+  const switched = [];
+  engine.doCursorSwitch = async (account) => {
+    switched.push(account);
+    return { already: false, account };
+  };
+  const handlers = new Map();
+  delete require.cache[require.resolve("../src/main/ipc-handlers")];
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.1", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const missing = await handlers.get("cursor:switch")({}, "cursor_missing");
+  assert.equal(missing.success, false);
+  assert.equal(switched.length, 0);
+  assert.equal(decrypts.count, 0);
+
+  decrypts.reset();
+  const result = await handlers.get("cursor:switch")({}, target.account.id);
+  assert.equal(result.success, true);
+  assert.equal(result.data.account.id, target.account.id);
+  assert.equal(switched.length, 1);
+  assert.ok(switched[0].tokens?.access_token);
+  assert.equal(decrypts.count, 1);
+});
+
+test("cursor reauthorize IPC does not decrypt before starting OAuth", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await engine.upsertCursorAccount({
+    email: "reauth-current@example.com",
+    auth_id: "user_reauth_current",
+    access_token: cursorToken("reauth-current@example.com", "reauth-current"),
+    refresh_token: "refresh-reauth-current",
+  });
+  await engine.upsertCursorAccount({
+    email: "reauth-spare@example.com",
+    auth_id: "user_reauth_spare",
+    access_token: cursorToken("reauth-spare@example.com", "reauth-spare"),
+    refresh_token: "refresh-reauth-spare",
+  });
+  const started = [];
+  engine.cursorLoginFlow = async (options) => {
+    started.push(options?.targetAccountId || null);
+    return { account: current.account, mismatch: false, targetAccountId: current.account.id };
+  };
+  const handlers = new Map();
+  delete require.cache[require.resolve("../src/main/ipc-handlers")];
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.1", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const missing = await handlers.get("cursor:reauthorize")({}, "cursor_missing");
+  assert.equal(missing.success, false);
+  assert.equal(started.length, 0);
+  assert.equal(decrypts.count, 0);
+
+  decrypts.reset();
+  const result = await handlers.get("cursor:reauthorize")({}, current.account.id);
+  assert.equal(result.success, true);
+  assert.equal(result.data.targetAccountId, current.account.id);
+  assert.deepEqual(started, [current.account.id]);
+  assert.equal(decrypts.count, 0);
+});
+
+test("cursor delete IPC removes a spare account without decrypting", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await engine.upsertCursorAccount({
+    email: "del-current@example.com",
+    auth_id: "user_del_current",
+    access_token: cursorToken("del-current@example.com", "del-current"),
+    refresh_token: "refresh-del-current",
+  });
+  const spare = await engine.upsertCursorAccount({
+    email: "del-spare@example.com",
+    auth_id: "user_del_spare",
+    access_token: cursorToken("del-spare@example.com", "del-spare"),
+    refresh_token: "refresh-del-spare",
+  });
+  engine.setCurrentCursorAccountId(current.account.id);
+  const handlers = new Map();
+  delete require.cache[require.resolve("../src/main/ipc-handlers")];
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.1", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const blocked = await handlers.get("cursor:delete")({}, current.account.id);
+  assert.equal(blocked.success, false);
+  assert.match(String(blocked.error), /Switch to another account/);
+  assert.equal(engine.listCursorAccts({ secrets: false }).length, 2);
+  assert.equal(decrypts.count, 0);
+
+  decrypts.reset();
+  const removed = await handlers.get("cursor:delete")({}, spare.account.id);
+  assert.equal(removed.success, true);
+  assert.equal(engine.listCursorAccts({ secrets: false }).length, 1);
+  assert.equal(engine.listCursorAccts({ secrets: false })[0].id, current.account.id);
+  assert.equal(engine.loadCursorIdx().current_cursor_account_id, current.account.id);
+  assert.equal(decrypts.count, 0);
+});
+
+test("cursor refreshAll publishes from the in-memory account without a second decrypt", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await engine.upsertCursorAccount({
+    email: "batch-one@example.com",
+    auth_id: "user_batch_one",
+    access_token: cursorToken("batch-one@example.com", "batch-one"),
+    refresh_token: "refresh-batch-one",
+  });
+  const second = await engine.upsertCursorAccount({
+    email: "batch-two@example.com",
+    auth_id: "user_batch_two",
+    access_token: cursorToken("batch-two@example.com", "batch-two"),
+    refresh_token: "refresh-batch-two",
+  });
+  engine.refreshCursorQuota = async (account) => {
+    account.quota = { membership_type: "pro" };
+    return account.quota;
+  };
+  const handlers = new Map();
+  delete require.cache[require.resolve("../src/main/ipc-handlers")];
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.1", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const result = await handlers.get("cursor:refreshAllQuotas")({});
+  assert.equal(result.success, true);
+  assert.equal(result.data.length, 2);
+  assert.equal(result.data.find((item) => item.id === first.account.id).quota.membership_type, "pro");
+  assert.equal(result.data.find((item) => item.id === second.account.id).quota.membership_type, "pro");
+  assert.equal(decrypts.count, 2);
+
+  engine.refreshCursorQuota = async (account) => {
+    account.requires_reauth = true;
+    account.quota_error = { code: "reauthorization_required", message: "expired", timestamp: 1 };
+    return account.quota;
+  };
+  decrypts.reset();
+  const skipped = await handlers.get("cursor:refreshAllQuotas")({});
+  assert.equal(skipped.success, true);
+  assert.ok(skipped.data.every((item) => item.skipped === true && item.reason === "reauthorization_required"));
+  assert.equal(decrypts.count, 2);
 });

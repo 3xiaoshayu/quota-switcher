@@ -8,7 +8,7 @@ const {
   CURSOR_OAUTH_PENDING_PATH,
 } = require("./config");
 const { protectData, unprotectData, ensureDir } = require("./storage");
-const { writeJsonAtomic } = require("./atomic-file");
+const { writeJsonAtomic, readJsonWithRetry } = require("./atomic-file");
 const { getCursorRuntime } = require("./cursor-runtime");
 const { upsertCursorAccount } = require("./cursor-local");
 const { loadCursorAcct, saveCursorAcct, upsertCursorIndex } = require("./cursor-storage");
@@ -70,7 +70,7 @@ function clearPendingFile() {
 function loadPending() {
   if (!fs.existsSync(CURSOR_OAUTH_PENDING_PATH)) return null;
   try {
-    const envelope = JSON.parse(fs.readFileSync(CURSOR_OAUTH_PENDING_PATH, "utf8"));
+    const envelope = readJsonWithRetry(CURSOR_OAUTH_PENDING_PATH);
     const pending = JSON.parse(unprotectData(envelope.protected_payload));
     if (!pending.expiresAt || pending.expiresAt <= Date.now()) {
       clearPendingFile();

@@ -1,6 +1,6 @@
 const { CFG_FILE, DATA_DIR, REFRESH_MINUTES } = require("./config");
 const { ensureDir } = require("./storage");
-const { writeJsonAtomic, quarantineFile } = require("./atomic-file");
+const { writeJsonAtomic, quarantineFile, readJsonWithRetry } = require("./atomic-file");
 const { logWarn } = require("./logger");
 
 const DEFAULT_AUTO_SWITCH_CFG = {
@@ -43,7 +43,7 @@ function loadAutoSwitchCfg() {
   const fs = require("node:fs");
   let primaryError = null;
   try {
-    return normalizeAutoSwitchCfg(JSON.parse(fs.readFileSync(CFG_FILE, "utf8")));
+    return normalizeAutoSwitchCfg(readJsonWithRetry(CFG_FILE));
   } catch (error) {
     primaryError = error;
   }
@@ -55,7 +55,7 @@ function loadAutoSwitchCfg() {
     if (fs.existsSync(`${CFG_FILE}.bak`)) {
       // Parse and validate the backup before touching the disk, so a corrupt
       // backup cannot destroy the evidence or masquerade as a recovery.
-      const restored = normalizeAutoSwitchCfg(JSON.parse(fs.readFileSync(`${CFG_FILE}.bak`, "utf8")));
+      const restored = normalizeAutoSwitchCfg(readJsonWithRetry(`${CFG_FILE}.bak`));
       try { quarantineFile(CFG_FILE, "invalid-json"); } catch {}
       writeJsonAtomic(CFG_FILE, restored, { backup: false });
       logWarn(`Auto-switch configuration was restored from backup: ${primaryError.message}`);

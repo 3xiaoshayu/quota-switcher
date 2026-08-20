@@ -38,6 +38,182 @@ function freshEngine(t) {
   return { engine, root };
 }
 
+function countDecrypts(engine) {
+  let count = 0;
+  engine.setSecretCodec({
+    name: "test-codec",
+    encrypt: (value) => Buffer.from(value, "utf8").toString("base64"),
+    decrypt: (value) => {
+      count += 1;
+      return Buffer.from(value, "base64").toString("utf8");
+    },
+  });
+  return {
+    get count() { return count; },
+    reset() { count = 0; },
+  };
+}
+
+test("antigravity waitForWalToClear returns immediately when no WAL exists", async (t) => {
+  const { root } = freshEngine(t);
+  const { waitForWalToClear } = require("../engine/antigravity-db");
+  const dbPath = path.join(root, "no-wal.vscdb");
+  fs.writeFileSync(dbPath, "x");
+  let sleeps = 0;
+  const cleared = await waitForWalToClear(dbPath, 2000, async () => {
+    sleeps += 1;
+  });
+  assert.equal(cleared, true);
+  assert.equal(sleeps, 0);
+});
+
+test("antigravity waitForWalToClear waits until a leftover WAL file is gone", async (t) => {
+  const { root } = freshEngine(t);
+  const { waitForWalToClear } = require("../engine/antigravity-db");
+  const dbPath = path.join(root, "pending-wal.vscdb");
+  fs.writeFileSync(dbPath, "x");
+  fs.writeFileSync(`${dbPath}-wal`, Buffer.alloc(64, 1));
+  let sleeps = 0;
+  const cleared = await waitForWalToClear(dbPath, 2000, async () => {
+    sleeps += 1;
+    if (sleeps === 2) fs.unlinkSync(`${dbPath}-wal`);
+  });
+  assert.equal(cleared, true);
+  assert.equal(sleeps, 2);
+});
+
+test("antigravity waitForWalToClear retries a transient WAL stat lock", async (t) => {
+  const { root } = freshEngine(t);
+  const { waitForWalToClear } = require("../engine/antigravity-db");
+  const dbPath = path.join(root, "locked-wal.vscdb");
+  fs.writeFileSync(dbPath, "x");
+  fs.writeFileSync(`${dbPath}-wal`, Buffer.alloc(64, 1));
+  const walPath = `${dbPath}-wal`;
+  const originalStat = fs.statSync;
+  let failures = 0;
+  fs.statSync = (file, ...args) => {
+    if (path.resolve(String(file)) === path.resolve(walPath) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalStat(file, ...args);
+  };
+  t.after(() => { fs.statSync = originalStat; });
+  let sleeps = 0;
+  const cleared = await waitForWalToClear(dbPath, 2000, async () => {
+    sleeps += 1;
+    if (sleeps === 1 && fs.existsSync(walPath)) fs.unlinkSync(walPath);
+  });
+  assert.equal(failures, 2);
+  assert.equal(sleeps, 1);
+  assert.equal(cleared, true);
+  assert.equal(fs.existsSync(walPath), false);
+});
+
+test("antigravity lists without secrets skip decrypt when token metadata is present", async (t) => {
+  const { engine } = freshEngine(t);
+  await engine.upsertAntigravityAccount({
+    email: "meta@example.com",
+    access_token: "ya29.meta",
+    refresh_token: "1//meta",
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const listed = engine.listAntigravityAccts({ secrets: false });
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].email, "meta@example.com");
+  assert.equal(listed[0].tokens, null);
+  assert.equal(decrypts.count, 0);
+});
+
+test("concurrent Antigravity upserts of the same identity keep one account", async (t) => {
+  const { engine } = freshEngine(t);
+  const [first, second] = await Promise.all([
+    engine.upsertAntigravityAccount({
+      email: "same-ag@example.com",
+      access_token: "ya29.same-a",
+      refresh_token: "1//same-a",
+    }),
+    engine.upsertAntigravityAccount({
+      email: "same-ag@example.com",
+      access_token: "ya29.same-b",
+      refresh_token: "1//same-b",
+    }),
+  ]);
+  assert.equal(engine.listAntigravityAccts().length, 1);
+  assert.equal(first.account.id, second.account.id);
+});
+
+test("Antigravity upsert identity scan does not decrypt the rest of the vault", async (t) => {
+  const { engine } = freshEngine(t);
+  const keep = await engine.upsertAntigravityAccount({
+    email: "keep-upsert@example.com",
+    access_token: "ya29.keep-upsert",
+    refresh_token: "1//keep-upsert",
+  });
+  await engine.upsertAntigravityAccount({
+    email: "spare-upsert-a@example.com",
+    access_token: "ya29.spare-a",
+    refresh_token: "1//spare-a",
+  });
+  await engine.upsertAntigravityAccount({
+    email: "spare-upsert-b@example.com",
+    access_token: "ya29.spare-b",
+    refresh_token: "1//spare-b",
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const created = await engine.upsertAntigravityAccount({
+    email: "fresh-upsert@example.com",
+    access_token: "ya29.fresh-upsert",
+    refresh_token: "1//fresh-upsert",
+  });
+  assert.equal(created.updated, false);
+  assert.notEqual(created.account.id, keep.account.id);
+  assert.ok(decrypts.count <= 6);
+  decrypts.reset();
+  const again = await engine.upsertAntigravityAccount({
+    email: "keep-upsert@example.com",
+    access_token: "ya29.keep-upsert-again",
+    refresh_token: "1//keep-upsert-again",
+  });
+  assert.equal(again.updated, true);
+  assert.equal(again.account.id, keep.account.id);
+  assert.ok(decrypts.count <= 6);
+});
+
+test("antigravity official sync matches identity without decrypting other accounts", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const keep = await engine.upsertAntigravityAccount({
+    email: "keep-sync@example.com",
+    access_token: "ya29.keep-sync",
+    refresh_token: "1//keep-sync",
+  });
+  await engine.upsertAntigravityAccount({
+    email: "spare-sync@example.com",
+    access_token: "ya29.spare-sync",
+    refresh_token: "1//spare-sync",
+  });
+  const dbPath = path.join(root, "sync-secrets.vscdb");
+  await engine.writeAntigravityAuth(dbPath, {
+    access_token: "ya29.keep-sync",
+    refresh_token: "1//keep-sync",
+  });
+  engine.setAntigravityRuntimeForTests({
+    vscdbPath: () => dbPath,
+    execFile: async () => ({ stdout: "" }),
+    httpJson: async () => ({ status: 404, body: "{}" }),
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const current = await engine.syncCurrentAntigravityFromOfficial({ force: true });
+  assert.equal(current.id, keep.account.id);
+  assert.ok(decrypts.count >= 1);
+  assert.ok(decrypts.count < 5);
+});
+
 function itemText(dbPath, key) {
   const { asText, getItem, withVscdbSync } = require("../engine/sqlite-native");
   return withVscdbSync(dbPath, { readOnly: true }, (db) => {
@@ -254,7 +430,7 @@ test("antigravity switch writes only the oauth token item key", async (t) => {
     refresh_token: "1//next",
     expiry_timestamp: 99,
   });
-  let listed = [{ name: "Antigravity IDE.exe", pid: 5151, executablePath: exePath }];
+  let listed = [{ name: "Antigravity IDE.exe", pid: 2147483646, executablePath: exePath }];
   let listCalls = 0;
   const launched = [];
   engine.setAntigravityRuntimeForTests({
@@ -288,6 +464,49 @@ test("antigravity switch writes only the oauth token item key", async (t) => {
   const keys = withVscdbSync(dbPath, { readOnly: true }, (db) => listKeys(db));
   assert.deepEqual(keys, [OAUTH_ITEM_KEY]);
   assert.equal(engine.currentAntigravityAcct().id, created.account.id);
+});
+
+test("antigravity switch returns the in-memory account without a final decrypt", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "ag-state.vscdb");
+  const exePath = path.join(root, "Antigravity IDE.exe");
+  fs.writeFileSync(exePath, "fake");
+  await engine.writeAntigravityAuth(dbPath, {
+    access_token: "ya29.old",
+    refresh_token: "1//old",
+    expiry_timestamp: 10,
+  });
+  const created = await engine.upsertAntigravityAccount({
+    email: "mem-switch@example.com",
+    access_token: "ya29.mem-switch",
+    refresh_token: "1//mem-switch",
+    expiry_timestamp: 99,
+  });
+  await engine.upsertAntigravityAccount({
+    email: "mem-spare@example.com",
+    access_token: "ya29.mem-spare",
+    refresh_token: "1//mem-spare",
+    expiry_timestamp: 99,
+  });
+  engine.setAntigravityRuntimeForTests({
+    vscdbPath: () => dbPath,
+    exePath: () => exePath,
+    listProcesses: async () => [],
+    launch: () => true,
+    sleep: async () => {},
+  });
+  const account = engine.loadAntigravityAcct(created.account.id);
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const switched = await engine.doAntigravitySwitch(account);
+  assert.equal(decrypts.count, 0);
+  assert.equal(switched.account.id, created.account.id);
+  assert.equal(switched.account.email, "mem-switch@example.com");
+  assert.ok(switched.account.tokens?.access_token);
+  assert.ok(switched.account.last_used);
+  assert.equal(engine.currentAntigravityAcct().id, created.account.id);
+  const stored = await engine.readAntigravityAuth(dbPath, { copyFirst: false });
+  assert.equal(stored.access_token, "ya29.mem-switch");
 });
 
 test("antigravity quota parser reads official gemini and 3p windows", (t) => {
@@ -936,6 +1155,47 @@ test("official oauth client falls back to the published official client", () => 
   setOfficialOauthClientForTests(null);
 });
 
+test("official oauth client retries a transient lock instead of using the published fallback", (t) => {
+  const { engine, root } = freshEngine(t);
+  const {
+    readOfficialOauthClient,
+    setOfficialOauthClientForTests,
+    PUBLISHED_OFFICIAL_OAUTH_CLIENT,
+  } = require("../engine/antigravity-oauth-client");
+  const exe = path.join(root, "Antigravity.exe");
+  fs.writeFileSync(exe, "x");
+  const mainJs = path.join(root, "resources", "app", "out", "main.js");
+  engine.ensureDir(path.dirname(mainJs));
+  fs.writeFileSync(mainJs, `
+    module.exports.oauthClient = {
+      client_id: "1071006060591-locked.apps.googleusercontent.com",
+      client_secret: "GOCSPX-lockedSecret",
+    };
+  `);
+  setOfficialOauthClientForTests(null);
+  const originalRead = fs.readFileSync;
+  let failures = 0;
+  fs.readFileSync = (file, encoding) => {
+    if (path.resolve(String(file)) === path.resolve(mainJs) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => {
+    fs.readFileSync = originalRead;
+    setOfficialOauthClientForTests(null);
+  });
+  const client = readOfficialOauthClient(exe);
+  assert.equal(client.clientId, "1071006060591-locked.apps.googleusercontent.com");
+  assert.equal(client.clientSecret, "GOCSPX-lockedSecret");
+  assert.equal(client.source, "official-ide");
+  assert.notEqual(client.clientId, PUBLISHED_OFFICIAL_OAUTH_CLIENT.clientId);
+  assert.equal(failures, 2);
+});
+
 test("antigravity oauth url uses localhost and omits PKCE", () => {
   const { buildAuthUrl, antigravityRedirectUri } = require("../engine/antigravity-oauth");
   assert.equal(antigravityRedirectUri(51121), "http://localhost:51121/oauth-callback");
@@ -1058,16 +1318,28 @@ test("antigravity hub switch writes system credential and launches without touch
   const launched = [];
   const credentials = [];
   const locks = [];
+  const order = [];
+  let living = [{ name: "Antigravity.exe", pid: 2147483646, executablePath: exePath }];
   engine.setAntigravityRuntimeForTests({
     vscdbPath: () => leftover,
     exePath: () => exePath,
     userDataDir: () => path.join(root, "Antigravity"),
-    listProcesses: async () => [],
+    listProcesses: async () => living,
+    gracefulClose: async () => {
+      order.push("kill");
+      living = [];
+      return true;
+    },
+    forceClose: async () => true,
     writeSystemCredential: async (account) => {
+      order.push("write");
       credentials.push(account.email);
       return true;
     },
-    readSystemCredential: async () => null,
+    readSystemCredential: async () => {
+      order.push("snapshot");
+      return null;
+    },
     restoreSystemCredential: async () => true,
     clearStaleLock: (dir) => { locks.push(dir); },
     launch: (target, options) => {
@@ -1079,6 +1351,11 @@ test("antigravity hub switch writes system credential and launches without touch
   const switched = await engine.doAntigravitySwitch(engine.loadAntigravityAcct(created.account.id));
   assert.equal(switched.launched, true);
   assert.deepEqual(credentials, ["hub@example.com"]);
+  assert.deepEqual(order.filter((step) => step === "kill" || step === "snapshot" || step === "write"), [
+    "kill",
+    "snapshot",
+    "write",
+  ]);
   assert.equal(launched[0].target, exePath);
   assert.equal(launched[0].options.userDataDir, path.join(root, "Antigravity"));
   assert.deepEqual(locks, [path.join(root, "Antigravity")]);
@@ -1352,4 +1629,220 @@ test("antigravity list skipOfficialSync does not read official vscdb", async (t)
   const listed = await handlers.get("antigravity:list")({}, { skipOfficialSync: true });
   assert.equal(listed.success, true);
   assert.equal(vscdbReads, 0);
+});
+
+test("antigravity current IPC reuses listed accounts without extra decrypts", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await engine.upsertAntigravityAccount({
+    email: "ipc-current@example.com",
+    access_token: "ya29.ipc-current",
+    refresh_token: "1//ipc-current",
+  });
+  await engine.upsertAntigravityAccount({
+    email: "ipc-spare@example.com",
+    access_token: "ya29.ipc-spare",
+    refresh_token: "1//ipc-spare",
+  });
+  engine.setCurrentAntigravityAccountId(current.account.id);
+  const handlers = new Map();
+  delete require.cache[require.resolve("../src/main/ipc-handlers")];
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.1", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const result = await handlers.get("antigravity:current")({}, { skipOfficialSync: true });
+  assert.equal(result.success, true);
+  assert.equal(result.data.id, current.account.id);
+  assert.equal(result.data.email, "ipc-current@example.com");
+  assert.equal(result.data.tokens, undefined);
+  assert.equal(decrypts.count, 0);
+});
+
+test("antigravity refreshAll publishes from the in-memory account without a second decrypt", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await engine.upsertAntigravityAccount({
+    email: "batch-one@example.com",
+    access_token: "ya29.batch-one",
+    refresh_token: "1//batch-one",
+  });
+  const second = await engine.upsertAntigravityAccount({
+    email: "batch-two@example.com",
+    access_token: "ya29.batch-two",
+    refresh_token: "1//batch-two",
+  });
+  engine.refreshAntigravityQuota = async (account) => {
+    account.quota = { plan: "google-one" };
+    return account.quota;
+  };
+  const handlers = new Map();
+  delete require.cache[require.resolve("../src/main/ipc-handlers")];
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.1", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const result = await handlers.get("antigravity:refreshAllQuotas")({});
+  assert.equal(result.success, true);
+  assert.equal(result.data.length, 2);
+  assert.equal(result.data.find((item) => item.id === first.account.id).quota.plan, "google-one");
+  assert.equal(result.data.find((item) => item.id === second.account.id).quota.plan, "google-one");
+  assert.equal(decrypts.count, 2);
+
+  engine.refreshAntigravityQuota = async (account) => {
+    account.requires_reauth = true;
+    account.quota_error = { code: "reauthorization_required", message: "expired", timestamp: 1 };
+    return account.quota;
+  };
+  decrypts.reset();
+  const skipped = await handlers.get("antigravity:refreshAllQuotas")({});
+  assert.equal(skipped.success, true);
+  assert.ok(skipped.data.every((item) => item.skipped === true && item.reason === "reauthorization_required"));
+  assert.equal(decrypts.count, 2);
+});
+
+test("antigravity switch IPC decrypts the target once before switching", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await engine.upsertAntigravityAccount({
+    email: "switch-current@example.com",
+    access_token: "ya29.switch-current",
+    refresh_token: "1//switch-current",
+  });
+  const target = await engine.upsertAntigravityAccount({
+    email: "switch-target@example.com",
+    access_token: "ya29.switch-target",
+    refresh_token: "1//switch-target",
+  });
+  await engine.upsertAntigravityAccount({
+    email: "switch-spare@example.com",
+    access_token: "ya29.switch-spare",
+    refresh_token: "1//switch-spare",
+  });
+  engine.setCurrentAntigravityAccountId(current.account.id);
+  const switched = [];
+  engine.doAntigravitySwitch = async (account) => {
+    switched.push(account);
+    return { already: false, account };
+  };
+  const handlers = new Map();
+  delete require.cache[require.resolve("../src/main/ipc-handlers")];
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.1", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const missing = await handlers.get("antigravity:switch")({}, "antigravity_missing");
+  assert.equal(missing.success, false);
+  assert.equal(switched.length, 0);
+  assert.equal(decrypts.count, 0);
+
+  decrypts.reset();
+  const result = await handlers.get("antigravity:switch")({}, target.account.id);
+  assert.equal(result.success, true);
+  assert.equal(result.data.account.id, target.account.id);
+  assert.equal(switched.length, 1);
+  assert.ok(switched[0].tokens?.access_token);
+  assert.equal(decrypts.count, 1);
+});
+
+test("antigravity reauthorize IPC does not decrypt before starting OAuth", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await engine.upsertAntigravityAccount({
+    email: "reauth-current@example.com",
+    access_token: "ya29.reauth-current",
+    refresh_token: "1//reauth-current",
+  });
+  await engine.upsertAntigravityAccount({
+    email: "reauth-spare@example.com",
+    access_token: "ya29.reauth-spare",
+    refresh_token: "1//reauth-spare",
+  });
+  const started = [];
+  engine.antigravityLoginFlow = async (options) => {
+    started.push(options?.targetAccountId || null);
+    return { account: current.account, mismatch: false, targetAccountId: current.account.id };
+  };
+  const handlers = new Map();
+  delete require.cache[require.resolve("../src/main/ipc-handlers")];
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.1", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const missing = await handlers.get("antigravity:reauthorize")({}, "antigravity_missing");
+  assert.equal(missing.success, false);
+  assert.equal(started.length, 0);
+  assert.equal(decrypts.count, 0);
+
+  decrypts.reset();
+  const result = await handlers.get("antigravity:reauthorize")({}, current.account.id);
+  assert.equal(result.success, true);
+  assert.equal(result.data.targetAccountId, current.account.id);
+  assert.deepEqual(started, [current.account.id]);
+  assert.equal(decrypts.count, 0);
+});
+
+test("antigravity delete IPC removes a spare account without decrypting", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await engine.upsertAntigravityAccount({
+    email: "del-current@example.com",
+    access_token: "ya29.del-current",
+    refresh_token: "1//del-current",
+  });
+  const spare = await engine.upsertAntigravityAccount({
+    email: "del-spare@example.com",
+    access_token: "ya29.del-spare",
+    refresh_token: "1//del-spare",
+  });
+  engine.setCurrentAntigravityAccountId(current.account.id);
+  const handlers = new Map();
+  delete require.cache[require.resolve("../src/main/ipc-handlers")];
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.1", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const blocked = await handlers.get("antigravity:delete")({}, current.account.id);
+  assert.equal(blocked.success, false);
+  assert.match(String(blocked.error), /Switch to another account/);
+  assert.equal(engine.listAntigravityAccts({ secrets: false }).length, 2);
+  assert.equal(decrypts.count, 0);
+
+  decrypts.reset();
+  const removed = await handlers.get("antigravity:delete")({}, spare.account.id);
+  assert.equal(removed.success, true);
+  assert.equal(engine.listAntigravityAccts({ secrets: false }).length, 1);
+  assert.equal(engine.listAntigravityAccts({ secrets: false })[0].id, current.account.id);
+  assert.equal(engine.loadAntigravityIdx().current_antigravity_account_id, current.account.id);
+  assert.equal(decrypts.count, 0);
 });

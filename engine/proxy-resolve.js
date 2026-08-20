@@ -1,11 +1,10 @@
-const fs = require("node:fs");
 const path = require("node:path");
 const net = require("node:net");
 const dns = require("node:dns").promises;
 const { execFile } = require("node:child_process");
 const { getProxyForUrl: getEnvProxyForUrl } = require("proxy-from-env");
 const { DATA_DIR, HOME } = require("./config");
-const { writeJsonAtomic } = require("./atomic-file");
+const { writeJsonAtomic, readJsonWithRetry, readFileWithRetry } = require("./atomic-file");
 
 const NETWORK_FILE = path.join(DATA_DIR, "network.json");
 const LOCAL_PROXY_PORTS = [10808, 10809, 7890, 7897, 7891, 7892, 6152, 20171, 1080, 2080];
@@ -134,7 +133,7 @@ function redactProxyUrl(proxyUrl) {
 
 function loadNetworkState() {
   try {
-    const parsed = JSON.parse(fs.readFileSync(NETWORK_FILE, "utf8"));
+    const parsed = readJsonWithRetry(NETWORK_FILE);
     if (!parsed || typeof parsed !== "object") return {};
     return parsed;
   } catch {
@@ -166,7 +165,7 @@ function persistLastGood(signature) {
 function readCursorHttpProxy() {
   const settingsPath = path.join(process.env.APPDATA || "", "Cursor", "User", "settings.json");
   try {
-    const raw = fs.readFileSync(settingsPath, "utf8");
+    const raw = readFileWithRetry(settingsPath, "utf8");
     try {
       const parsed = JSON.parse(raw);
       return String(parsed["http.proxy"] || "").trim();
@@ -187,7 +186,7 @@ function readConfigProxyPorts() {
   const ports = [];
   for (const filePath of files) {
     try {
-      const raw = fs.readFileSync(filePath, "utf8");
+      const raw = readFileWithRetry(filePath, "utf8");
       const mixed = /(?:^|\n)\s*mixed-port:\s*(\d+)/i.exec(raw);
       const port = /(?:^|\n)\s*port:\s*(\d+)/i.exec(raw);
       const socks = /(?:^|\n)\s*socks-port:\s*(\d+)/i.exec(raw);

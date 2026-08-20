@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { firstExistingExe } = require("./antigravity-runtime");
+const { readFileWithRetry } = require("./atomic-file");
 
 const CLIENT_ID_RE = /[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com/gi;
 const SECRET_RE = /GOCSPX-[A-Za-z0-9_-]+/g;
@@ -51,7 +52,7 @@ function readOfficialOauthClient(exePath = firstExistingExe()) {
   for (const file of officialClientSourcePaths(exePath)) {
     if (!fs.existsSync(file)) continue;
     try {
-      const extracted = extractOfficialOauthClient(fs.readFileSync(file));
+      const extracted = extractOfficialOauthClient(readFileWithRetry(file));
       if (extracted?.clientId && extracted?.clientSecret) {
         cached = extracted;
         return cached;

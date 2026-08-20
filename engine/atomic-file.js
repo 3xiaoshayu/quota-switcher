@@ -14,6 +14,60 @@ function sleepSync(milliseconds) {
 }
 
 const TRANSIENT_RENAME_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
+const TRANSIENT_READ_CODES = new Set(["EPERM", "EACCES", "EBUSY", "EAGAIN", "EMFILE", "ENFILE"]);
+
+function readFileWithRetry(filePath, encoding) {
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return encoding === undefined ? fs.readFileSync(filePath) : fs.readFileSync(filePath, encoding);
+    } catch (error) {
+      if (!TRANSIENT_READ_CODES.has(error.code)) throw error;
+      lastError = error;
+      if (attempt < 2) sleepSync(30 * (attempt + 1));
+    }
+  }
+  lastError.transientIoError = true;
+  throw lastError;
+}
+
+function statSyncWithRetry(filePath) {
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return fs.statSync(filePath);
+    } catch (error) {
+      if (!TRANSIENT_READ_CODES.has(error.code)) throw error;
+      lastError = error;
+      if (attempt < 2) sleepSync(30 * (attempt + 1));
+    }
+  }
+  lastError.transientIoError = true;
+  throw lastError;
+}
+
+function hasPendingWalFile(walPath) {
+  try {
+    return statSyncWithRetry(walPath).size > 32;
+  } catch (error) {
+    if (error?.transientIoError) return true;
+    return false;
+  }
+}
+
+function readJsonWithRetry(filePath) {
+  return JSON.parse(readFileWithRetry(filePath, "utf8"));
+}
+
+function captureFile(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    return readFileWithRetry(filePath);
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
 
 // Antivirus scanners and the Windows search indexer can briefly hold a handle
 // on the target file; retry the swap instead of failing the whole write.
@@ -73,7 +127,7 @@ function quarantineFile(filePath, reason = "invalid") {
 function restoreBackup(filePath) {
   const backupPath = `${filePath}.bak`;
   if (!fs.existsSync(backupPath)) return false;
-  const content = fs.readFileSync(backupPath, "utf8");
+  const content = readFileWithRetry(backupPath, "utf8");
   writeTextAtomic(filePath, content, { backup: false });
   return true;
 }
@@ -81,8 +135,13 @@ function restoreBackup(filePath) {
 module.exports = {
   writeTextAtomic,
   writeJsonAtomic,
+  readFileWithRetry,
+  readJsonWithRetry,
+  captureFile,
+  hasPendingWalFile,
   quarantineFile,
   restoreBackup,
   renameWithRetry,
   sleepSync,
+  statSyncWithRetry,
 };

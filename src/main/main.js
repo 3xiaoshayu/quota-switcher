@@ -59,7 +59,7 @@ function startStartupHousekeeping() {
     startupHousekeepingStarted = true;
     const eng = require("../../engine");
     setImmediate(() => {
-        try { eng.listAccts(); } catch (error) {
+        try { eng.listAccts({ secrets: false, syncIndex: true }); } catch (error) {
             console.error("Startup account scan failed:", error);
         }
     });

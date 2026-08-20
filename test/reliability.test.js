@@ -84,6 +84,228 @@ async function addAccount(engine, email, accountId, suffix) {
   return (await engine.upsert(tokens(email, accountId, suffix))).account;
 }
 
+function countDecrypts(engine) {
+  let count = 0;
+  engine.setSecretCodec({
+    name: "test-codec",
+    encrypt: (value) => Buffer.from(value, "utf8").toString("base64"),
+    decrypt: (value) => {
+      count += 1;
+      return Buffer.from(value, "base64").toString("utf8");
+    },
+  });
+  return {
+    get count() { return count; },
+    reset() { count = 0; },
+  };
+}
+
+test("aligned auth inspect decrypts only the current account", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await addAccount(engine, "first-aligned@example.com", "acct-first-aligned", "first-aligned");
+  await addAccount(engine, "spare-aligned@example.com", "acct-spare-aligned", "spare-aligned");
+  const index = engine.loadIdx();
+  index.current_account_id = first.id;
+  engine.saveIdx(index);
+  const firstAuth = engine.writeAuthJson(first);
+  engine.writeProjection(first, firstAuth);
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  assert.equal(engine.inspectAuthState({ migrateProjection: false }).status, "aligned");
+  assert.equal(decrypts.count, 1);
+});
+
+test("conflict auth inspect still matches the official account among all records", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await addAccount(engine, "first-conflict@example.com", "acct-first-conflict", "first-conflict");
+  const second = await addAccount(engine, "second-conflict@example.com", "acct-second-conflict", "second-conflict");
+  const index = engine.loadIdx();
+  index.current_account_id = first.id;
+  engine.saveIdx(index);
+  engine.writeAuthJson(first);
+  engine.writeProjection(first, engine.writeAuthJson(first));
+  const secondAuth = require("../engine/switch").buildAuthJson(second);
+  const config = require("../engine/config");
+  fs.writeFileSync(path.join(config.CODEX_DIR, "auth.json"), JSON.stringify(secondAuth), "utf8");
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const conflict = engine.inspectAuthState({ migrateProjection: false });
+  assert.equal(conflict.status, "conflict");
+  assert.equal(conflict.matchedAccountId, second.id);
+  assert.equal(decrypts.count, 1);
+});
+
+test("conflict auth inspect still matches a legacy record without plaintext account_id", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await addAccount(engine, "first-legacy-conflict@example.com", "acct-first-legacy-conflict", "first-legacy-conflict");
+  const second = await addAccount(engine, "second-legacy-conflict@example.com", "acct-second-legacy-conflict", "second-legacy-conflict");
+  const index = engine.loadIdx();
+  index.current_account_id = first.id;
+  engine.saveIdx(index);
+  engine.writeAuthJson(first);
+  engine.writeProjection(first, engine.writeAuthJson(first));
+  const filePath = engine.accountFilePath(second.id);
+  const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  delete raw.account_id;
+  delete raw.email;
+  fs.writeFileSync(filePath, JSON.stringify(raw), "utf8");
+  const secondAuth = require("../engine/switch").buildAuthJson(engine.loadAcct(second.id));
+  const config = require("../engine/config");
+  fs.writeFileSync(path.join(config.CODEX_DIR, "auth.json"), JSON.stringify(secondAuth), "utf8");
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const conflict = engine.inspectAuthState({ migrateProjection: false });
+  assert.equal(conflict.status, "conflict");
+  assert.equal(conflict.matchedAccountId, second.id);
+  assert.ok(decrypts.count >= 2);
+});
+
+test("auth inspect retries a transient official auth.json lock", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "auth-retry@example.com", "acct-auth-retry", "auth-retry");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const config = require("../engine/config");
+  const authPath = path.join(config.CODEX_DIR, "auth.json");
+  const originalRead = fs.readFileSync;
+  let failures = 0;
+  fs.readFileSync = (file, encoding) => {
+    if (path.resolve(String(file)) === path.resolve(authPath) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+  assert.equal(engine.inspectAuthState({ migrateProjection: false }).status, "aligned");
+  assert.equal(failures, 2);
+});
+
+test("background auth inspect cancels work that never acquired the lock", async () => {
+  const { inspectAuthStateWithBusyTimeout } = require("../src/main/ipc-handlers");
+  let inspectCount = 0;
+  let lockReleased;
+  const lockDone = new Promise((resolve) => { lockReleased = resolve; });
+  const engine = {
+    inspectAuthState: () => {
+      inspectCount += 1;
+      return { status: "aligned" };
+    },
+    withAccountLock: async (_id, task) => {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      try {
+        return await task();
+      } finally {
+        lockReleased();
+      }
+    },
+  };
+  const started = Date.now();
+  await assert.rejects(
+    () => inspectAuthStateWithBusyTimeout(engine, "account-one"),
+    /Authentication state is busy/,
+  );
+  assert.ok(Date.now() - started < 1800);
+  await lockDone;
+  assert.equal(inspectCount, 0);
+});
+
+test("quota refreshAll lists without decrypting then loads each account for work", async (t) => {
+  const { engine } = freshEngine(t);
+  await addAccount(engine, "batch-one@example.com", "acct-batch-one", "batch-one");
+  await addAccount(engine, "batch-two@example.com", "acct-batch-two", "batch-two");
+  engine.refreshQuota = async (account) => account.quota || {};
+  engine.probeUsageOnly = async (account) => account.quota || {};
+  const handlers = new Map();
+  const electron = {
+    ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+    BrowserWindow: { getAllWindows: () => [] },
+    app: { getVersion: () => "2.0.1", isPackaged: false },
+    shell: { async openExternal() {}, async openPath() { return ""; } },
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, { electron });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const result = await handlers.get("quota:refreshAll")({});
+  assert.equal(result.success, true);
+  assert.equal(result.data.length, 2);
+  // listAccts({ secrets: false }) adds 0; each account is loadAcct once inside
+  // the lock and published from that same object.
+  assert.equal(decrypts.count, 2);
+});
+
+test("quota refreshAll reports in-memory bans without a second decrypt", async (t) => {
+  const { engine } = freshEngine(t);
+  const banned = await addAccount(engine, "batch-banned@example.com", "acct-batch-banned", "batch-banned");
+  await addAccount(engine, "batch-ok@example.com", "acct-batch-ok", "batch-ok");
+  engine.refreshQuota = async (account) => {
+    if (account.id === banned.id) {
+      account.banned = true;
+      const error = new Error("The target account is banned and cannot refresh quotas");
+      error.code = "account_banned";
+      throw error;
+    }
+    return account.quota || {};
+  };
+  engine.probeUsageOnly = async (account) => account.quota || {};
+  const handlers = new Map();
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.1", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const result = await handlers.get("quota:refreshAll")({});
+  assert.equal(result.success, true);
+  assert.equal(result.data.length, 2);
+  const failed = result.data.find((item) => item.id === banned.id);
+  const okRow = result.data.find((item) => item.id !== banned.id);
+  assert.equal(failed.banned, true);
+  assert.equal(failed.reason, "account_banned");
+  assert.equal(okRow.error, undefined);
+  assert.equal(decrypts.count, 2);
+});
+
+test("concurrent Codex upserts of the same identity keep one account", async (t) => {
+  const { engine } = freshEngine(t);
+  const [first, second] = await Promise.all([
+    engine.upsert(tokens("same-identity@example.com", "acct-same-identity", "same-a")),
+    engine.upsert(tokens("same-identity@example.com", "acct-same-identity", "same-b")),
+  ]);
+  assert.equal(engine.listAccts().length, 1);
+  assert.equal(first.account.id, second.account.id);
+});
+
+test("Codex upsert identity scan does not decrypt the rest of the vault", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await addAccount(engine, "keep-upsert@example.com", "acct-keep-upsert", "keep-upsert");
+  await addAccount(engine, "spare-upsert-a@example.com", "acct-spare-upsert-a", "spare-upsert-a");
+  await addAccount(engine, "spare-upsert-b@example.com", "acct-spare-upsert-b", "spare-upsert-b");
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const created = await engine.upsert(tokens("fresh-upsert@example.com", "acct-fresh-upsert", "fresh-upsert"));
+  assert.equal(created.updated, false);
+  assert.notEqual(created.account.id, first.id);
+  assert.ok(decrypts.count <= 6);
+  decrypts.reset();
+  const again = await engine.upsert(tokens("keep-upsert@example.com", "acct-keep-upsert", "keep-upsert-again"));
+  assert.equal(again.updated, true);
+  assert.equal(again.account.id, first.id);
+  assert.ok(decrypts.count <= 6);
+  assert.equal(engine.listAccts().length, 4);
+});
+
 test("quota parsing preserves window absence, clamps percentages, and applies weekly blocking", t => {
   freshEngine(t);
   const { parseQuotaPayload } = require("../engine/quota");
@@ -1045,6 +1267,43 @@ test("auto-switch refuses to use stale quota after current refresh failure", asy
   assert.equal(result.reason, "current_quota_refresh_failed");
 });
 
+test("auto-switch reuses a provided auth state instead of inspecting again", async (t) => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "reuse-auth@example.com", "acct-reuse-auth", "reuse-auth");
+  account.quota = {
+    hourly_remaining_percentage: 90,
+    hourly_window_present: true,
+    weekly_window_present: false,
+  };
+  account.usage_updated_at = engine.ts();
+  engine.saveAcct(account);
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(account);
+  engine.writeProjection(account, auth);
+  const authState = require("../engine/auth-state");
+  const originalInspect = authState.inspectAuthState;
+  let inspects = 0;
+  authState.inspectAuthState = (...args) => {
+    inspects += 1;
+    return originalInspect(...args);
+  };
+  t.after(() => { authState.inspectAuthState = originalInspect; });
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  }, {
+    authState: { status: "aligned", requiresResolution: false },
+  });
+  assert.equal(result.switched, false);
+  assert.equal(result.reason, "quota_sufficient");
+  assert.equal(inspects, 0);
+});
+
 test("auto-switch keeps cached quota when refresh is only waiting to retry", async t => {
   const { engine } = freshEngine(t);
   const account = await addAccount(engine, "retry-current@example.com", "acct-retry-current", "retry-current");
@@ -1865,6 +2124,87 @@ test("switch transaction commits on success and restores state when launch fails
   assert.equal(engine.inspectAuthState().status, "aligned");
 });
 
+test("Codex switch rolls back to official files captured after kill", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "pre-kill@example.com", "acct-pre-kill", "pre-kill");
+  const target = await addAccount(engine, "post-kill@example.com", "acct-post-kill", "post-kill");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const config = require("../engine/config");
+  const authPath = path.join(config.CODEX_DIR, "auth.json");
+  const flushed = JSON.stringify({ tokens: { access_token: "flushed-on-exit", id_token: "", refresh_token: "" } });
+  let living = [{ name: "Codex.exe", pid: 2147483646 }];
+  engine.setSwitchRuntimeForTests({
+    assertInstalled() {},
+    listProcesses: async () => living,
+    gracefulClose: async () => {
+      fs.writeFileSync(authPath, flushed, "utf8");
+      living = [];
+      return true;
+    },
+    forceClose: async () => {
+      living = [];
+      return true;
+    },
+    launch: () => { throw new Error("launch failed"); },
+    sleep: async () => {},
+  });
+  await assert.rejects(() => engine.doSwitch(target), /launch failed/);
+  assert.equal(fs.readFileSync(authPath, "utf8"), flushed);
+  assert.equal(engine.loadIdx().current_account_id, current.id);
+});
+
+test("Codex switch snapshot retries a transient lock on official files", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "snap-lock-current@example.com", "acct-snap-lock-current", "snap-lock-current");
+  const target = await addAccount(engine, "snap-lock-target@example.com", "acct-snap-lock-target", "snap-lock-target");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const config = require("../engine/config");
+  const authPath = path.join(config.CODEX_DIR, "auth.json");
+  const flushed = JSON.stringify({ tokens: { access_token: "flushed-after-kill", id_token: "", refresh_token: "" } });
+  let living = [{ name: "Codex.exe", pid: 2147483646 }];
+  let lockAuthReads = false;
+  const originalRead = fs.readFileSync;
+  let failures = 0;
+  fs.readFileSync = (file, encoding) => {
+    if (lockAuthReads && path.resolve(String(file)) === path.resolve(authPath) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+  engine.setSwitchRuntimeForTests({
+    assertInstalled() {},
+    listProcesses: async () => living,
+    gracefulClose: async () => {
+      fs.writeFileSync(authPath, flushed, "utf8");
+      lockAuthReads = true;
+      living = [];
+      return true;
+    },
+    forceClose: async () => {
+      living = [];
+      return true;
+    },
+    launch: () => { throw new Error("launch failed"); },
+    sleep: async () => {},
+  });
+  await assert.rejects(() => engine.doSwitch(target), /launch failed/);
+  assert.equal(failures, 2);
+  assert.equal(fs.readFileSync(authPath, "utf8"), flushed);
+  assert.equal(engine.loadIdx().current_account_id, current.id);
+});
+
 test("aligned current account skips rewrite unless switch is forced", async t => {
   const { engine } = freshEngine(t);
   const current = await addAccount(engine, "current@example.com", "acct-current-reapply", "current-reapply");
@@ -1892,6 +2232,13 @@ test("aligned current account skips rewrite unless switch is forced", async t =>
   assert.equal(skipped.already, true);
   assert.equal(launchCount, 0);
   assert.equal(engine.inspectAuthState().status, "aligned");
+
+  const account = engine.loadAcct(current.id);
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const skippedAgain = await engine.doSwitch(account);
+  assert.equal(skippedAgain.already, true);
+  assert.equal(decrypts.count, 1);
 
   const forced = await engine.doSwitch(engine.loadAcct(current.id), { force: true });
   assert.equal(forced.already, false);
@@ -2033,6 +2380,23 @@ test("Codex start verification waits for the GUI process and rejects a crash win
     sleep() {},
   });
   await assert.rejects(engine.startCodex({ timeoutMs: 400 }), /crash recovery window/i);
+});
+
+test("Codex start verification backs off the poll interval", async (t) => {
+  const { engine } = freshEngine(t);
+  const sleeps = [];
+  engine.setSwitchRuntimeForTests({
+    assertInstalled() {},
+    listProcesses: () => [],
+    launch() {},
+    sleep: async (ms) => { sleeps.push(ms); },
+  });
+  await assert.rejects(engine.startCodex({ timeoutMs: 250 }), /did not start/);
+  assert.equal(sleeps[0], 50);
+  assert.equal(sleeps[1], 100);
+  assert.equal(sleeps[2], 200);
+  assert.ok(sleeps.length >= 4);
+  assert.ok(sleeps.slice(3).every((ms) => ms === 400));
 });
 
 test("OAuth browser open uses the injected opener and keeps the authorize query string", async t => {
@@ -2230,6 +2594,36 @@ test("persistent logger removes credentials and personal email from messages", t
   assert.equal(value.includes("oauth-code"), false);
 });
 
+test("old log files still expire after a transient stat lock", t => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  const logDir = path.join(config.DATA_DIR, "logs");
+  engine.ensureDir(logDir);
+  const oldPath = path.join(logDir, "app-2020-01-01.log");
+  const keepPath = path.join(logDir, "app-2020-01-02.log");
+  fs.writeFileSync(oldPath, "stale-log");
+  fs.writeFileSync(keepPath, "recent-log");
+  const past = (Date.now() - 4 * 24 * 60 * 60 * 1000) / 1000;
+  fs.utimesSync(oldPath, past, past);
+  const originalStat = fs.statSync;
+  let failures = 0;
+  fs.statSync = (file, ...args) => {
+    if (path.resolve(String(file)) === path.resolve(oldPath) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalStat(file, ...args);
+  };
+  t.after(() => { fs.statSync = originalStat; });
+  const { cleanupLogs } = require("../engine/logger");
+  cleanupLogs();
+  assert.equal(failures, 2);
+  assert.equal(fs.existsSync(oldPath), false);
+  assert.equal(fs.existsSync(keepPath), true);
+});
+
 test("auto-switch config normalization clamps user-edited values", t => {
   freshEngine(t);
   const { loadAutoSwitchCfg, saveAutoSwitchCfg } = require("../engine/config-manager");
@@ -2421,6 +2815,185 @@ test("adding the same identity merges into the existing account record", async t
   const result = await engine.upsert(orgTokens);
   assert.equal(result.account.id, original.id);
   assert.equal(engine.listAccts().length, 1);
+});
+
+test("JSON pending reads retry when the file is transiently locked", t => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  const { readJsonWithRetry } = require("../engine/atomic-file");
+  const target = path.join(config.DATA_DIR, "pending-retry.json");
+  engine.ensureDir(config.DATA_DIR);
+  fs.writeFileSync(target, JSON.stringify({ ok: true }), "utf8");
+
+  const originalRead = fs.readFileSync;
+  let failures = 0;
+  fs.readFileSync = (file, encoding) => {
+    if (path.resolve(String(file)) === path.resolve(target) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+
+  assert.deepEqual(readJsonWithRetry(target), { ok: true });
+  assert.equal(failures, 2);
+
+  fs.readFileSync = () => {
+    const error = new Error("ENOSPC: no space");
+    error.code = "ENOSPC";
+    throw error;
+  };
+  assert.throws(() => readJsonWithRetry(target), /ENOSPC/);
+});
+
+test("file captures retry when the source is transiently locked", t => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  const { captureFile, readFileWithRetry } = require("../engine/atomic-file");
+  const target = path.join(config.DATA_DIR, "capture-retry.bin");
+  engine.ensureDir(config.DATA_DIR);
+  fs.writeFileSync(target, "snapshot-bytes");
+
+  const originalRead = fs.readFileSync;
+  let failures = 0;
+  fs.readFileSync = (file, encoding) => {
+    if (path.resolve(String(file)) === path.resolve(target) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+
+  assert.equal(captureFile(target).toString("utf8"), "snapshot-bytes");
+  assert.equal(failures, 2);
+  assert.equal(readFileWithRetry(target, "utf8"), "snapshot-bytes");
+
+  fs.readFileSync = () => {
+    const error = new Error("ENOSPC: no space");
+    error.code = "ENOSPC";
+    throw error;
+  };
+  assert.throws(() => captureFile(target), /ENOSPC/);
+});
+
+test("Cursor account index retries a transient lock instead of rebuilding", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertCursorAccount({
+    email: "idx-retry@example.com",
+    auth_id: "user_idx_retry",
+    access_token: jwt({
+      email: "idx-retry@example.com",
+      sub: "user_idx_retry",
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }),
+    refresh_token: "refresh-idx-retry",
+  });
+  const config = require("../engine/config");
+  const rawIndex = JSON.parse(fs.readFileSync(config.CURSOR_IDX_PATH, "utf8"));
+  rawIndex.accounts.push({ id: "cursor_marker_not_a_file", email: "marker@example.com" });
+  fs.writeFileSync(config.CURSOR_IDX_PATH, `${JSON.stringify(rawIndex, null, 2)}\n`);
+  const originalRead = fs.readFileSync;
+  let failures = 0;
+  fs.readFileSync = (file, encoding) => {
+    if (path.resolve(String(file)) === path.resolve(config.CURSOR_IDX_PATH) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+  const index = engine.loadCursorIdx();
+  assert.equal(index.accounts.some((item) => item.id === created.account.id), true);
+  assert.equal(index.accounts.some((item) => item.id === "cursor_marker_not_a_file"), true);
+  assert.equal(failures, 2);
+});
+
+test("auto-switch config retries a transient lock instead of resetting", t => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  engine.ensureDir(config.DATA_DIR);
+  fs.writeFileSync(config.CFG_FILE, JSON.stringify({ enabled: true, primary_threshold: 15 }), "utf8");
+  const originalRead = fs.readFileSync;
+  let failures = 0;
+  fs.readFileSync = (file, encoding) => {
+    if (path.resolve(String(file)) === path.resolve(config.CFG_FILE) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+  const cfg = engine.loadAutoSwitchCfg();
+  assert.equal(cfg.enabled, true);
+  assert.equal(cfg.primary_threshold, 15);
+  assert.equal(failures, 2);
+});
+
+test("network proxy state retries a transient lock instead of dropping lastGood", t => {
+  const { engine } = freshEngine(t);
+  const { loadNetworkState, NETWORK_FILE } = require("../engine/proxy-resolve");
+  engine.ensureDir(path.dirname(NETWORK_FILE));
+  fs.writeFileSync(NETWORK_FILE, JSON.stringify({ lastGood: { source: "env", proxyUrl: "http://127.0.0.1:7890" } }), "utf8");
+  const originalRead = fs.readFileSync;
+  let failures = 0;
+  fs.readFileSync = (file, encoding) => {
+    if (path.resolve(String(file)) === path.resolve(NETWORK_FILE) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+  const state = loadNetworkState();
+  assert.equal(state.lastGood.proxyUrl, "http://127.0.0.1:7890");
+  assert.equal(failures, 2);
+});
+
+test("Cursor http.proxy survives a transient settings lock", async (t) => {
+  const { engine } = freshEngine(t);
+  const previousAppdata = process.env.APPDATA;
+  const config = require("../engine/config");
+  const appdata = path.join(config.DATA_DIR, "appdata-cursor-proxy");
+  const settingsDir = path.join(appdata, "Cursor", "User");
+  engine.ensureDir(settingsDir);
+  const settingsPath = path.join(settingsDir, "settings.json");
+  fs.writeFileSync(settingsPath, JSON.stringify({ "http.proxy": "http://127.0.0.1:7890" }), "utf8");
+  process.env.APPDATA = appdata;
+  t.after(() => {
+    process.env.APPDATA = previousAppdata;
+  });
+  const originalRead = fs.readFileSync;
+  let failures = 0;
+  fs.readFileSync = (file, encoding) => {
+    if (path.resolve(String(file)) === path.resolve(settingsPath) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+  const { collectCandidates } = require("../engine/proxy-resolve");
+  const found = await collectCandidates("https://chatgpt.com/", {
+    windows: { enabled: false, server: "" },
+    extraPorts: [],
+    pacRule: "",
+  });
+  assert.ok(found.some((item) => item.source === "cursor" && item.proxyUrl === "http://127.0.0.1:7890"));
+  assert.equal(failures, 2);
 });
 
 test("atomic writes retry when the target file is transiently locked", t => {
@@ -2695,6 +3268,43 @@ test("the daemon probes leftover access tokens on reauth accounts to detect bans
   assert.equal(persisted.quota_error.code, "account_deactivated");
 });
 
+test("daemon ban probe keeps the in-memory account after leftover usage errors", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "daemon-probe-mem@example.com", "acct-daemon-probe-mem", "daemon-probe-mem");
+  await addAccount(engine, "daemon-probe-spare@example.com", "acct-daemon-probe-spare", "daemon-probe-spare");
+  account.requires_reauth = true;
+  account.quota_error = { code: "refresh_token_invalidated", message: "keep me", timestamp: engine.ts() };
+  engine.saveAcct(account);
+  const index = engine.loadIdx();
+  index.current_account_id = null;
+  engine.saveIdx(index);
+  const quotaModule = require("../engine/quota");
+  const originalFetch = quotaModule.fetchQuota;
+  quotaModule.fetchQuota = async () => {
+    const error = new Error("HTTP 401 account_deactivated");
+    error.probe = {
+      status: "banned",
+      error_code: "account_deactivated",
+      http_status: 401,
+      message: "账号已封号，无法继续使用。",
+      ok: false,
+    };
+    throw error;
+  };
+  t.after(() => {
+    quotaModule.fetchQuota = originalFetch;
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.pausedReason, null);
+  assert.equal(result.failures.filter((item) => item.stage === "ban_probe").length, 0);
+  const persisted = engine.loadAcct(account.id);
+  assert.equal(persisted.banned, true);
+  assert.equal(persisted.requires_reauth, true);
+  assert.equal(decrypts.count, 5);
+});
+
 test("auto-switch trusts fresh cached quota instead of refreshing the current account again", async t => {
   const { engine } = freshEngine(t);
   const current = await addAccount(engine, "fresh-current@example.com", "acct-fresh-current", "fresh-current");
@@ -2946,6 +3556,23 @@ test("secrets:false account lists skip decrypt when token metadata is present", 
   assert.ok(decrypts >= 1);
 });
 
+test("secrets:false lists can still synchronize the account index", async (t) => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "sync-index@example.com", "acct-sync-index", "sync-index");
+  const index = engine.loadIdx();
+  index.accounts.push({ id: "codex_marker_not_a_file", email: "marker@example.com" });
+  engine.saveIdx(index);
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  engine.listAccts({ secrets: false });
+  assert.equal(engine.loadIdx().accounts.some((item) => item.id === "codex_marker_not_a_file"), true);
+  assert.equal(decrypts.count, 0);
+  engine.listAccts({ secrets: false, syncIndex: true });
+  assert.equal(engine.loadIdx().accounts.some((item) => item.id === "codex_marker_not_a_file"), false);
+  assert.equal(engine.loadIdx().accounts.some((item) => item.id === account.id), true);
+  assert.equal(decrypts.count, 0);
+});
+
 test("secrets:false lists decrypt as a fallback and do not rewrite the file", async (t) => {
   const { engine, codec } = freshEngine(t);
   const account = await addAccount(engine, "legacy-meta@example.com", "acct-legacy-meta", "legacy-meta");
@@ -3111,6 +3738,197 @@ test("desktop snapshot IPC returns public accounts without secrets", async (t) =
   assert.equal(Array.isArray(snapshot.data.antigravityAccounts), true);
 });
 
+test("desktop snapshot reuses listed current accounts without extra decrypts", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "snap-current@example.com", "acct-snap-current", "snap-current");
+  await addAccount(engine, "snap-spare@example.com", "acct-snap-spare", "snap-spare");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const handlers = new Map();
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.1", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const snapshot = await handlers.get("desktop:snapshot")({}, { skipOfficialSync: true });
+  assert.equal(snapshot.success, true);
+  assert.equal(snapshot.data.currentAccount.id, current.id);
+  assert.equal(snapshot.data.currentAccount.email, "snap-current@example.com");
+  assert.equal(snapshot.data.accounts.length, 2);
+  assert.equal(decrypts.count, 1);
+});
+
+test("account current IPC reuses listed accounts without extra decrypts", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "ipc-current@example.com", "acct-ipc-current", "ipc-current");
+  await addAccount(engine, "ipc-spare@example.com", "acct-ipc-spare", "ipc-spare");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const handlers = new Map();
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.1", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const result = await handlers.get("account:current")({});
+  assert.equal(result.success, true);
+  assert.equal(result.data.id, current.id);
+  assert.equal(result.data.email, "ipc-current@example.com");
+  assert.equal(result.data.tokens, undefined);
+  assert.equal(decrypts.count, 0);
+});
+
+test("account switch IPC decrypts the target once and still accepts email", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "switch-current@example.com", "acct-switch-current", "switch-current");
+  const target = await addAccount(engine, "switch-target@example.com", "acct-switch-target", "switch-target");
+  await addAccount(engine, "switch-spare@example.com", "acct-switch-spare", "switch-spare");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const switched = [];
+  engine.doSwitch = async (account) => {
+    switched.push(account);
+    return { already: false, account };
+  };
+  const handlers = new Map();
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.1", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const missing = await handlers.get("account:switch")({}, "missing-account");
+  assert.equal(missing.success, false);
+  assert.equal(switched.length, 0);
+  assert.equal(decrypts.count, 0);
+
+  decrypts.reset();
+  const byEmail = await handlers.get("account:switch")({}, "switch-target@example.com");
+  assert.equal(byEmail.success, true);
+  assert.equal(byEmail.data.account.id, target.id);
+  assert.equal(switched.length, 1);
+  assert.ok(switched[0].tokens?.access_token);
+  assert.equal(decrypts.count, 1);
+});
+
+test("account get IPC reuses listed accounts without extra decrypts", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "get-current@example.com", "acct-get-current", "get-current");
+  await addAccount(engine, "get-spare@example.com", "acct-get-spare", "get-spare");
+  const handlers = new Map();
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.1", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const missing = await handlers.get("account:get")({}, "acct-missing");
+  assert.equal(missing.success, false);
+  assert.equal(decrypts.count, 0);
+
+  decrypts.reset();
+  const result = await handlers.get("account:get")({}, current.id);
+  assert.equal(result.success, true);
+  assert.equal(result.data.id, current.id);
+  assert.equal(result.data.email, "get-current@example.com");
+  assert.equal(result.data.tokens, undefined);
+  assert.equal(decrypts.count, 0);
+});
+
+test("account reauthorize IPC does not decrypt before starting OAuth", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "reauth-current@example.com", "acct-reauth-current", "reauth-current");
+  await addAccount(engine, "reauth-spare@example.com", "acct-reauth-spare", "reauth-spare");
+  const started = [];
+  engine.oauthLoginFlow = async (options) => {
+    started.push(options?.targetAccountId || null);
+    return { account: current, mismatch: false, targetAccountId: current.id };
+  };
+  const handlers = new Map();
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.1", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const missing = await handlers.get("account:reauthorize")({}, "missing-account");
+  assert.equal(missing.success, false);
+  assert.equal(started.length, 0);
+  assert.equal(decrypts.count, 0);
+
+  decrypts.reset();
+  const byEmail = await handlers.get("account:reauthorize")({}, "reauth-current@example.com");
+  assert.equal(byEmail.success, true);
+  assert.equal(byEmail.data.targetAccountId, current.id);
+  assert.deepEqual(started, [current.id]);
+  assert.equal(decrypts.count, 0);
+});
+
+test("account delete IPC removes a spare account without decrypting", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "del-current@example.com", "acct-del-current", "del-current");
+  const spare = await addAccount(engine, "del-spare@example.com", "acct-del-spare", "del-spare");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const handlers = new Map();
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.1", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const blocked = await handlers.get("account:delete")({}, current.id);
+  assert.equal(blocked.success, false);
+  assert.match(String(blocked.error), /Switch to another account/);
+  assert.equal(engine.listAccts({ secrets: false }).length, 2);
+  assert.equal(decrypts.count, 0);
+
+  decrypts.reset();
+  const removed = await handlers.get("account:delete")({}, "del-spare@example.com");
+  assert.equal(removed.success, true);
+  assert.equal(engine.listAccts({ secrets: false }).map((account) => account.id).join(","), current.id);
+  assert.equal(engine.loadIdx().current_account_id, current.id);
+  assert.equal(decrypts.count, 0);
+});
+
 test("legacy plaintext rewrite is deferred off the list hot path", async t => {
   const { engine } = freshEngine(t);
   const account = await addAccount(engine, "defer-list@example.com", "acct-defer-list", "defer-list");
@@ -3132,6 +3950,35 @@ test("legacy plaintext rewrite is deferred off the list hot path", async t => {
   assert.ok(afterFlush.tokens_encrypted, "deferred rewrite must encrypt the record");
   assert.equal(afterFlush.tokens, undefined);
   assert.equal(fs.readFileSync(filePath, "utf8").includes("plain-refresh-token"), false);
+});
+
+test("deferred plaintext rewrite retries a transient stat lock", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "defer-stat@example.com", "acct-defer-stat", "defer-stat");
+  const filePath = engine.accountFilePath(account.id);
+  const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  delete raw.tokens_encrypted;
+  raw.tokens = { ...account.tokens, refresh_token: "plain-stat-token" };
+  fs.writeFileSync(filePath, JSON.stringify(raw));
+  const originalStat = fs.statSync;
+  let failures = 0;
+  fs.statSync = (file, ...args) => {
+    if (path.resolve(String(file)) === path.resolve(filePath) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalStat(file, ...args);
+  };
+  t.after(() => { fs.statSync = originalStat; });
+  engine.listAccts();
+  assert.equal(failures, 2);
+  await engine.flushPendingAccountRewrites();
+  const afterFlush = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  assert.ok(afterFlush.tokens_encrypted, "deferred rewrite must still encrypt after a transient stat lock");
+  assert.equal(afterFlush.tokens, undefined);
+  assert.equal(fs.readFileSync(filePath, "utf8").includes("plain-stat-token"), false);
 });
 
 test("deferred plaintext rewrite is discarded when the file changes first", async t => {
