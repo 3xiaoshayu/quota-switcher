@@ -4,7 +4,7 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
   {
     id: '1',
     name: 'Main Operations Center',
-    email: 'ops-01-primary@codex.local',
+    email: 'maya@example.com',
     status: 'ACTIVE',
     fiveHourQuotaRemaining: 2600,
     fiveHourQuotaTotal: 5000,
@@ -21,7 +21,7 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
   {
     id: '2',
     name: 'Data Scraping Cluster',
-    email: 'sc-node-beta@codex.local',
+    email: 'jordan@example.com',
     status: 'WARNING',
     fiveHourQuotaRemaining: 900,
     fiveHourQuotaTotal: 5000,
@@ -38,7 +38,7 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
   {
     id: '3',
     name: 'Legacy Bridge API',
-    email: 'api-v1-fallback@codex.local',
+    email: 'alex@example.com',
     status: 'EXPIRED',
     fiveHourQuotaRemaining: 0,
     fiveHourQuotaTotal: 5000,
@@ -55,7 +55,7 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
   {
     id: '4',
     name: 'Staging Sandbox',
-    email: 'sandbox-dev@codex.local',
+    email: 'riley@example.com',
     status: 'ACTIVE',
     fiveHourQuotaRemaining: 4898,
     fiveHourQuotaTotal: 5000,
@@ -71,7 +71,7 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
   {
     id: '5',
     name: 'Premium_Member_01',
-    email: 'premium-member-01@codex.local',
+    email: 'sam@example.com',
     status: 'ACTIVE',
     fiveHourQuotaRemaining: 34,
     fiveHourQuotaTotal: 40,
@@ -87,7 +87,7 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
   {
     id: '6',
     name: 'Team_Admin_Shared',
-    email: 'team-admin-shared@codex.local',
+    email: 'casey@example.com',
     status: 'LOW_QUOTA',
     fiveHourQuotaRemaining: 2,
     fiveHourQuotaTotal: 40,
@@ -104,7 +104,7 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
   {
     id: '7',
     name: 'Legacy_User_45',
-    email: 'legacy-user-45@codex.local',
+    email: 'avery@example.com',
     status: 'SUSPENDED',
     fiveHourQuotaRemaining: 0,
     fiveHourQuotaTotal: 40,
@@ -121,7 +121,7 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
   {
     id: '8',
     name: 'Internal_Dev_Account',
-    email: 'internal-dev-account@codex.local',
+    email: 'quinn@example.com',
     status: 'READY',
     fiveHourQuotaRemaining: 40,
     fiveHourQuotaTotal: 40,
@@ -136,8 +136,8 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
   },
   {
     id: '9',
-    name: 'preview-user@codex.local',
-    email: 'preview-user@codex.local',
+    name: 'drew@example.com',
+    email: 'drew@example.com',
     status: 'ACTIVE',
     fiveHourQuotaRemaining: 4000,
     fiveHourQuotaTotal: 5000,
@@ -152,8 +152,8 @@ export const INITIAL_ACCOUNTS: AccountQuota[] = [
   },
   {
     id: '10',
-    name: 'work@codex.com',
-    email: 'work@codex.com',
+    name: 'jamie@example.com',
+    email: 'jamie@example.com',
     status: 'WARNING',
     fiveHourQuotaRemaining: 250,
     fiveHourQuotaTotal: 5000,
@@ -181,7 +181,7 @@ export const INITIAL_CURSOR_ACCOUNTS: AccountQuota[] = [
   {
     id: 'cursor_demo_1',
     name: 'cursor-main',
-    email: 'cursor-main@example.com',
+    email: 'maya@example.com',
     status: 'ACTIVE',
     quotaKind: 'cursor',
     fiveHourQuotaRemaining: 72,
@@ -202,7 +202,7 @@ export const INITIAL_CURSOR_ACCOUNTS: AccountQuota[] = [
   {
     id: 'cursor_demo_2',
     name: 'cursor-low',
-    email: 'cursor-low@example.com',
+    email: 'jordan@example.com',
     status: 'LOW_QUOTA',
     quotaKind: 'cursor',
     fiveHourQuotaRemaining: 12,
@@ -226,7 +226,7 @@ export const INITIAL_ANTIGRAVITY_ACCOUNTS: AccountQuota[] = [
   {
     id: 'antigravity_demo_1',
     name: 'ag-main',
-    email: 'ag-main@example.com',
+    email: 'maya@example.com',
     status: 'ACTIVE',
     quotaKind: 'antigravity',
     fiveHourQuotaRemaining: 80,
@@ -251,7 +251,7 @@ export const INITIAL_ANTIGRAVITY_ACCOUNTS: AccountQuota[] = [
   {
     id: 'antigravity_demo_2',
     name: 'ag-low',
-    email: 'ag-low@example.com',
+    email: 'jordan@example.com',
     status: 'LOW_QUOTA',
     quotaKind: 'antigravity',
     fiveHourQuotaRemaining: 12,
@@ -309,13 +309,13 @@ export const INITIAL_LOGS: LogEntry[] = [
   {
     id: 'l4',
     timestamp: '2026-06-30 10:25:44',
-    message: '警告：work@codex.com 的 5 小时额度低于阈值（剩余 5%）。',
+    message: '警告：jamie@example.com 的 5 小时额度低于阈值（剩余 5%）。',
     type: 'warning',
   },
   {
     id: 'l5',
     timestamp: '2026-06-30 10:15:22',
-    message: '账号 api-v1-fallback@codex.local 已标记为 EXPIRED。',
+    message: '账号 alex@example.com 已标记为 EXPIRED。',
     type: 'error',
   },
 ];

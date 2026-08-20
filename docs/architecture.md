@@ -186,3 +186,22 @@ npm run build:dir
 
 Actions that change a real account or remove account data must be tested with
 synthetic or dedicated test accounts.
+
+## Related work
+
+A common community reference is
+[Cockpit Tools](https://github.com/jlcodes99/cockpit-tools) (Tauri / Rust).
+This app is not a replacement for it. The focus here is a Windows-local vault,
+a transactional Codex switch, and one window for Codex, Cursor, and
+Antigravity IDE.
+
+Where that project is a better fit: a lighter runtime and smaller installer;
+WSL, timed wakeup, and opening multiple official clients, which are
+intentionally out of scope here.
+
+Codex switch snapshots the official login, managed projection, and index
+first, then rolls the whole transaction back if a later step fails. Cursor and
+Antigravity update `state.vscdb` in place (`BEGIN IMMEDIATE`, WAL). Quota HTTP
+uses Node keep-alive agents keyed by proxy signature, not the Chromium
+session. The renderer receives account metadata only; tokens are not decrypted
+into the UI process.
