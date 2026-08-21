@@ -211,7 +211,7 @@ test("antigravity official sync matches identity without decrypting other accoun
   const current = await engine.syncCurrentAntigravityFromOfficial({ force: true });
   assert.equal(current.id, keep.account.id);
   assert.ok(decrypts.count >= 1);
-  assert.ok(decrypts.count < 5);
+  assert.ok(decrypts.count < 4);
 });
 
 function itemText(dbPath, key) {
@@ -346,6 +346,39 @@ test("antigravity prefers Hub user data when Hub exe is installed even if leftov
     assert.equal(runtime.usesWindowsSystemCredential(hubExe), true);
     assert.equal(runtime.usesWindowsSystemCredential(path.join(root, "Antigravity IDE.exe")), false);
   } finally {
+    if (previous == null) delete process.env.APPDATA;
+    else process.env.APPDATA = previous;
+    if (previousLocal == null) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = previousLocal;
+    fs.rmSync(root, { recursive: true, force: true });
+    clearEngineModules();
+  }
+});
+
+test("antigravity still prefers Hub user data when existsSync reports Hub files missing", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ag-hub-lie-"));
+  const previous = process.env.APPDATA;
+  const previousLocal = process.env.LOCALAPPDATA;
+  process.env.APPDATA = path.join(root, "Roaming");
+  process.env.LOCALAPPDATA = path.join(root, "Local");
+  clearEngineModules();
+  const originalExists = fs.existsSync;
+  try {
+    const ideDb = path.join(root, "Roaming", "Antigravity IDE", "User", "globalStorage", "state.vscdb");
+    fs.mkdirSync(path.dirname(ideDb), { recursive: true });
+    fs.writeFileSync(ideDb, "db");
+    const hubExe = path.join(root, "Local", "Programs", "antigravity", "Antigravity.exe");
+    fs.mkdirSync(path.dirname(hubExe), { recursive: true });
+    fs.writeFileSync(hubExe, "fake");
+    fs.existsSync = (file) => {
+      if (path.resolve(String(file)) === path.resolve(hubExe)) return false;
+      return originalExists(file);
+    };
+    const runtime = require("../engine/antigravity-runtime");
+    assert.equal(runtime.firstExistingExe(), hubExe);
+    assert.equal(runtime.preferUserDataDir(), path.join(root, "Roaming", "Antigravity"));
+  } finally {
+    fs.existsSync = originalExists;
     if (previous == null) delete process.env.APPDATA;
     else process.env.APPDATA = previous;
     if (previousLocal == null) delete process.env.LOCALAPPDATA;
@@ -1142,6 +1175,216 @@ test("official oauth client extractor reads the first nearby google pair", () =>
   assert.equal(extracted.clientSecret, "GOCSPX-exampleSecret");
 });
 
+test("official oauth client extractor splits concatenated Hub secrets and prefers AuthProvider", () => {
+  const { extractOfficialOauthClient } = require("../engine/antigravity-oauth-client");
+  const extracted = extractOfficialOauthClient([
+    "https://auth.cloud.google/authorize",
+    "GOCSPX-oldHubSecretValueXXXX",
+    "GOCSPX-newHubSecretValueXXXX",
+    "https://oauth2.googleapis.com/token",
+    "padding-".repeat(80),
+    "884354919052-newhubclientidabc.apps.googleusercontent.com",
+    "[AuthProvider] SetUserTier",
+    "1071006060591-oldhubclientidabc.apps.googleusercontent.com",
+    "unrelated-".repeat(40),
+    "[AuthProvider] later unrelated",
+    "[AuthProvider] also later",
+  ].join(""));
+  assert.equal(extracted.clientId, "884354919052-newhubclientidabc.apps.googleusercontent.com");
+  assert.equal(extracted.clientSecret, "GOCSPX-newHubSecretValueXXXX");
+});
+
+test("official oauth client reads Hub language_server when app.asar has no google client", (t) => {
+  const { engine, root } = freshEngine(t);
+  const {
+    readOfficialOauthClient,
+    setOfficialOauthClientForTests,
+    PUBLISHED_OFFICIAL_OAUTH_CLIENT,
+  } = require("../engine/antigravity-oauth-client");
+  const exe = path.join(root, "Antigravity.exe");
+  fs.writeFileSync(exe, "x");
+  const asar = path.join(root, "resources", "app.asar");
+  engine.ensureDir(path.dirname(asar));
+  fs.writeFileSync(asar, "chrome-devtools-mcp placeholder without google oauth");
+  const languageServer = path.join(root, "resources", "bin", "language_server.exe");
+  engine.ensureDir(path.dirname(languageServer));
+  fs.writeFileSync(languageServer, [
+    "https://auth.cloud.google/authorize",
+    "GOCSPX-oldHubSecretValueXXXX",
+    "GOCSPX-newHubSecretValueXXXX",
+    "884354919052-newhubclientidabc.apps.googleusercontent.com",
+    "[AuthProvider] SetUserTier",
+    "1071006060591-oldhubclientidabc.apps.googleusercontent.com",
+  ].join(""));
+  setOfficialOauthClientForTests(null);
+  t.after(() => setOfficialOauthClientForTests(null));
+  const client = readOfficialOauthClient(exe);
+  assert.equal(client.clientId, "884354919052-newhubclientidabc.apps.googleusercontent.com");
+  assert.equal(client.clientSecret, "GOCSPX-newHubSecretValueXXXX");
+  assert.equal(client.source, "official-ide");
+  assert.notEqual(client.clientId, PUBLISHED_OFFICIAL_OAUTH_CLIENT.clientId);
+});
+
+test("official oauth client list keeps the published client as a refresh fallback", (t) => {
+  const { engine, root } = freshEngine(t);
+  const {
+    listOfficialOauthClients,
+    setOfficialOauthClientForTests,
+    PUBLISHED_OFFICIAL_OAUTH_CLIENT,
+  } = require("../engine/antigravity-oauth-client");
+  const exe = path.join(root, "Antigravity.exe");
+  fs.writeFileSync(exe, "x");
+  const languageServer = path.join(root, "resources", "bin", "language_server.exe");
+  engine.ensureDir(path.dirname(languageServer));
+  fs.writeFileSync(languageServer, [
+    "https://auth.cloud.google/authorize",
+    "GOCSPX-oldHubSecretValueXXXX",
+    "GOCSPX-newHubSecretValueXXXX",
+    "884354919052-newhubclientidabc.apps.googleusercontent.com",
+    "[AuthProvider] SetUserTier",
+    "1071006060591-oldhubclientidabc.apps.googleusercontent.com",
+  ].join(""));
+  setOfficialOauthClientForTests(null);
+  t.after(() => setOfficialOauthClientForTests(null));
+  const clients = listOfficialOauthClients(exe);
+  assert.equal(clients[0].clientId, "884354919052-newhubclientidabc.apps.googleusercontent.com");
+  assert.equal(clients.some((item) => item.clientId === PUBLISHED_OFFICIAL_OAUTH_CLIENT.clientId), true);
+  assert.equal(clients.length, 2);
+});
+
+test("antigravity token refresh retries the published client after invalid_client", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const { setOfficialOauthClientForTests, PUBLISHED_OFFICIAL_OAUTH_CLIENT } = require("../engine/antigravity-oauth-client");
+  const exe = path.join(root, "Antigravity.exe");
+  fs.writeFileSync(exe, "x");
+  const languageServer = path.join(root, "resources", "bin", "language_server.exe");
+  engine.ensureDir(path.dirname(languageServer));
+  fs.writeFileSync(languageServer, [
+    "https://auth.cloud.google/authorize",
+    "GOCSPX-oldHubSecretValueXXXX",
+    "GOCSPX-newHubSecretValueXXXX",
+    "884354919052-newhubclientidabc.apps.googleusercontent.com",
+    "[AuthProvider] SetUserTier",
+  ].join(""));
+  setOfficialOauthClientForTests(null);
+  t.after(() => setOfficialOauthClientForTests(null));
+  const created = await engine.upsertAntigravityAccount({
+    email: "retry-client@example.com",
+    access_token: "ya29.expired",
+    refresh_token: "1//retry-client",
+    expiry_timestamp: 10,
+  });
+  const clientIds = [];
+  engine.setAntigravityRuntimeForTests({
+    exePath: () => exe,
+    httpJson: async (_url, options) => {
+      const body = String(options?.body || "");
+      const match = /client_id=([^&]+)/.exec(body);
+      clientIds.push(decodeURIComponent(match ? match[1] : ""));
+      if (body.includes("884354919052")) {
+        return { status: 401, body: JSON.stringify({ error: "invalid_client" }) };
+      }
+      if (body.includes(PUBLISHED_OFFICIAL_OAUTH_CLIENT.clientId.split("-")[0])) {
+        return {
+          status: 200,
+          body: JSON.stringify({
+            access_token: "ya29.from-published",
+            expires_in: 3600,
+          }),
+        };
+      }
+      throw new Error(`unexpected token body ${body}`);
+    },
+  });
+  const result = await engine.refreshAntigravityToken(
+    engine.loadAntigravityAcct(created.account.id),
+    { force: true },
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.account.tokens.access_token, "ya29.from-published");
+  assert.equal(result.account.requires_reauth, false);
+  assert.deepEqual(clientIds, [
+    "884354919052-newhubclientidabc.apps.googleusercontent.com",
+    PUBLISHED_OFFICIAL_OAUTH_CLIENT.clientId,
+  ]);
+});
+
+test("antigravity token refresh still marks reauth when every official client is invalid", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const { setOfficialOauthClientForTests } = require("../engine/antigravity-oauth-client");
+  const exe = path.join(root, "Antigravity.exe");
+  fs.writeFileSync(exe, "x");
+  const languageServer = path.join(root, "resources", "bin", "language_server.exe");
+  engine.ensureDir(path.dirname(languageServer));
+  fs.writeFileSync(languageServer, [
+    "https://auth.cloud.google/authorize",
+    "GOCSPX-oldHubSecretValueXXXX",
+    "GOCSPX-newHubSecretValueXXXX",
+    "884354919052-newhubclientidabc.apps.googleusercontent.com",
+    "[AuthProvider] SetUserTier",
+  ].join(""));
+  setOfficialOauthClientForTests(null);
+  t.after(() => setOfficialOauthClientForTests(null));
+  const created = await engine.upsertAntigravityAccount({
+    email: "dead-client@example.com",
+    access_token: "ya29.expired",
+    refresh_token: "1//dead-client",
+    expiry_timestamp: 10,
+  });
+  let posts = 0;
+  engine.setAntigravityRuntimeForTests({
+    exePath: () => exe,
+    httpJson: async () => {
+      posts += 1;
+      return { status: 401, body: JSON.stringify({ error: "invalid_client" }) };
+    },
+  });
+  const result = await engine.refreshAntigravityToken(
+    engine.loadAntigravityAcct(created.account.id),
+    { force: true },
+  );
+  assert.equal(result.ok, false);
+  assert.equal(result.reauthRequired, true);
+  assert.equal(posts, 2);
+  assert.equal(engine.loadAntigravityAcct(created.account.id).requires_reauth, true);
+});
+
+test("antigravity authorization_code exchange does not retry the published client", async (t) => {
+  const { root } = freshEngine(t);
+  const { setOfficialOauthClientForTests } = require("../engine/antigravity-oauth-client");
+  const { exchangeGoogleToken } = require("../engine/antigravity-token");
+  const { setAntigravityRuntimeForTests } = require("../engine/antigravity-runtime");
+  const exe = path.join(root, "Antigravity.exe");
+  fs.writeFileSync(exe, "x");
+  const languageServer = path.join(root, "resources", "bin", "language_server.exe");
+  fs.mkdirSync(path.dirname(languageServer), { recursive: true });
+  fs.writeFileSync(languageServer, [
+    "https://auth.cloud.google/authorize",
+    "GOCSPX-oldHubSecretValueXXXX",
+    "GOCSPX-newHubSecretValueXXXX",
+    "884354919052-newhubclientidabc.apps.googleusercontent.com",
+    "[AuthProvider] SetUserTier",
+  ].join(""));
+  setOfficialOauthClientForTests(null);
+  t.after(() => setOfficialOauthClientForTests(null));
+  let posts = 0;
+  setAntigravityRuntimeForTests({
+    exePath: () => exe,
+    httpJson: async () => {
+      posts += 1;
+      return { status: 401, body: JSON.stringify({ error: "invalid_client" }) };
+    },
+  });
+  const { response, payload } = await exchangeGoogleToken({
+    grant_type: "authorization_code",
+    code: "4/unused",
+    redirect_uri: "http://localhost:51121/oauth-callback",
+  });
+  assert.equal(response.status, 401);
+  assert.equal(payload.error, "invalid_client");
+  assert.equal(posts, 1);
+});
+
 test("official oauth client falls back to the published official client", () => {
   const {
     readOfficialOauthClient,
@@ -1196,6 +1439,40 @@ test("official oauth client retries a transient lock instead of using the publis
   assert.equal(failures, 2);
 });
 
+test("official oauth client still reads the IDE file when existsSync reports it missing", (t) => {
+  const { engine, root } = freshEngine(t);
+  const {
+    readOfficialOauthClient,
+    setOfficialOauthClientForTests,
+    PUBLISHED_OFFICIAL_OAUTH_CLIENT,
+  } = require("../engine/antigravity-oauth-client");
+  const exe = path.join(root, "Antigravity.exe");
+  fs.writeFileSync(exe, "x");
+  const mainJs = path.join(root, "resources", "app", "out", "main.js");
+  engine.ensureDir(path.dirname(mainJs));
+  fs.writeFileSync(mainJs, `
+    module.exports.oauthClient = {
+      client_id: "1071006060591-existslie.apps.googleusercontent.com",
+      client_secret: "GOCSPX-existsLieSecret",
+    };
+  `);
+  setOfficialOauthClientForTests(null);
+  const originalExists = fs.existsSync;
+  fs.existsSync = (file) => {
+    if (path.resolve(String(file)) === path.resolve(mainJs)) return false;
+    return originalExists(file);
+  };
+  t.after(() => {
+    fs.existsSync = originalExists;
+    setOfficialOauthClientForTests(null);
+  });
+  const client = readOfficialOauthClient(exe);
+  assert.equal(client.clientId, "1071006060591-existslie.apps.googleusercontent.com");
+  assert.equal(client.clientSecret, "GOCSPX-existsLieSecret");
+  assert.equal(client.source, "official-ide");
+  assert.notEqual(client.clientId, PUBLISHED_OFFICIAL_OAUTH_CLIENT.clientId);
+});
+
 test("antigravity oauth url uses localhost and omits PKCE", () => {
   const { buildAuthUrl, antigravityRedirectUri } = require("../engine/antigravity-oauth");
   assert.equal(antigravityRedirectUri(51121), "http://localhost:51121/oauth-callback");
@@ -1240,6 +1517,71 @@ test("antigravity oauth listener ignores empty probes then accepts the Google co
   }
 });
 
+test("antigravity pending oauth still restores from backup after persistent corruption", async (t) => {
+  process.env.ANTIGRAVITY_MANAGER_CALLBACK_PORT = String(18000 + Math.floor(Math.random() * 2000));
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  engine.setAntigravityRuntimeForTests({
+    openUrl: async () => {},
+    oauthClient: () => ({
+      clientId: "1234567890-abc.apps.googleusercontent.com",
+      clientSecret: "GOCSPX-test",
+    }),
+  });
+  const login = engine.antigravityLoginFlow().catch((error) => error);
+  const pendingPath = config.ANTIGRAVITY_OAUTH_PENDING_PATH;
+  const startedAt = Date.now();
+  while (!fs.existsSync(pendingPath) && Date.now() - startedAt < 2000) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  const envelope = fs.readFileSync(pendingPath, "utf8");
+  engine.cancelAntigravityOAuth();
+  await login;
+
+  fs.writeFileSync(`${pendingPath}.bak`, envelope, "utf8");
+  fs.writeFileSync(pendingPath, "{ corrupted", "utf8");
+  engine.setAntigravityRuntimeForTests({
+    openUrl: async () => {},
+    oauthClient: () => ({
+      clientId: "1234567890-abc.apps.googleusercontent.com",
+      clientSecret: "GOCSPX-test",
+    }),
+  });
+  assert.equal(engine.restorePendingAntigravityOAuth(), true);
+  try {
+    assert.equal(engine.getAntigravityOAuthStatus().pending, true);
+    assert.equal(JSON.parse(fs.readFileSync(pendingPath, "utf8")).protected_payload.length > 0, true);
+  } finally {
+    engine.cancelAntigravityOAuth();
+  }
+});
+
+test("antigravity oauth cancel releases the callback port before listen finishes", async (t) => {
+  process.env.ANTIGRAVITY_MANAGER_CALLBACK_PORT = String(18000 + Math.floor(Math.random() * 2000));
+  const { engine } = freshEngine(t);
+  engine.setAntigravityRuntimeForTests({
+    openUrl: async () => {},
+    oauthClient: () => ({
+      clientId: "1234567890-abc.apps.googleusercontent.com",
+      clientSecret: "GOCSPX-test",
+    }),
+  });
+  const login = engine.antigravityLoginFlow().catch((error) => error);
+  assert.equal(engine.cancelAntigravityOAuth(), true);
+  await login;
+  const config = require("../engine/config");
+  const { createCallbackListener } = require("../engine/antigravity-oauth");
+  const listener = createCallbackListener({
+    callbackPort: config.ANTIGRAVITY_CALLBACK_PORT,
+    state: "port-check",
+  });
+  try {
+    await listener.ready;
+  } finally {
+    listener.server.close();
+  }
+});
+
 test("antigravity credential parser reads nested hub token json", () => {
   const { parseCredentialBlob } = require("../engine/antigravity-credential");
   const parsed = parseCredentialBlob(JSON.stringify({
@@ -1273,6 +1615,64 @@ test("antigravity hub credential payload uses consumer auth_method", () => {
   const parsed = parseCredentialBlob(JSON.stringify(payload));
   assert.equal(parsed.refresh_token, "1//hub");
   assert.equal(parsed.access_token, "ya29.hub");
+});
+
+test("antigravity credential writes retry when the temp payload is locked", async (t) => {
+  const { writeWindowsAntigravityCredential } = require("../engine/antigravity-credential");
+  const originalWrite = fs.writeFileSync;
+  let failures = 0;
+  fs.writeFileSync = (file, content, encoding) => {
+    if (String(file).endsWith("payload.json") && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalWrite(file, content, encoding);
+  };
+  t.after(() => { fs.writeFileSync = originalWrite; });
+  const ok = await writeWindowsAntigravityCredential({
+    tokens: { access_token: "ya29.retry", refresh_token: "1//retry" },
+  }, async () => ({ stdout: "", stderr: "" }));
+  assert.equal(ok, true);
+  assert.equal(failures, 2);
+});
+
+test("antigravity credential cleanup retries a locked temp payload", async (t) => {
+  const { writeWindowsAntigravityCredential } = require("../engine/antigravity-credential");
+  const originalUnlink = fs.unlinkSync;
+  const originalRm = fs.rmSync;
+  let unlinkFailures = 0;
+  let leftoverDir = null;
+  fs.unlinkSync = (file) => {
+    if (String(file).endsWith("payload.json") && unlinkFailures < 2) {
+      leftoverDir = path.dirname(String(file));
+      unlinkFailures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalUnlink(file);
+  };
+  fs.rmSync = (dir, options) => {
+    if (fs.existsSync(path.join(String(dir), "payload.json"))) {
+      const error = new Error("ENOTEMPTY: directory not empty");
+      error.code = "ENOTEMPTY";
+      throw error;
+    }
+    return originalRm(dir, options);
+  };
+  t.after(() => {
+    fs.unlinkSync = originalUnlink;
+    fs.rmSync = originalRm;
+  });
+  const ok = await writeWindowsAntigravityCredential({
+    tokens: { access_token: "ya29.clean", refresh_token: "1//clean" },
+  }, async () => ({ stdout: "", stderr: "" }));
+  assert.equal(ok, true);
+  assert.equal(unlinkFailures, 2);
+  assert.ok(leftoverDir);
+  assert.equal(fs.existsSync(path.join(leftoverDir, "payload.json")), false);
 });
 
 test("antigravity launch starts Hub through the Windows shell with user-data-dir", () => {
@@ -1363,6 +1763,75 @@ test("antigravity hub switch writes system credential and launches without touch
   assert.equal(leftoverStored.refresh_token, "1//old-ide");
 });
 
+test("antigravity still clears a lockfile when existsSync reports it missing", (t) => {
+  const { root } = freshEngine(t);
+  const userDataDir = path.join(root, "Antigravity");
+  fs.mkdirSync(userDataDir, { recursive: true });
+  const lockPath = path.join(userDataDir, "lockfile");
+  fs.writeFileSync(lockPath, "lock");
+  const originalExists = fs.existsSync;
+  fs.existsSync = (file) => {
+    if (path.resolve(String(file)) === path.resolve(lockPath)) return false;
+    return originalExists(file);
+  };
+  t.after(() => { fs.existsSync = originalExists; });
+  const runtime = require("../engine/antigravity-runtime");
+  assert.equal(runtime.clearStaleAntigravityLock(userDataDir), true);
+  fs.existsSync = originalExists;
+  assert.equal(fs.existsSync(lockPath), false);
+});
+
+test("antigravity hub switch still uses the exe when existsSync reports it missing", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const leftover = path.join(root, "leftover.vscdb");
+  await engine.writeAntigravityAuth(leftover, {
+    access_token: "ya29.old-ide",
+    refresh_token: "1//old-ide",
+    expiry_timestamp: 10,
+  });
+  const exePath = path.join(root, "Programs", "antigravity", "Antigravity.exe");
+  fs.mkdirSync(path.dirname(exePath), { recursive: true });
+  fs.writeFileSync(exePath, "fake");
+  const created = await engine.upsertAntigravityAccount({
+    email: "hub-lie@example.com",
+    access_token: "ya29.hub-lie",
+    refresh_token: "1//hub-lie",
+    expiry_timestamp: 99,
+  });
+  const credentials = [];
+  let living = [{ name: "Antigravity.exe", pid: 2147483646, executablePath: exePath }];
+  engine.setAntigravityRuntimeForTests({
+    vscdbPath: () => leftover,
+    exePath: () => exePath,
+    userDataDir: () => path.join(root, "Antigravity"),
+    listProcesses: async () => living,
+    gracefulClose: async () => {
+      living = [];
+      return true;
+    },
+    forceClose: async () => true,
+    writeSystemCredential: async (account) => {
+      credentials.push(account.email);
+      return true;
+    },
+    readSystemCredential: async () => null,
+    restoreSystemCredential: async () => true,
+    clearStaleLock: () => {},
+    launch: () => true,
+    sleep: async () => {},
+  });
+  const originalExists = fs.existsSync;
+  fs.existsSync = (file) => {
+    if (path.resolve(String(file)) === path.resolve(exePath)) return false;
+    return originalExists(file);
+  };
+  t.after(() => { fs.existsSync = originalExists; });
+  await engine.doAntigravitySwitch(engine.loadAntigravityAcct(created.account.id));
+  assert.deepEqual(credentials, ["hub-lie@example.com"]);
+  const leftoverStored = await engine.readAntigravityAuth(leftover, { copyFirst: false });
+  assert.equal(leftoverStored.refresh_token, "1//old-ide");
+});
+
 test("antigravity local import prefers system credential over leftover vscdb", async (t) => {
   const { engine, root } = freshEngine(t);
   const dbPath = path.join(root, "leftover.vscdb");
@@ -1442,6 +1911,82 @@ test("antigravity collapse folds same-email files and keeps current", async (t) 
   assert.equal(remaining.length, 1);
   assert.equal(remaining[0].id, first.account.id);
   assert.equal(engine.currentAntigravityAcct().id, first.account.id);
+});
+
+test("antigravity collapse does not decrypt unique accounts", async (t) => {
+  const { engine } = freshEngine(t);
+  await engine.upsertAntigravityAccount({
+    email: "unique-a@example.com",
+    access_token: "ya29.unique-a",
+    refresh_token: "1//unique-a",
+  });
+  await engine.upsertAntigravityAccount({
+    email: "unique-b@example.com",
+    access_token: "ya29.unique-b",
+    refresh_token: "1//unique-b",
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  engine.collapseDuplicateAntigravityAccounts();
+  assert.equal(engine.listAntigravityAccts({ secrets: false }).length, 2);
+  assert.equal(decrypts.count, 0);
+});
+
+test("antigravity token refreshAll skips reauth accounts without decrypting them", async (t) => {
+  const { engine } = freshEngine(t);
+  const reauth = await engine.upsertAntigravityAccount({
+    email: "need-reauth@example.com",
+    access_token: "ya29.need-reauth",
+    refresh_token: "1//need-reauth",
+  });
+  const stored = engine.loadAntigravityAcct(reauth.account.id);
+  stored.requires_reauth = true;
+  engine.saveAntigravityAcct(stored);
+  await engine.upsertAntigravityAccount({
+    email: "live-token@example.com",
+    access_token: "ya29.live-token",
+    refresh_token: "1//live-token",
+  });
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async () => ({
+      status: 200,
+      body: JSON.stringify({
+        access_token: "ya29.refreshed",
+        refresh_token: "1//live-token",
+        expires_in: 3600,
+      }),
+    }),
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const summary = await engine.refreshAllAntigravityTokens(false);
+  assert.equal(summary.results.find((item) => item.email === "need-reauth@example.com").reauthRequired, true);
+  assert.equal(summary.results.find((item) => item.email === "live-token@example.com").ok, true);
+  assert.ok(decrypts.count >= 1);
+  assert.ok(decrypts.count < 3);
+});
+
+test("antigravity token refreshAll skips unexpired accounts without decrypting them", async (t) => {
+  const { engine } = freshEngine(t);
+  await engine.upsertAntigravityAccount({
+    email: "fresh-ag-token@example.com",
+    access_token: "ya29.fresh-ag-token",
+    refresh_token: "1//fresh-ag-token",
+    expiry_timestamp: Math.floor(Date.now() / 1000) + 3600,
+  });
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async () => {
+      throw new Error("unexpired Antigravity tokens must not hit the token endpoint");
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const summary = await engine.refreshAllAntigravityTokens(false);
+  assert.equal(summary.results[0].ok, true);
+  assert.equal(summary.results[0].skipped, true);
+  assert.equal(decrypts.count, 0);
 });
 
 test("antigravity empty quota refresh is a sync failure", async (t) => {
@@ -1711,6 +2256,48 @@ test("antigravity refreshAll publishes from the in-memory account without a seco
   assert.equal(skipped.success, true);
   assert.ok(skipped.data.every((item) => item.skipped === true && item.reason === "reauthorization_required"));
   assert.equal(decrypts.count, 2);
+});
+
+test("antigravity refreshAll skips persisted reauth accounts without decrypting them", async (t) => {
+  const { engine } = freshEngine(t);
+  const reauth = await engine.upsertAntigravityAccount({
+    email: "batch-reauth@example.com",
+    access_token: "ya29.batch-reauth",
+    refresh_token: "1//batch-reauth",
+  });
+  const stored = engine.loadAntigravityAcct(reauth.account.id);
+  stored.requires_reauth = true;
+  engine.saveAntigravityAcct(stored);
+  const live = await engine.upsertAntigravityAccount({
+    email: "batch-live@example.com",
+    access_token: "ya29.batch-live",
+    refresh_token: "1//batch-live",
+  });
+  engine.refreshAntigravityQuota = async (account) => {
+    account.quota = { plan: "google-one" };
+    return account.quota;
+  };
+  const handlers = new Map();
+  delete require.cache[require.resolve("../src/main/ipc-handlers")];
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.3", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const result = await handlers.get("antigravity:refreshAllQuotas")({});
+  assert.equal(result.success, true);
+  const skipped = result.data.find((item) => item.id === reauth.account.id);
+  const okRow = result.data.find((item) => item.id === live.account.id);
+  assert.equal(skipped.skipped, true);
+  assert.equal(skipped.reason, "reauthorization_required");
+  assert.equal(okRow.quota.plan, "google-one");
+  assert.equal(decrypts.count, 1);
 });
 
 test("antigravity switch IPC decrypts the target once before switching", async (t) => {

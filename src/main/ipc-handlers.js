@@ -30,6 +30,22 @@ function runMapped(eng, items, mapper) {
     return Promise.all(Array.from(items || []).map((item, index) => mapper(item, index)));
 }
 
+function listedCannotRefreshQuota(listed) {
+    if (!listed?.banned && !listed?.requires_reauth) return false;
+    if (listed.has_access === true || listed.tokens?.access_token) return false;
+    return true;
+}
+
+function skippedQuotaResult(listed, reason, extra = {}) {
+    return {
+        id: listed.id,
+        email: listed.email,
+        skipped: true,
+        reason,
+        ...extra,
+    };
+}
+
 function quotaRetryPending(eng, account) {
     const retryAt = Number(account?.quota_next_retry_at || 0);
     if (!Number.isFinite(retryAt) || retryAt <= 0) return false;
@@ -541,6 +557,12 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         const results = await runMapped(eng, listedAccounts, async (listed) => {
             try {
                 return await eng.withAccountLock(listed.id, async () => {
+                    if (listed.requires_reauth) {
+                        return skippedQuotaResult(listed, "reauthorization_required");
+                    }
+                    if (quotaRetryPending(eng, listed)) {
+                        return skippedQuotaResult(listed, "quota_retry_pending");
+                    }
                     const account = eng.loadCursorAcct(listed.id);
                     if (!account) return null;
                     if (account.requires_reauth) {
@@ -750,6 +772,12 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         const results = await runMapped(eng, listedAccounts, async (listed) => {
             try {
                 return await eng.withAccountLock(listed.id, async () => {
+                    if (listed.requires_reauth) {
+                        return skippedQuotaResult(listed, "reauthorization_required");
+                    }
+                    if (quotaRetryPending(eng, listed)) {
+                        return skippedQuotaResult(listed, "quota_retry_pending");
+                    }
                     const account = eng.loadAntigravityAcct(listed.id);
                     if (!account) return null;
                     if (account.requires_reauth) {
@@ -951,6 +979,14 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         const results = await runMapped(eng, listedAccounts, async (listed) => {
             try {
                 return await eng.withAccountLock(listed.id, async () => {
+                    if (quotaRetryPending(eng, listed)) {
+                        return skippedQuotaResult(listed, "quota_retry_pending");
+                    }
+                    if (listedCannotRefreshQuota(listed)) {
+                        return skippedQuotaResult(listed, listed.banned ? "account_banned" : "reauthorization_required", {
+                            banned: !!listed.banned,
+                        });
+                    }
                     const account = eng.loadAcct(listed.id);
                     if (!account) return null;
                     try {

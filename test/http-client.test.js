@@ -1,12 +1,24 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const http = require("node:http");
 const path = require("node:path");
 const test = require("node:test");
 
 const {
   MAX_JSON_BODY_BYTES,
   concatUtf8Capped,
+  nodeHttpJson,
 } = require("../engine/http-client");
+
+function listen(server) {
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve(server.address().port));
+  });
+}
+
+function closeServer(server) {
+  return new Promise((resolve) => server.close(() => resolve()));
+}
 
 test("capped UTF-8 concat keeps a normal JSON body", () => {
   const body = concatUtf8Capped([Buffer.from('{"ok":true}')]);
@@ -82,5 +94,61 @@ test("HTTP transport is used when the engine worker is alive", async () => {
     assert.match(result.body, /example\.invalid/);
   } finally {
     setHttpJsonTransport(null);
+  }
+});
+
+test("node HTTP JSON still returns a normal quota body inside the deadline", async () => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ remaining: 12, path: req.url }));
+  });
+  const port = await listen(server);
+  try {
+    const result = await nodeHttpJson(
+      `http://127.0.0.1:${port}/quota`,
+      {},
+      { Accept: "application/json" },
+      1000,
+    );
+    assert.equal(result.status, 200);
+    assert.match(result.body, /"remaining":12/);
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test("node HTTP JSON aborts a slow body trickle that would reset the socket timeout", async () => {
+  let interval = null;
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    interval = setInterval(() => {
+      try { res.write("a"); } catch {}
+    }, 40);
+    req.on("close", () => {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+    });
+  });
+  const port = await listen(server);
+  try {
+    const started = Date.now();
+    await assert.rejects(
+      () => nodeHttpJson(
+        `http://127.0.0.1:${port}/quota`,
+        {},
+        { Accept: "application/json" },
+        200,
+      ),
+      (error) => {
+        assert.match(error.message, /请求超时/);
+        return true;
+      },
+    );
+    assert.ok(Date.now() - started < 1500, "a dripping response must not hang past the overall deadline");
+  } finally {
+    if (interval) clearInterval(interval);
+    await closeServer(server);
   }
 });

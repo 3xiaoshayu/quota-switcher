@@ -1,6 +1,5 @@
-const fs = require("node:fs");
 const path = require("node:path");
-const { writeJsonAtomic, quarantineFile, restoreBackup, renameWithRetry, sleepSync, captureFile, statSyncWithRetry } = require("./atomic-file");
+const { writeJsonAtomic, quarantineFile, restoreBackup, captureFile, statSyncWithRetry, restoreCapturedFile, copyFileWithRetry, unlinkWithRetry, readJsonWithRetry, readdirSyncWithRetry, mkdirSyncWithRetry } = require("./atomic-file");
 const { jwtPayload } = require("./crypto-utils");
 const { withPathLock } = require("./operation-locks");
 const { logInfo, logWarn, logError } = require("./logger");
@@ -65,42 +64,27 @@ function unprotectData(encoded) {
 }
 
 function ensureDir(directory) {
-  fs.mkdirSync(directory, { recursive: true });
+  mkdirSyncWithRetry(directory);
 }
 
-const TRANSIENT_READ_CODES = new Set(["EPERM", "EACCES", "EBUSY", "EAGAIN", "EMFILE", "ENFILE"]);
-
 function readJson(filePath) {
-  let lastError = null;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      return JSON.parse(fs.readFileSync(filePath, "utf8"));
-    } catch (error) {
-      if (!TRANSIENT_READ_CODES.has(error.code)) throw error;
-      lastError = error;
-      if (attempt < 2) sleepSync(30 * (attempt + 1));
-    }
-  }
-  lastError.transientIoError = true;
-  throw lastError;
+  return readJsonWithRetry(filePath);
 }
 
 function tryReadJsonWithBackup(filePath, kind) {
   try {
     return { value: readJson(filePath), recovered: false };
   } catch (primaryError) {
-    if (primaryError.transientIoError) throw primaryError;
+    if (primaryError.code === "ENOENT" || primaryError.transientIoError) throw primaryError;
     const backupPath = `${filePath}.bak`;
-    if (fs.existsSync(backupPath)) {
-      try {
-        const value = readJson(backupPath);
-        if (fs.existsSync(filePath)) {
-          try { quarantineFile(filePath, "invalid-json"); } catch {}
-        }
-        restoreBackup(filePath);
-        recordDiagnostic(kind, filePath, primaryError.message, true);
-        return { value, recovered: true };
-      } catch (backupError) {
+    try {
+      const value = readJson(backupPath);
+      try { quarantineFile(filePath, "invalid-json"); } catch {}
+      restoreBackup(filePath);
+      recordDiagnostic(kind, filePath, primaryError.message, true);
+      return { value, recovered: true };
+    } catch (backupError) {
+      if (backupError?.code !== "ENOENT") {
         recordDiagnostic(kind, backupPath, backupError.message, false);
       }
     }
@@ -256,7 +240,7 @@ function migrateLegacyAccount(account, filePath) {
   }
   try {
     writeJsonAtomic(filePath, encodeAccount(account), { backup: false });
-    fs.copyFileSync(filePath, `${filePath}.bak`);
+    copyFileWithRetry(filePath, `${filePath}.bak`);
     logInfo(`Migrated a legacy plaintext account record: ${path.basename(filePath)}`);
   } catch (error) {
     logWarn(`Legacy account migration failed (record stays readable): ${error.message}`);
@@ -295,28 +279,31 @@ function loadAccountPath(filePath, options = {}) {
       if (typeof options.onTransient === "function") options.onTransient(filePath, parseError);
       return null;
     }
-    if (allowRestore && fs.existsSync(`${filePath}.bak`)) {
+    if (parseError?.code === "ENOENT") return null;
+    if (allowRestore) {
       try {
         const backupRaw = readJson(`${filePath}.bak`);
         const account = decodeAccount(backupRaw, `${filePath}.bak`, { secrets: true });
-        if (fs.existsSync(filePath)) {
-          try { quarantineFile(filePath, "invalid-json"); } catch {}
-        }
+        try { quarantineFile(filePath, "invalid-json"); } catch {}
         restoreBackup(filePath);
         migrateLegacyAccount(account, filePath);
         recordDiagnostic("account_json", filePath, parseError.message, true);
         return secrets ? account : omitSecrets(account);
       } catch (backupError) {
-        recordDiagnostic("account_backup", `${filePath}.bak`, backupError.message, false);
+        if (backupError?.code !== "ENOENT") {
+          recordDiagnostic("account_backup", `${filePath}.bak`, backupError.message, false);
+        }
       }
     }
-    if (fs.existsSync(filePath)) {
-      try {
-        const quarantined = quarantineFile(filePath, "invalid-json");
+    try {
+      const quarantined = quarantineFile(filePath, "invalid-json");
+      if (quarantined) {
         recordDiagnostic("account_json", filePath, `Malformed JSON isolated at ${quarantined}`, false);
-      } catch {
+      } else {
         recordDiagnostic("account_json", filePath, parseError.message, false);
       }
+    } catch {
+      recordDiagnostic("account_json", filePath, parseError.message, false);
     }
     if (typeof options.onUnreadable === "function") options.onUnreadable(filePath, parseError);
     return null;
@@ -335,14 +322,18 @@ function loadAccountPath(filePath, options = {}) {
       if (typeof options.onCredentialFailure === "function") options.onCredentialFailure(filePath, error);
       return null;
     }
-    if (allowRestore && fs.existsSync(`${filePath}.bak`)) {
+    if (allowRestore) {
       try {
         const account = decodeAccount(readJson(`${filePath}.bak`), `${filePath}.bak`, { secrets: true });
         restoreBackup(filePath);
         migrateLegacyAccount(account, filePath);
         recordDiagnostic("account_credentials", filePath, error.message, true);
         return secrets ? account : omitSecrets(account);
-      } catch {}
+      } catch (backupError) {
+        if (backupError?.code !== "ENOENT") {
+          recordDiagnostic("account_backup", `${filePath}.bak`, backupError.message, false);
+        }
+      }
     }
     const type = error instanceof AccountCredentialError ? "account_credentials" : "account_data";
     recordDiagnostic(type, filePath, error.message, false);
@@ -352,14 +343,7 @@ function loadAccountPath(filePath, options = {}) {
 }
 
 function restoreFile(filePath, content) {
-  if (content === null) {
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-    return;
-  }
-  ensureDir(path.dirname(filePath));
-  const tempPath = `${filePath}.rollback.tmp`;
-  fs.writeFileSync(tempPath, content);
-  renameWithRetry(tempPath, filePath);
+  restoreCapturedFile(filePath, content);
 }
 
 function createAccountFileStore(spec) {
@@ -431,7 +415,7 @@ function createAccountFileStore(spec) {
       stats.transientReads = 0;
     }
     const accounts = [];
-    for (const name of fs.readdirSync(accountsDir)) {
+    for (const name of readdirSyncWithRetry(accountsDir)) {
       if (!name.startsWith(prefix) || !name.endsWith(".json")) continue;
       if (stats) stats.fileCount += 1;
       const account = loadAccountPath(path.join(accountsDir, name), {
@@ -500,28 +484,38 @@ function createAccountFileStore(spec) {
 
   function loadIdx() {
     ensureDir(dataDir);
-    if (!fs.existsSync(indexPath)) {
-      return fs.existsSync(accountsDir)
-        ? rebuildIndex("index missing", null, { fallbackIndex: emptyIndex() })
-        : emptyIndex();
-    }
-
     try {
       const raw = useIndexBackup
         ? tryReadJsonWithBackup(indexPath, "account_index").value
         : readJson(indexPath);
       const index = normalizeIndex(raw);
-      if (index.accounts.length === 0 && fs.existsSync(accountsDir)) {
-        const accountFiles = fs.readdirSync(accountsDir).some((name) => name.startsWith(prefix) && name.endsWith(".json"));
-        if (accountFiles) return rebuildIndex("index contained no accounts", index[currentField], { fallbackIndex: index });
+      if (index.accounts.length === 0) {
+        let hasAccountFiles = false;
+        try {
+          hasAccountFiles = readdirSyncWithRetry(accountsDir).some((name) => name.startsWith(prefix) && name.endsWith(".json"));
+        } catch (dirError) {
+          if (dirError?.code !== "ENOENT") throw dirError;
+        }
+        if (hasAccountFiles) return rebuildIndex("index contained no accounts", index[currentField], { fallbackIndex: index });
       }
       return index;
     } catch (error) {
+      if (error?.code === "ENOENT") {
+        let hasAccountFiles = false;
+        try {
+          hasAccountFiles = readdirSyncWithRetry(accountsDir).some((name) => name.startsWith(prefix) && name.endsWith(".json"));
+        } catch (dirError) {
+          if (dirError?.code !== "ENOENT") throw dirError;
+        }
+        return hasAccountFiles
+          ? rebuildIndex("index missing", null, { fallbackIndex: emptyIndex() })
+          : emptyIndex();
+      }
       if (useIndexBackup && error.transientIoError) {
         recordDiagnostic("account_index", indexPath, error.message, false);
         throw error;
       }
-      if (quarantineUnreadableIndex && fs.existsSync(indexPath)) {
+      if (quarantineUnreadableIndex) {
         try { quarantineFile(indexPath, "invalid-json"); } catch {}
       }
       if (recordIndexDiagnostics) {
@@ -538,15 +532,11 @@ function createAccountFileStore(spec) {
     if (normalizeOnLoad) {
       const safeId = normalizeAccountId(id);
       if (!safeId.startsWith(prefix)) return null;
-      const filePath = accountFilePath(safeId);
-      if (!fs.existsSync(filePath)) return null;
-      return applyDecorate(loadAccountPath(filePath));
+      return applyDecorate(loadAccountPath(accountFilePath(safeId)));
     }
     const rawId = String(id);
     if (!rawId.startsWith(prefix)) return null;
-    const filePath = accountFilePath(rawId);
-    if (!fs.existsSync(filePath)) return null;
-    return applyDecorate(loadAccountPath(filePath));
+    return applyDecorate(loadAccountPath(accountFilePath(rawId)));
   }
 
   function saveAcct(account) {
@@ -579,7 +569,11 @@ function createAccountFileStore(spec) {
       }
 
       for (const target of [filePath, `${filePath}.bak`]) {
-        if (fs.existsSync(target)) fs.unlinkSync(target);
+        try {
+          unlinkWithRetry(target);
+        } catch (error) {
+          if (error?.code !== "ENOENT") throw error;
+        }
       }
 
       if (!allowDeleteIndexOption || options.updateIndex !== false) {

@@ -1,7 +1,6 @@
-const fs = require("node:fs");
 const path = require("node:path");
 const { DATA_DIR } = require("./config");
-const { statSyncWithRetry } = require("./atomic-file");
+const { statSyncWithRetry, pathExists, unlinkIfPresent, readdirSyncWithRetry, mkdirSyncWithRetry, appendFileWithRetry } = require("./atomic-file");
 
 const LOG_DIR = path.join(DATA_DIR, "logs");
 const RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
@@ -30,20 +29,20 @@ function currentLogPath() {
 }
 
 function cleanupLogs() {
-  if (!fs.existsSync(LOG_DIR)) return;
+  if (!pathExists(LOG_DIR)) return;
   const cutoff = Date.now() - RETENTION_MS;
-  for (const name of fs.readdirSync(LOG_DIR)) {
+  for (const name of readdirSyncWithRetry(LOG_DIR)) {
     if (!/^app-\d{4}-\d{2}-\d{2}\.log$/.test(name)) continue;
     const filePath = path.join(LOG_DIR, name);
     try {
-      if (statSyncWithRetry(filePath).mtimeMs < cutoff) fs.unlinkSync(filePath);
+      if (statSyncWithRetry(filePath).mtimeMs < cutoff) unlinkIfPresent(filePath);
     } catch {}
   }
 }
 
 function initLogger() {
   if (initialized) return;
-  fs.mkdirSync(LOG_DIR, { recursive: true });
+  mkdirSyncWithRetry(LOG_DIR);
   cleanupLogs();
   initialized = true;
 }
@@ -52,7 +51,7 @@ function write(level, message) {
   try {
     initLogger();
     const line = `${new Date().toISOString()} ${level.toUpperCase()} ${sanitizeMessage(message)}\n`;
-    fs.appendFileSync(currentLogPath(), line, "utf8");
+    appendFileWithRetry(currentLogPath(), line, "utf8");
   } catch {}
 }
 

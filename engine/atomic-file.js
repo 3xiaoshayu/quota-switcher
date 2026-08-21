@@ -1,8 +1,12 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
+function mkdirSyncWithRetry(dirPath, options = { recursive: true }) {
+  return withTransientIoRetry(() => fs.mkdirSync(dirPath, options));
+}
+
 function ensureParent(filePath) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  mkdirSyncWithRetry(path.dirname(filePath));
 }
 
 function uniqueSuffix() {
@@ -16,13 +20,13 @@ function sleepSync(milliseconds) {
 const TRANSIENT_RENAME_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
 const TRANSIENT_READ_CODES = new Set(["EPERM", "EACCES", "EBUSY", "EAGAIN", "EMFILE", "ENFILE"]);
 
-function readFileWithRetry(filePath, encoding) {
+function withTransientIoRetry(operation, codes = TRANSIENT_READ_CODES) {
   let lastError = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      return encoding === undefined ? fs.readFileSync(filePath) : fs.readFileSync(filePath, encoding);
+      return operation();
     } catch (error) {
-      if (!TRANSIENT_READ_CODES.has(error.code)) throw error;
+      if (!codes.has(error.code)) throw error;
       lastError = error;
       if (attempt < 2) sleepSync(30 * (attempt + 1));
     }
@@ -31,19 +35,65 @@ function readFileWithRetry(filePath, encoding) {
   throw lastError;
 }
 
-function statSyncWithRetry(filePath) {
-  let lastError = null;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      return fs.statSync(filePath);
-    } catch (error) {
-      if (!TRANSIENT_READ_CODES.has(error.code)) throw error;
-      lastError = error;
-      if (attempt < 2) sleepSync(30 * (attempt + 1));
-    }
+function readFileWithRetry(filePath, encoding) {
+  return withTransientIoRetry(() => (
+    encoding === undefined ? fs.readFileSync(filePath) : fs.readFileSync(filePath, encoding)
+  ));
+}
+
+function writeFileWithRetry(filePath, content, encoding) {
+  return withTransientIoRetry(() => {
+    if (encoding === undefined) fs.writeFileSync(filePath, content);
+    else fs.writeFileSync(filePath, content, encoding);
+  });
+}
+
+function appendFileWithRetry(filePath, content, encoding) {
+  return withTransientIoRetry(() => {
+    if (encoding === undefined) fs.appendFileSync(filePath, content);
+    else fs.appendFileSync(filePath, content, encoding);
+  });
+}
+
+function copyFileWithRetry(fromPath, toPath) {
+  return withTransientIoRetry(() => fs.copyFileSync(fromPath, toPath));
+}
+
+function unlinkWithRetry(filePath) {
+  return withTransientIoRetry(() => fs.unlinkSync(filePath));
+}
+
+function unlinkIfPresent(filePath) {
+  try {
+    unlinkWithRetry(filePath);
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
   }
-  lastError.transientIoError = true;
-  throw lastError;
+}
+
+function statSyncWithRetry(filePath) {
+  return withTransientIoRetry(() => fs.statSync(filePath));
+}
+
+function readdirSyncWithRetry(dirPath, options) {
+  return withTransientIoRetry(() => (
+    options === undefined ? fs.readdirSync(dirPath) : fs.readdirSync(dirPath, options)
+  ));
+}
+
+// Node's existsSync swallows EPERM/EACCES and returns false, so a locked-but-present
+// file looks missing. Treat leftover lock errors as "present" so callers retry the real IO.
+function pathExists(filePath) {
+  try {
+    statSyncWithRetry(filePath);
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    if (error?.transientIoError) return true;
+    throw error;
+  }
 }
 
 function hasPendingWalFile(walPath) {
@@ -56,12 +106,26 @@ function hasPendingWalFile(walPath) {
 }
 
 function readJsonWithRetry(filePath) {
-  return JSON.parse(readFileWithRetry(filePath, "utf8"));
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    } catch (error) {
+      // A writer can leave a partial file that parses as SyntaxError for one
+      // or two reads. Retry like EPERM, but do not mark a persistently invalid
+      // JSON payload as a leftover lock — callers still restore backups.
+      const retryable = TRANSIENT_READ_CODES.has(error.code) || error instanceof SyntaxError;
+      if (!retryable) throw error;
+      lastError = error;
+      if (attempt < 2) sleepSync(30 * (attempt + 1));
+    }
+  }
+  if (TRANSIENT_READ_CODES.has(lastError.code)) lastError.transientIoError = true;
+  throw lastError;
 }
 
 function captureFile(filePath) {
   try {
-    if (!fs.existsSync(filePath)) return null;
     return readFileWithRetry(filePath);
   } catch (error) {
     if (error?.code === "ENOENT") return null;
@@ -94,20 +158,44 @@ function writeTextAtomic(filePath, content, options = {}) {
   let descriptor = null;
 
   try {
-    if (backup && fs.existsSync(filePath)) {
-      fs.copyFileSync(filePath, backupPath);
+    if (backup) {
+      try {
+        copyFileWithRetry(filePath, backupPath);
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
     }
-    descriptor = fs.openSync(tempPath, "w");
-    fs.writeFileSync(descriptor, content, "utf8");
-    fs.fsyncSync(descriptor);
-    fs.closeSync(descriptor);
+    descriptor = withTransientIoRetry(() => fs.openSync(tempPath, "w"));
+    withTransientIoRetry(() => fs.writeFileSync(descriptor, content, "utf8"));
+    withTransientIoRetry(() => fs.fsyncSync(descriptor));
+    withTransientIoRetry(() => fs.closeSync(descriptor));
     descriptor = null;
     renameWithRetry(tempPath, filePath);
   } catch (error) {
     if (descriptor !== null) {
       try { fs.closeSync(descriptor); } catch {}
     }
-    try { fs.unlinkSync(tempPath); } catch {}
+    try { unlinkIfPresent(tempPath); } catch {}
+    throw error;
+  }
+}
+
+function restoreCapturedFile(filePath, content) {
+  if (content === null) {
+    try {
+      unlinkWithRetry(filePath);
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    return;
+  }
+  ensureParent(filePath);
+  const tempPath = `${filePath}.rollback.tmp`;
+  try {
+    writeFileWithRetry(tempPath, content);
+    renameWithRetry(tempPath, filePath);
+  } catch (error) {
+    try { unlinkIfPresent(tempPath); } catch {}
     throw error;
   }
 }
@@ -117,19 +205,42 @@ function writeJsonAtomic(filePath, value, options = {}) {
 }
 
 function quarantineFile(filePath, reason = "invalid") {
-  if (!fs.existsSync(filePath)) return null;
   const safeReason = String(reason).replace(/[^a-z0-9_-]+/gi, "-");
   const target = `${filePath}.${safeReason}.${Date.now()}`;
-  renameWithRetry(filePath, target);
-  return target;
+  try {
+    renameWithRetry(filePath, target);
+    return target;
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
 }
 
 function restoreBackup(filePath) {
   const backupPath = `${filePath}.bak`;
-  if (!fs.existsSync(backupPath)) return false;
-  const content = readFileWithRetry(backupPath, "utf8");
-  writeTextAtomic(filePath, content, { backup: false });
-  return true;
+  try {
+    const content = readFileWithRetry(backupPath, "utf8");
+    writeTextAtomic(filePath, content, { backup: false });
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function readJsonWithBackup(filePath) {
+  try {
+    return readJsonWithRetry(filePath);
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.transientIoError) throw error;
+    try {
+      const value = readJsonWithRetry(`${filePath}.bak`);
+      try { restoreBackup(filePath); } catch {}
+      return value;
+    } catch {
+      throw error;
+    }
+  }
 }
 
 module.exports = {
@@ -137,11 +248,21 @@ module.exports = {
   writeJsonAtomic,
   readFileWithRetry,
   readJsonWithRetry,
+  writeFileWithRetry,
+  appendFileWithRetry,
+  mkdirSyncWithRetry,
+  copyFileWithRetry,
+  unlinkWithRetry,
+  unlinkIfPresent,
+  restoreCapturedFile,
   captureFile,
   hasPendingWalFile,
   quarantineFile,
   restoreBackup,
+  readJsonWithBackup,
   renameWithRetry,
   sleepSync,
   statSyncWithRetry,
+  readdirSyncWithRetry,
+  pathExists,
 };

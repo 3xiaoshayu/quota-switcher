@@ -1,5 +1,5 @@
 const { TOKEN_URL, CLIENT_ID } = require("./config");
-const { ts, isTokenExpired, jwtExp } = require("./crypto-utils");
+const { ts, isTokenExpired, isExpiryStale, jwtExp } = require("./crypto-utils");
 const { httpJson, extractErrorCode } = require("./http-client");
 const { saveAcct, loadAcct, listAccts, loadIdx } = require("./storage");
 const { writeAuthJson, writeProjection } = require("./switch");
@@ -181,12 +181,33 @@ function needsRefresh(acct) {
   return isTokenExpired(acct.tokens.access_token);
 }
 
+function listedNeedsTokenRefresh(listed) {
+  if (!listed || listed.banned || listed.has_refresh === false) return false;
+  return isExpiryStale(listed.token_exp);
+}
+
 async function refreshAll(force) {
   const accts = listAccts({ secrets: false });
   if (!accts.length) return { okCount: 0, revivedCount: 0, deadCount: 0, results: [] };
 
   const rows = await mapLimit(accts, 5, async (listed) => {
     return withAccountLock(listed.id, async () => {
+      if (listed.banned) {
+        return { result: { email: listed.email, ok: false, skipped: true, banned: true } };
+      }
+      if (listed.requires_reauth && listed.has_refresh === false) {
+        return {
+          result: {
+            email: listed.email,
+            ok: false,
+            skipped: true,
+            reauthRequired: true,
+          },
+        };
+      }
+      if (!force && !hasTokenRepairSignal(listed) && !listedNeedsTokenRefresh(listed)) {
+        return { kind: "ok", result: { email: listed.email, ok: true, skipped: true } };
+      }
       const a = loadAcct(listed.id);
       if (!a) return null;
       if (a.banned) {
@@ -237,16 +258,7 @@ async function refreshAll(force) {
     else if (row.kind === "dead") dead += 1;
   }
 
-  // 保持当前账号 auth.json 最新（锁内执行，避免与在途刷新交错）
-  const idx = loadIdx();
-  if (idx.current_account_id) {
-    await withAccountLock(idx.current_account_id, async () => {
-      const cur = loadAcct(idx.current_account_id);
-      if (cur) syncCurrentAuthIfNeeded(cur);
-    });
-  }
-
   return { okCount: okN, revivedCount: revived, deadCount: dead, results };
 }
 
-module.exports = { refreshOneTok, needsRefresh, refreshAll };
+module.exports = { refreshOneTok, needsRefresh, listedNeedsTokenRefresh, refreshAll };

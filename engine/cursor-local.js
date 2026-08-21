@@ -11,7 +11,7 @@ const {
   setCurrentCursorAccountId,
   deleteCursorAcct,
 } = require("./cursor-storage");
-const { extraIdentityIds, foldDuplicateAccounts, mergePreservedQuota, pickIdentityKeeper, usableAuthId, usableEmail } = require("./account-identity");
+const { extraIdentityIds, foldDuplicateAccountsIfNeeded, mergePreservedQuota, pickIdentityKeeper, usableAuthId, usableEmail } = require("./account-identity");
 const { withAccountLock, withAccountLocks } = require("./operation-locks");
 const { logInfo, logWarn } = require("./logger");
 
@@ -186,11 +186,12 @@ function findSameCursorId(preview, accounts = listCursorAccts({ secrets: false }
 }
 
 function collapseDuplicateCursorAccounts() {
-  return foldDuplicateAccounts(
-    listCursorAccts(),
-    sameCursorIdentity,
-    loadCursorIdx().current_cursor_account_id || null,
-    (keeper, extras) => {
+  return foldDuplicateAccountsIfNeeded({
+    listAccounts: listCursorAccts,
+    loadAccount: loadCursorAcct,
+    sameIdentity: sameCursorIdentity,
+    currentId: loadCursorIdx().current_cursor_account_id || null,
+    persist: (keeper, extras) => {
       const currentId = loadCursorIdx().current_cursor_account_id;
       if (currentId && extras.some((item) => item.id === currentId)) {
         setCurrentCursorAccountId(keeper.id);
@@ -201,8 +202,8 @@ function collapseDuplicateCursorAccounts() {
         deleteCursorAcct(extra.id, { allowCurrent: true });
       }
     },
-    (error) => logWarn(`Cursor account fold skipped: ${error.message}`),
-  );
+    onError: (error) => logWarn(`Cursor account fold skipped: ${error.message}`),
+  });
 }
 
 function accountFromCursorTokens(tokens, existing = null) {
@@ -258,8 +259,8 @@ async function upsertCursorAccount(tokens, options = {}) {
       merged.id = saveId;
       saveCursorAcct(merged);
       upsertCursorIndex(merged);
-      collapseDuplicateCursorAccounts();
-      return loadCursorAcct(saveId) || merged;
+      const folded = collapseDuplicateCursorAccounts();
+      return folded ? (loadCursorAcct(saveId) || merged) : merged;
     });
 
     return { account, mismatch, targetAccountId, updated };
@@ -328,12 +329,13 @@ async function syncCurrentCursorFromOfficialUncached() {
       auth_id: local.authId,
     }));
     if (match) {
-      persistOfficialCursorState(values, session);
+      const persisted = persistOfficialCursorState(values, session);
       if (current?.id !== match.id) {
         setCurrentCursorAccountId(match.id);
       }
+      return persisted || currentCursorAcct() || current;
     }
-    return currentCursorAcct();
+    return current;
   });
 }
 

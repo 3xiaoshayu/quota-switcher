@@ -1,5 +1,4 @@
-const fs = require("node:fs");
-const { hasPendingWalFile } = require("./atomic-file");
+const { hasPendingWalFile, pathExists } = require("./atomic-file");
 const {
   withVscdb,
   snapshotItems,
@@ -149,7 +148,7 @@ async function readCursorAuth(dbPath, options = {}) {
 }
 
 async function readCursorSessionState(dbPath) {
-  if (!dbPath || !fs.existsSync(dbPath)) return null;
+  if (!dbPath || !pathExists(dbPath)) return null;
   return withVscdb(dbPath, {
     readOnly: true,
     labels: SQLITE_LABELS,

@@ -40,7 +40,6 @@ function normalizeAutoSwitchCfg(cfg) {
 }
 
 function loadAutoSwitchCfg() {
-  const fs = require("node:fs");
   let primaryError = null;
   try {
     return normalizeAutoSwitchCfg(readJsonWithRetry(CFG_FILE));
@@ -52,17 +51,15 @@ function loadAutoSwitchCfg() {
   if (primaryError.code === "ENOENT") return normalizeAutoSwitchCfg();
 
   try {
-    if (fs.existsSync(`${CFG_FILE}.bak`)) {
-      // Parse and validate the backup before touching the disk, so a corrupt
-      // backup cannot destroy the evidence or masquerade as a recovery.
-      const restored = normalizeAutoSwitchCfg(readJsonWithRetry(`${CFG_FILE}.bak`));
-      try { quarantineFile(CFG_FILE, "invalid-json"); } catch {}
-      writeJsonAtomic(CFG_FILE, restored, { backup: false });
-      logWarn(`Auto-switch configuration was restored from backup: ${primaryError.message}`);
-      return restored;
-    }
+    const restored = normalizeAutoSwitchCfg(readJsonWithRetry(`${CFG_FILE}.bak`));
+    try { quarantineFile(CFG_FILE, "invalid-json"); } catch {}
+    writeJsonAtomic(CFG_FILE, restored, { backup: false });
+    logWarn(`Auto-switch configuration was restored from backup: ${primaryError.message}`);
+    return restored;
   } catch (backupError) {
-    logWarn(`Auto-switch configuration backup is also unreadable: ${backupError.message}`);
+    if (backupError?.code !== "ENOENT") {
+      logWarn(`Auto-switch configuration backup is also unreadable: ${backupError.message}`);
+    }
   }
   try { quarantineFile(CFG_FILE, "invalid-json"); } catch {}
   logWarn(`Auto-switch configuration was reset to defaults: ${primaryError.message}`);

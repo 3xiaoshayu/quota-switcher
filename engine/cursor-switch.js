@@ -1,5 +1,5 @@
-const fs = require("node:fs");
 const { ts } = require("./crypto-utils");
+const { pathExists } = require("./atomic-file");
 const { getCursorRuntime, firstExistingCursorExe } = require("./cursor-runtime");
 const { applyOfficialCursorSwitch, restoreVscdbSnapshot, waitForCursorVscdbWritable, waitForWalToClear, finiteTeamId } = require("./cursor-db");
 const { loadCursorAcct, saveCursorAcct, loadCursorIdx, setCurrentCursorAccountId, upsertCursorIndex, snapshotCursorMeta, restoreCursorMeta } = require("./cursor-storage");
@@ -36,7 +36,7 @@ async function waitForPidsToExit(pids, timeoutMs) {
 
 function firstExistingPath(paths) {
   for (const candidate of paths) {
-    if (candidate && fs.existsSync(candidate)) return candidate;
+    if (candidate && pathExists(candidate)) return candidate;
   }
   return null;
 }

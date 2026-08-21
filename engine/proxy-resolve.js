@@ -136,8 +136,16 @@ function loadNetworkState() {
     const parsed = readJsonWithRetry(NETWORK_FILE);
     if (!parsed || typeof parsed !== "object") return {};
     return parsed;
-  } catch {
-    return {};
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.transientIoError) return {};
+    try {
+      const restored = readJsonWithRetry(`${NETWORK_FILE}.bak`);
+      if (!restored || typeof restored !== "object") return {};
+      try { writeJsonAtomic(NETWORK_FILE, restored, { backup: false }); } catch {}
+      return restored;
+    } catch {
+      return {};
+    }
   }
 }
 
@@ -158,22 +166,23 @@ function persistLastGood(signature) {
         proxyUrl: signature.proxyUrl,
         probedAt: Date.now(),
       },
-    }, { backup: false });
+    }, { backup: true });
   } catch {}
 }
 
 function readCursorHttpProxy() {
   const settingsPath = path.join(process.env.APPDATA || "", "Cursor", "User", "settings.json");
   try {
-    const raw = readFileWithRetry(settingsPath, "utf8");
-    try {
-      const parsed = JSON.parse(raw);
-      return String(parsed["http.proxy"] || "").trim();
-    } catch {
-      return /"http\.proxy"\s*:\s*"([^"]+)"/.exec(raw)?.[1]?.trim() || "";
-    }
+    const parsed = readJsonWithRetry(settingsPath);
+    return String(parsed["http.proxy"] || "").trim();
   } catch {
-    return "";
+    // Cursor settings can be JSONC; fall back to a field scan after parse retries.
+    try {
+      const raw = readFileWithRetry(settingsPath, "utf8");
+      return /"http\.proxy"\s*:\s*"([^"]+)"/.exec(raw)?.[1]?.trim() || "";
+    } catch {
+      return "";
+    }
   }
 }
 

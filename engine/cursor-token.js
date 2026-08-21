@@ -1,5 +1,5 @@
 const { CURSOR_TOKEN_URL, CURSOR_CLIENT_ID, CURSOR_META_URL } = require("./config");
-const { ts, jwtPayload, isTokenExpired } = require("./crypto-utils");
+const { ts, jwtPayload, isTokenExpired, isExpiryStale } = require("./crypto-utils");
 const { extractErrorCode } = require("./http-client");
 const { getCursorRuntime } = require("./cursor-runtime");
 const { listCursorAccts, loadCursorAcct, saveCursorAcct, upsertCursorIndex } = require("./cursor-storage");
@@ -123,15 +123,30 @@ async function refreshAllCursorTokens(force = false) {
   const listedAccounts = listCursorAccts({ secrets: false });
   const results = await mapLimit(listedAccounts, 5, async (listed) => {
     return withAccountLock(listed.id, async () => {
-      const account = loadCursorAcct(listed.id) || listed;
-      if (account.requires_reauth) {
+      if (listed.requires_reauth) {
         return {
-          email: account.email,
+          email: listed.email,
           ok: false,
           skipped: true,
           reauthRequired: true,
         };
       }
+      if (listed.has_refresh === false) {
+        return {
+          email: listed.email,
+          ok: false,
+          skipped: true,
+          reauthRequired: true,
+        };
+      }
+      if (!force && !isExpiryStale(listed.token_exp)) {
+        return {
+          email: listed.email,
+          ok: true,
+          skipped: true,
+        };
+      }
+      const account = loadCursorAcct(listed.id) || listed;
       if (!account?.tokens?.refresh_token) {
         return {
           email: account.email,

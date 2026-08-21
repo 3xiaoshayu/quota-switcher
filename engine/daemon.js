@@ -1,5 +1,5 @@
 const { REFRESH_MINUTES } = require("./config");
-const { needsRefresh, refreshOneTok } = require("./token-refresh");
+const tokenRefresh = require("./token-refresh");
 const { refreshQuota, probeUsageOnly, needsBanProbe } = require("./quota");
 const { loadAutoSwitchCfg, normalizeSyncIntervalMinutes } = require("./config-manager");
 const { autoSwitchTick } = require("./auto-switch");
@@ -43,9 +43,23 @@ async function runDaemonWorker(options = {}) {
   // rotation sync); hold the account lock so it cannot interleave with an
   // in-flight refresh of the same account.
   const preIndex = loadIdx();
-  authState = preIndex.current_account_id
-    ? await withAccountLock(preIndex.current_account_id, async () => inspectAuthState({ migrateProjection: false }))
-    : inspectAuthState({ migrateProjection: false });
+  try {
+    authState = preIndex.current_account_id
+      ? await withAccountLock(preIndex.current_account_id, async () => inspectAuthState({ migrateProjection: false }))
+      : inspectAuthState({ migrateProjection: false });
+  } catch (error) {
+    failures.push(failure("auth_inspect", null, error));
+    return {
+      startedAt,
+      completedAt: Date.now(),
+      accountsUpdated,
+      tokenRefreshes,
+      autoSwitchResult,
+      failures,
+      pausedReason: null,
+      authState,
+    };
+  }
   if (authState.requiresResolution) {
     return {
       startedAt,
@@ -65,10 +79,13 @@ async function runDaemonWorker(options = {}) {
     try {
       await withAccountLock(listed.id, async () => {
         if (isCancelled()) return;
+        if (listed.banned) return;
+        if (listed.requires_reauth && listed.has_refresh === false) return;
+        if (!tokenRefresh.listedNeedsTokenRefresh(listed)) return;
         const account = loadAcct(listed.id);
-        if (!account || account.banned || !needsRefresh(account)) return;
+        if (!account || account.banned || !tokenRefresh.needsRefresh(account)) return;
         if (isCancelled()) return;
-        const result = await refreshOneTok(account);
+        const result = await tokenRefresh.refreshOneTok(account);
         if (isCancelled()) return;
         tokenRefreshes.push({
           accountId: account.id,
@@ -93,6 +110,8 @@ async function runDaemonWorker(options = {}) {
     try {
       await withAccountLock(listed.id, async () => {
         if (isCancelled()) return;
+        if (!listed.requires_reauth && !listed.banned) return;
+        if (listed.has_access === false) return;
         const account = loadAcct(listed.id);
         if (!account || !needsBanProbe(account)) return;
         try {
@@ -149,11 +168,9 @@ async function runDaemonWorker(options = {}) {
       if (latestIndex.current_account_id === current.id && latestAuthState.status === "aligned") {
         try {
           if (isCancelled()) return;
-          const latest = loadAcct(current.id);
-          if (!latest) return;
-          const authValue = writeAuthJson(latest);
+          const authValue = writeAuthJson(current);
           if (isCancelled()) return;
-          writeProjection(latest, authValue);
+          writeProjection(current, authValue);
         } catch (error) {
           failures.push(failure("auth_projection", current, error));
         }

@@ -1,4 +1,3 @@
-const fs = require("node:fs");
 const path = require("node:path");
 const http = require("node:http");
 const cp = require("node:child_process");
@@ -16,10 +15,10 @@ const {
   listAccts,
   deleteAcct,
 } = require("./storage");
-const { extraIdentityIds, foldDuplicateAccounts, mergePreservedQuota, pickIdentityKeeper, usableEmail } = require("./account-identity");
+const { extraIdentityIds, foldDuplicateAccountsIfNeeded, mergePreservedQuota, pickIdentityKeeper, usableEmail } = require("./account-identity");
 const { APP_DISPLAY_NAME } = require("./app-brand");
 const { remapSelectedAccountIds } = require("./config-manager");
-const { writeJsonAtomic, readJsonWithRetry } = require("./atomic-file");
+const { writeJsonAtomic, readJsonWithBackup, unlinkIfPresent } = require("./atomic-file");
 const { logInfo, logWarn, logError } = require("./logger");
 
 const PENDING_PATH = path.join(DATA_DIR, "codex_oauth_pending.json");
@@ -156,14 +155,13 @@ function persistPending(pending) {
 }
 
 function clearPendingFile() {
-  try { fs.unlinkSync(PENDING_PATH); } catch {}
-  try { fs.unlinkSync(`${PENDING_PATH}.bak`); } catch {}
+  try { unlinkIfPresent(PENDING_PATH); } catch {}
+  try { unlinkIfPresent(`${PENDING_PATH}.bak`); } catch {}
 }
 
 function loadPending() {
-  if (!fs.existsSync(PENDING_PATH)) return null;
   try {
-    const envelope = readJsonWithRetry(PENDING_PATH);
+    const envelope = readJsonWithBackup(PENDING_PATH);
     const pending = JSON.parse(unprotectData(envelope.protected_payload));
     if (!pending.expiresAt || pending.expiresAt <= Date.now()) {
       clearPendingFile();
@@ -172,6 +170,7 @@ function loadPending() {
     }
     return pending;
   } catch (error) {
+    if (error?.code === "ENOENT" || error?.transientIoError) return null;
     clearPendingFile();
     logError(`Could not restore the pending OAuth authorization: ${error.message}`);
     setStatus("error", { message: "The pending OAuth authorization could not be restored." });
@@ -358,11 +357,12 @@ function persistCodexIndexEntry(account) {
 }
 
 function collapseDuplicateCodexAccounts() {
-  return foldDuplicateAccounts(
-    listAccts(),
-    sameAccountIdentity,
-    loadIdx().current_account_id || null,
-    (keeper, extras) => {
+  return foldDuplicateAccountsIfNeeded({
+    listAccounts: listAccts,
+    loadAccount: loadAcct,
+    sameIdentity: sameAccountIdentity,
+    currentId: loadIdx().current_account_id || null,
+    persist: (keeper, extras) => {
       const index = loadIdx();
       if (extras.some((item) => item.id === index.current_account_id)) {
         index.current_account_id = keeper.id;
@@ -375,8 +375,8 @@ function collapseDuplicateCodexAccounts() {
         deleteAcct(extra.id, { allowCurrent: true });
       }
     },
-    (error) => logWarn(`Codex account fold skipped: ${error.message}`),
-  );
+    onError: (error) => logWarn(`Codex account fold skipped: ${error.message}`),
+  });
 }
 
 async function upsert(tokens, options = {}) {
@@ -401,8 +401,8 @@ async function upsert(tokens, options = {}) {
       merged.id = saveId;
       saveAcct(merged);
       persistCodexIndexEntry(merged);
-      collapseDuplicateCodexAccounts();
-      return loadAcct(saveId) || merged;
+      const folded = collapseDuplicateCodexAccounts();
+      return folded ? (loadAcct(saveId) || merged) : merged;
     });
 
     return { account, mismatch, targetAccountId, updated };

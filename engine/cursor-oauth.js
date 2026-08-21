@@ -1,4 +1,3 @@
-const fs = require("node:fs");
 const crypto = require("node:crypto");
 const { b64url, codeChallenge } = require("./crypto-utils");
 const {
@@ -8,7 +7,7 @@ const {
   CURSOR_OAUTH_PENDING_PATH,
 } = require("./config");
 const { protectData, unprotectData, ensureDir } = require("./storage");
-const { writeJsonAtomic, readJsonWithRetry } = require("./atomic-file");
+const { writeJsonAtomic, readJsonWithBackup, unlinkIfPresent } = require("./atomic-file");
 const { getCursorRuntime } = require("./cursor-runtime");
 const { upsertCursorAccount } = require("./cursor-local");
 const { loadCursorAcct, saveCursorAcct, upsertCursorIndex } = require("./cursor-storage");
@@ -63,14 +62,13 @@ function persistPending(pending) {
 }
 
 function clearPendingFile() {
-  try { fs.unlinkSync(CURSOR_OAUTH_PENDING_PATH); } catch {}
-  try { fs.unlinkSync(`${CURSOR_OAUTH_PENDING_PATH}.bak`); } catch {}
+  try { unlinkIfPresent(CURSOR_OAUTH_PENDING_PATH); } catch {}
+  try { unlinkIfPresent(`${CURSOR_OAUTH_PENDING_PATH}.bak`); } catch {}
 }
 
 function loadPending() {
-  if (!fs.existsSync(CURSOR_OAUTH_PENDING_PATH)) return null;
   try {
-    const envelope = readJsonWithRetry(CURSOR_OAUTH_PENDING_PATH);
+    const envelope = readJsonWithBackup(CURSOR_OAUTH_PENDING_PATH);
     const pending = JSON.parse(unprotectData(envelope.protected_payload));
     if (!pending.expiresAt || pending.expiresAt <= Date.now()) {
       clearPendingFile();
@@ -78,7 +76,8 @@ function loadPending() {
       return null;
     }
     return pending;
-  } catch {
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.transientIoError) return null;
     clearPendingFile();
     return null;
   }

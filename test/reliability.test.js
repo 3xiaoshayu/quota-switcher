@@ -100,6 +100,19 @@ function countDecrypts(engine) {
   };
 }
 
+function stubTornJsonReads(t, filePath, tornReads = 2) {
+  const originalRead = fs.readFileSync;
+  let remaining = tornReads;
+  fs.readFileSync = (target, encoding) => {
+    if (path.resolve(String(target)) === path.resolve(filePath) && remaining > 0) {
+      remaining -= 1;
+      return encoding === undefined ? Buffer.from("{") : "{";
+    }
+    return originalRead(target, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+}
+
 test("aligned auth inspect decrypts only the current account", async (t) => {
   const { engine } = freshEngine(t);
   const first = await addAccount(engine, "first-aligned@example.com", "acct-first-aligned", "first-aligned");
@@ -160,6 +173,52 @@ test("conflict auth inspect still matches a legacy record without plaintext acco
   assert.ok(decrypts.count >= 2);
 });
 
+test("conflict auth inspect matches a listed email without decrypting the rest of the vault", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await addAccount(engine, "first-email-conflict@example.com", "acct-first-email-conflict", "first-email-conflict");
+  const second = await addAccount(engine, "second-email-conflict@example.com", "acct-second-email-conflict", "second-email-conflict");
+  await addAccount(engine, "spare-email-conflict@example.com", "acct-spare-email-conflict", "spare-email-conflict");
+  const index = engine.loadIdx();
+  index.current_account_id = first.id;
+  engine.saveIdx(index);
+  engine.writeAuthJson(first);
+  engine.writeProjection(first, engine.writeAuthJson(first));
+  const filePath = engine.accountFilePath(second.id);
+  const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  delete raw.account_id;
+  fs.writeFileSync(filePath, JSON.stringify(raw), "utf8");
+  const secondAuth = require("../engine/switch").buildAuthJson(engine.loadAcct(second.id));
+  const config = require("../engine/config");
+  fs.writeFileSync(path.join(config.CODEX_DIR, "auth.json"), JSON.stringify(secondAuth), "utf8");
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const conflict = engine.inspectAuthState({ migrateProjection: false });
+  assert.equal(conflict.status, "conflict");
+  assert.equal(conflict.matchedAccountId, second.id);
+  // Current account plus a vault-wide decrypt used to be 4.
+  assert.equal(decrypts.count, 1);
+});
+
+test("conflict auth inspect still prefers account id when two records share an email", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await addAccount(engine, "shared-conflict@example.com", "acct-shared-conflict-one", "shared-conflict-one");
+  const second = await addAccount(engine, "shared-conflict@example.com", "acct-shared-conflict-two", "shared-conflict-two");
+  const index = engine.loadIdx();
+  index.current_account_id = first.id;
+  engine.saveIdx(index);
+  engine.writeAuthJson(first);
+  engine.writeProjection(first, engine.writeAuthJson(first));
+  const secondAuth = require("../engine/switch").buildAuthJson(second);
+  const config = require("../engine/config");
+  fs.writeFileSync(path.join(config.CODEX_DIR, "auth.json"), JSON.stringify(secondAuth), "utf8");
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const conflict = engine.inspectAuthState({ migrateProjection: false });
+  assert.equal(conflict.status, "conflict");
+  assert.equal(conflict.matchedAccountId, second.id);
+  assert.equal(decrypts.count, 1);
+});
+
 test("auth inspect retries a transient official auth.json lock", async (t) => {
   const { engine } = freshEngine(t);
   const current = await addAccount(engine, "auth-retry@example.com", "acct-auth-retry", "auth-retry");
@@ -184,6 +243,32 @@ test("auth inspect retries a transient official auth.json lock", async (t) => {
   t.after(() => { fs.readFileSync = originalRead; });
   assert.equal(engine.inspectAuthState({ migrateProjection: false }).status, "aligned");
   assert.equal(failures, 2);
+});
+
+test("auth inspect does not treat a locked official auth.json as missing", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "auth-locked@example.com", "acct-auth-locked", "auth-locked");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const config = require("../engine/config");
+  const authPath = path.join(config.CODEX_DIR, "auth.json");
+  const originalRead = fs.readFileSync;
+  fs.readFileSync = (file, encoding) => {
+    if (path.resolve(String(file)) === path.resolve(authPath)) {
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+  assert.throws(
+    () => engine.inspectAuthState({ migrateProjection: false }),
+    (error) => error.code === "EPERM" && error.transientIoError === true,
+  );
 });
 
 test("background auth inspect cancels work that never acquired the lock", async () => {
@@ -275,6 +360,43 @@ test("quota refreshAll reports in-memory bans without a second decrypt", async (
   assert.equal(failed.reason, "account_banned");
   assert.equal(okRow.error, undefined);
   assert.equal(decrypts.count, 2);
+});
+
+test("quota refreshAll skips persisted reauth accounts without leftover access", async (t) => {
+  const { engine } = freshEngine(t);
+  const reauth = await addAccount(engine, "batch-reauth@example.com", "acct-batch-reauth", "batch-reauth");
+  reauth.requires_reauth = true;
+  reauth.tokens.access_token = "";
+  engine.saveAcct(reauth);
+  const live = await addAccount(engine, "batch-live@example.com", "acct-batch-live", "batch-live");
+  engine.refreshQuota = async (account) => account.quota || {};
+  engine.probeUsageOnly = async () => {
+    throw new Error("should not probe a leftover-less reauth account");
+  };
+  const handlers = new Map();
+  delete require.cache[require.resolve("../src/main/ipc-handlers")];
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.3", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const listedReauth = engine.listAccts({ secrets: false }).find((item) => item.id === reauth.id);
+  assert.equal(listedReauth.requires_reauth, true);
+  assert.equal(listedReauth.has_access, false);
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const result = await handlers.get("quota:refreshAll")({});
+  assert.equal(result.success, true);
+  const skipped = result.data.find((item) => item.id === reauth.id);
+  const okRow = result.data.find((item) => item.id === live.id);
+  assert.equal(skipped.skipped, true);
+  assert.equal(skipped.reason, "reauthorization_required");
+  assert.equal(okRow.error, undefined);
+  assert.equal(decrypts.count, 1);
 });
 
 test("concurrent Codex upserts of the same identity keep one account", async (t) => {
@@ -1008,6 +1130,44 @@ test("quota IPC skips banned accounts that have no leftover access token", async
   assert.equal(quotaRefreshCount, 0);
 });
 
+test("a missing Codex account file does not restore a leftover backup", async (t) => {
+  const { engine } = freshEngine(t);
+  const kept = await addAccount(engine, "acct-keep@example.com", "acct-keep", "keep");
+  const gone = await addAccount(engine, "acct-gone@example.com", "acct-gone", "gone");
+  kept.last_used += 1;
+  gone.last_used += 1;
+  engine.saveAcct(kept);
+  engine.saveAcct(gone);
+  const gonePath = engine.accountFilePath(gone.id);
+  const keptPath = engine.accountFilePath(kept.id);
+  assert.equal(fs.existsSync(`${gonePath}.bak`), true);
+  fs.unlinkSync(gonePath);
+  assert.equal(engine.loadAcct(gone.id), null);
+  assert.equal(fs.existsSync(gonePath), false, "a leftover backup must not resurrect a deleted account file");
+
+  fs.writeFileSync(`${keptPath}.bak`, fs.readFileSync(keptPath, "utf8"), "utf8");
+  fs.writeFileSync(keptPath, "{broken", "utf8");
+  assert.equal(engine.loadAcct(kept.id).email, "acct-keep@example.com");
+
+  const index = engine.loadIdx();
+  index.current_account_id = kept.id;
+  engine.saveIdx(index);
+  engine.writeAuthJson(kept);
+  engine.writeProjection(kept, engine.writeAuthJson(kept));
+  let running = false;
+  engine.setSwitchRuntimeForTests({
+    assertInstalled() {},
+    listProcesses: () => running ? [{ name: "Codex.exe", pid: 99 }] : [],
+    gracefulClose: () => { running = false; return true; },
+    forceClose: () => { running = false; return true; },
+    launch: () => { running = true; },
+    sleep() {},
+  });
+  await engine.doSwitch(engine.loadAcct(kept.id));
+  assert.equal(engine.loadIdx().current_account_id, kept.id);
+  assert.equal(engine.inspectAuthState({ migrateProjection: false }).status, "aligned");
+});
+
 test("storage restores valid backups and preserves DPAPI failures", async t => {
   const { engine, codec } = freshEngine(t);
   const account = await addAccount(engine, "alpha@example.com", "acct-alpha", "alpha");
@@ -1085,6 +1245,34 @@ test("account file access rejects unsafe ids and delete rolls back on index fail
   assert.equal(engine.deleteAcct(second.id), true);
   assert.equal(fs.existsSync(secondPath), false);
   assert.equal(engine.loadIdx().accounts.some(item => item.id === second.id), false);
+});
+
+test("deleting an account retries when the account file is transiently locked", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "delete-keep@example.com", "acct-delete-keep", "delete-keep");
+  const spare = await addAccount(engine, "delete-lock@example.com", "acct-delete-lock", "delete-lock");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const sparePath = engine.accountFilePath(spare.id);
+  const originalUnlink = fs.unlinkSync;
+  let failures = 0;
+  fs.unlinkSync = (target) => {
+    if (path.resolve(String(target)) === path.resolve(sparePath) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalUnlink(target);
+  };
+  t.after(() => { fs.unlinkSync = originalUnlink; });
+
+  assert.equal(engine.deleteAcct(spare.id), true);
+  assert.equal(failures, 2);
+  assert.equal(fs.existsSync(sparePath), false);
+  assert.equal(engine.loadIdx().current_account_id, current.id);
+  assert.equal(engine.loadAcct(current.id).email, "delete-keep@example.com");
 });
 
 test("auth state detects drift, migrates legacy projections, and adopts official login", async t => {
@@ -1563,6 +1751,16 @@ test("auto-switch treats a banned current account as must-leave and skips banned
   assert.equal(switchedTo, candidate.id);
   assert.ok(!refreshedIds.includes(current.id));
   assert.ok(!refreshedIds.includes(bannedCandidate.id));
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+  assert.ok(decrypts.count < 6);
 });
 
 test("auto-switch treats a reauth current account as must-leave", async t => {
@@ -1866,6 +2064,33 @@ test("daemon pauses before network work when official authentication conflicts",
   assert.deepEqual(result.tokenRefreshes, []);
 });
 
+test("the daemon does not pause as an auth conflict when official auth.json stays locked", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "daemon-auth-lock@example.com", "acct-daemon-auth-lock", "daemon-auth-lock");
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(account);
+  engine.writeProjection(account, auth);
+  const config = require("../engine/config");
+  const authPath = path.join(config.CODEX_DIR, "auth.json");
+  const originalRead = fs.readFileSync;
+  fs.readFileSync = (file, encoding) => {
+    if (path.resolve(String(file)) === path.resolve(authPath)) {
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.pausedReason, null);
+  assert.equal(result.failures.some((item) => item.stage === "auth_inspect"), true);
+  assert.equal(result.accountsUpdated, 0);
+  assert.deepEqual(result.tokenRefreshes, []);
+});
+
 test("daemon restart during in-flight work schedules an immediate replacement run", async t => {
   const handlers = new Map();
   const electron = {
@@ -2124,6 +2349,25 @@ test("switch transaction commits on success and restores state when launch fails
   assert.equal(engine.inspectAuthState().status, "aligned");
 });
 
+test("Codex switch still clears api_base_url when existsSync reports config.toml missing", (t) => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  engine.ensureDir(config.CODEX_DIR);
+  const configPath = path.join(config.CODEX_DIR, "config.toml");
+  fs.writeFileSync(configPath, 'model = "gpt-5"\napi_base_url = "http://127.0.0.1:8080/v1"\nopenai_base_url = "http://127.0.0.1:8080/v1"\n');
+  const originalExists = fs.existsSync;
+  fs.existsSync = (target) => {
+    if (path.resolve(String(target)) === path.resolve(configPath)) return false;
+    return originalExists(target);
+  };
+  t.after(() => { fs.existsSync = originalExists; });
+  assert.equal(engine.clearApiBaseUrl(), true);
+  const text = fs.readFileSync(configPath, "utf8");
+  assert.equal(text.includes("api_base_url"), false);
+  assert.equal(text.includes("openai_base_url"), false);
+  assert.match(text, /model = "gpt-5"/);
+});
+
 test("Codex switch rolls back to official files captured after kill", async (t) => {
   const { engine } = freshEngine(t);
   const current = await addAccount(engine, "pre-kill@example.com", "acct-pre-kill", "pre-kill");
@@ -2153,6 +2397,52 @@ test("Codex switch rolls back to official files captured after kill", async (t) 
     sleep: async () => {},
   });
   await assert.rejects(() => engine.doSwitch(target), /launch failed/);
+  assert.equal(fs.readFileSync(authPath, "utf8"), flushed);
+  assert.equal(engine.loadIdx().current_account_id, current.id);
+});
+
+test("Codex switch rollback retries when restoring a locked official file", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "rollback-lock@example.com", "acct-rollback-lock", "rollback-lock");
+  const target = await addAccount(engine, "rollback-lock-target@example.com", "acct-rollback-lock-target", "rollback-lock-target");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const config = require("../engine/config");
+  const authPath = path.join(config.CODEX_DIR, "auth.json");
+  const flushed = JSON.stringify({ tokens: { access_token: "flushed-for-rollback-lock", id_token: "", refresh_token: "" } });
+  let living = [{ name: "Codex.exe", pid: 2147483646 }];
+  engine.setSwitchRuntimeForTests({
+    assertInstalled() {},
+    listProcesses: async () => living,
+    gracefulClose: async () => {
+      fs.writeFileSync(authPath, flushed, "utf8");
+      living = [];
+      return true;
+    },
+    forceClose: async () => {
+      living = [];
+      return true;
+    },
+    launch: () => { throw new Error("launch failed"); },
+    sleep: async () => {},
+  });
+  const originalWrite = fs.writeFileSync;
+  let failures = 0;
+  fs.writeFileSync = (target, ...rest) => {
+    if (path.resolve(String(target)) === path.resolve(`${authPath}.rollback.tmp`) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalWrite(target, ...rest);
+  };
+  t.after(() => { fs.writeFileSync = originalWrite; });
+  await assert.rejects(() => engine.doSwitch(target), /launch failed/);
+  assert.equal(failures, 2);
   assert.equal(fs.readFileSync(authPath, "utf8"), flushed);
   assert.equal(engine.loadIdx().current_account_id, current.id);
 });
@@ -2458,6 +2748,127 @@ test("OAuth pending state is encrypted, recoverable, cancellable, and target mis
   assert.equal(restoredEngine.cancelOAuth(), true);
 });
 
+test("pending OAuth still restores when existsSync reports the file missing", async (t) => {
+  const { engine, codec } = freshEngine(t);
+  const pendingPromise = engine.oauthLoginFlow({ openBrowser: false });
+  const pendingPath = require("../engine/oauth").PENDING_PATH;
+  const envelope = fs.readFileSync(pendingPath, "utf8");
+  engine.cancelOAuth();
+  await assert.rejects(pendingPromise, /cancelled/);
+
+  fs.writeFileSync(pendingPath, envelope, "utf8");
+  const originalExists = fs.existsSync;
+  fs.existsSync = (target) => {
+    if (path.resolve(String(target)) === path.resolve(pendingPath)) return false;
+    return originalExists(target);
+  };
+  t.after(() => { fs.existsSync = originalExists; });
+  clearEngineModules();
+  const restoredEngine = require("../engine");
+  restoredEngine.setSecretCodec(codec);
+  assert.equal(restoredEngine.restorePendingOAuth(), true);
+  assert.equal(restoredEngine.getOAuthStatus().pending, true);
+  assert.equal(originalExists(pendingPath), true, "a locked pending file must not be cleared");
+  assert.equal(restoredEngine.cancelOAuth(), true);
+});
+
+test("pending OAuth still restores when the first JSON parse sees a torn write", async (t) => {
+  const { engine, codec } = freshEngine(t);
+  const pendingPromise = engine.oauthLoginFlow({ openBrowser: false });
+  const pendingPath = require("../engine/oauth").PENDING_PATH;
+  const envelope = fs.readFileSync(pendingPath, "utf8");
+  engine.cancelOAuth();
+  await assert.rejects(pendingPromise, /cancelled/);
+
+  fs.writeFileSync(pendingPath, envelope, "utf8");
+  stubTornJsonReads(t, pendingPath);
+  clearEngineModules();
+  const restoredEngine = require("../engine");
+  restoredEngine.setSecretCodec(codec);
+  assert.equal(restoredEngine.restorePendingOAuth(), true);
+  assert.equal(restoredEngine.getOAuthStatus().pending, true);
+  assert.equal(fs.existsSync(pendingPath), true, "a briefly torn pending file must not be cleared");
+  assert.equal(restoredEngine.cancelOAuth(), true);
+});
+
+test("pending OAuth still restores from backup after persistent corruption", async (t) => {
+  const { engine, codec } = freshEngine(t);
+  const pendingPromise = engine.oauthLoginFlow({ openBrowser: false });
+  const pendingPath = require("../engine/oauth").PENDING_PATH;
+  const envelope = fs.readFileSync(pendingPath, "utf8");
+  engine.cancelOAuth();
+  await assert.rejects(pendingPromise, /cancelled/);
+
+  fs.writeFileSync(`${pendingPath}.bak`, envelope, "utf8");
+  fs.writeFileSync(pendingPath, "{ corrupted", "utf8");
+  clearEngineModules();
+  const restoredEngine = require("../engine");
+  restoredEngine.setSecretCodec(codec);
+  assert.equal(restoredEngine.restorePendingOAuth(), true);
+  try {
+    assert.equal(restoredEngine.getOAuthStatus().pending, true);
+    assert.equal(JSON.parse(fs.readFileSync(pendingPath, "utf8")).protected_payload.length > 0, true);
+  } finally {
+    assert.equal(restoredEngine.cancelOAuth(), true);
+  }
+});
+
+test("pending OAuth does not resurrect a leftover backup after the pending file is gone", async (t) => {
+  const { engine, codec } = freshEngine(t);
+  const pendingPromise = engine.oauthLoginFlow({ openBrowser: false });
+  const pendingPath = require("../engine/oauth").PENDING_PATH;
+  const envelope = fs.readFileSync(pendingPath, "utf8");
+  engine.cancelOAuth();
+  await assert.rejects(pendingPromise, /cancelled/);
+
+  fs.writeFileSync(`${pendingPath}.bak`, envelope, "utf8");
+  clearEngineModules();
+  const restoredEngine = require("../engine");
+  restoredEngine.setSecretCodec(codec);
+  assert.equal(restoredEngine.restorePendingOAuth(), false);
+  assert.equal(restoredEngine.getOAuthStatus().pending, false);
+  assert.equal(fs.existsSync(pendingPath), false);
+});
+
+test("pending OAuth still fails when both the pending file and its backup are corrupt", async (t) => {
+  const { engine, codec } = freshEngine(t);
+  const pendingPromise = engine.oauthLoginFlow({ openBrowser: false });
+  const pendingPath = require("../engine/oauth").PENDING_PATH;
+  engine.cancelOAuth();
+  await assert.rejects(pendingPromise, /cancelled/);
+
+  fs.writeFileSync(pendingPath, "{ corrupted", "utf8");
+  fs.writeFileSync(`${pendingPath}.bak`, "{ also corrupted", "utf8");
+  clearEngineModules();
+  const restoredEngine = require("../engine");
+  restoredEngine.setSecretCodec(codec);
+  assert.equal(restoredEngine.restorePendingOAuth(), false);
+  assert.equal(restoredEngine.getOAuthStatus().pending, false);
+  assert.equal(fs.existsSync(pendingPath), false, "a persistently corrupt pending file must still be cleared");
+});
+
+test("cancelling OAuth retries when the pending file is transiently locked", async (t) => {
+  const { engine } = freshEngine(t);
+  const pendingPromise = engine.oauthLoginFlow({ openBrowser: false });
+  const pendingPath = require("../engine/oauth").PENDING_PATH;
+  const originalUnlink = fs.unlinkSync;
+  let failures = 0;
+  fs.unlinkSync = (target) => {
+    if (path.resolve(String(target)) === path.resolve(pendingPath) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalUnlink(target);
+  };
+  t.after(() => { fs.unlinkSync = originalUnlink; });
+  assert.equal(engine.cancelOAuth(), true);
+  assert.equal(failures, 2);
+  assert.equal(fs.existsSync(pendingPath), false);
+  await assert.rejects(pendingPromise, /cancelled/);
+});
+
 test("OAuth manual callback waits for completion and honors cancellation", async t => {
   const { engine, codec } = freshEngine(t);
   const pendingPromise = engine.oauthLoginFlow({
@@ -2622,6 +3033,106 @@ test("old log files still expire after a transient stat lock", t => {
   assert.equal(failures, 2);
   assert.equal(fs.existsSync(oldPath), false);
   assert.equal(fs.existsSync(keepPath), true);
+});
+
+test("old log files still expire after a transient directory listing lock", t => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  const logDir = path.join(config.DATA_DIR, "logs");
+  engine.ensureDir(logDir);
+  const oldPath = path.join(logDir, "app-2020-01-01.log");
+  const keepPath = path.join(logDir, "app-2020-01-02.log");
+  fs.writeFileSync(oldPath, "stale-log");
+  fs.writeFileSync(keepPath, "recent-log");
+  const past = (Date.now() - 4 * 24 * 60 * 60 * 1000) / 1000;
+  fs.utimesSync(oldPath, past, past);
+  const originalReaddir = fs.readdirSync;
+  let failures = 0;
+  fs.readdirSync = (dir, options) => {
+    if (path.resolve(String(dir)) === path.resolve(logDir) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalReaddir(dir, options);
+  };
+  t.after(() => { fs.readdirSync = originalReaddir; });
+  const { cleanupLogs } = require("../engine/logger");
+  cleanupLogs();
+  assert.equal(failures, 2);
+  assert.equal(fs.existsSync(oldPath), false);
+  assert.equal(fs.existsSync(keepPath), true);
+});
+
+test("old log files still expire when existsSync reports the log directory missing", t => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  const logDir = path.join(config.DATA_DIR, "logs");
+  engine.ensureDir(logDir);
+  const oldPath = path.join(logDir, "app-2020-01-01.log");
+  const keepPath = path.join(logDir, "app-2020-01-02.log");
+  fs.writeFileSync(oldPath, "stale-log");
+  fs.writeFileSync(keepPath, "recent-log");
+  const past = (Date.now() - 4 * 24 * 60 * 60 * 1000) / 1000;
+  fs.utimesSync(oldPath, past, past);
+  const originalExists = fs.existsSync;
+  fs.existsSync = (file) => {
+    if (path.resolve(String(file)) === path.resolve(logDir)) return false;
+    return originalExists(file);
+  };
+  t.after(() => { fs.existsSync = originalExists; });
+  const { cleanupLogs } = require("../engine/logger");
+  cleanupLogs();
+  fs.existsSync = originalExists;
+  assert.equal(fs.existsSync(oldPath), false);
+  assert.equal(fs.existsSync(keepPath), true);
+});
+
+test("app logs still start when creating the log directory is transiently locked", (t) => {
+  freshEngine(t);
+  const config = require("../engine/config");
+  const logDir = path.join(config.DATA_DIR, "logs");
+  const originalMkdir = fs.mkdirSync;
+  let failures = 0;
+  fs.mkdirSync = (dir, options) => {
+    if (path.resolve(String(dir)) === path.resolve(logDir) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalMkdir(dir, options);
+  };
+  t.after(() => { fs.mkdirSync = originalMkdir; });
+  const { logInfo, getLogDir } = require("../engine/logger");
+  logInfo("mkdir-retry-ok");
+  assert.equal(failures, 2);
+  assert.equal(path.resolve(getLogDir()), path.resolve(logDir));
+  const files = fs.readdirSync(logDir).filter((name) => name.startsWith("app-"));
+  assert.ok(files.some((name) => fs.readFileSync(path.join(logDir, name), "utf8").includes("mkdir-retry-ok")));
+});
+
+test("app logs still write after a transient append lock", (t) => {
+  freshEngine(t);
+  const { logInfo, getLogDir } = require("../engine/logger");
+  const logDir = getLogDir();
+  const originalAppend = fs.appendFileSync;
+  let failures = 0;
+  fs.appendFileSync = (file, ...rest) => {
+    if (path.dirname(path.resolve(String(file))) === path.resolve(logDir) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalAppend(file, ...rest);
+  };
+  t.after(() => { fs.appendFileSync = originalAppend; });
+  logInfo("append-retry-ok");
+  assert.equal(failures, 2);
+  const files = fs.readdirSync(logDir).filter((name) => name.startsWith("app-"));
+  assert.ok(files.some((name) => fs.readFileSync(path.join(logDir, name), "utf8").includes("append-retry-ok")));
 });
 
 test("auto-switch config normalization clamps user-edited values", t => {
@@ -2882,6 +3393,50 @@ test("file captures retry when the source is transiently locked", t => {
   assert.throws(() => captureFile(target), /ENOSPC/);
 });
 
+test("file captures still snapshot when existsSync reports the source missing", (t) => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  const { captureFile } = require("../engine/atomic-file");
+  const target = path.join(config.DATA_DIR, "capture-exists-lie.bin");
+  engine.ensureDir(config.DATA_DIR);
+  fs.writeFileSync(target, "snapshot-bytes");
+  const originalExists = fs.existsSync;
+  fs.existsSync = (file) => {
+    if (path.resolve(String(file)) === path.resolve(target)) return false;
+    return originalExists(file);
+  };
+  t.after(() => { fs.existsSync = originalExists; });
+  assert.equal(captureFile(target).toString("utf8"), "snapshot-bytes");
+});
+
+test("pathExists retries transient stat locks and ignores existsSync", (t) => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  const { pathExists } = require("../engine/atomic-file");
+  const target = path.join(config.DATA_DIR, "path-exists-retry.bin");
+  engine.ensureDir(config.DATA_DIR);
+  fs.writeFileSync(target, "present");
+  const originalExists = fs.existsSync;
+  const originalStat = fs.statSync;
+  let failures = 0;
+  fs.existsSync = () => false;
+  fs.statSync = (file, ...args) => {
+    if (path.resolve(String(file)) === path.resolve(target) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalStat(file, ...args);
+  };
+  t.after(() => {
+    fs.existsSync = originalExists;
+    fs.statSync = originalStat;
+  });
+  assert.equal(pathExists(target), true);
+  assert.equal(failures, 2);
+});
+
 test("Cursor account index retries a transient lock instead of rebuilding", async (t) => {
   const { engine } = freshEngine(t);
   const created = await engine.upsertCursorAccount({
@@ -2961,6 +3516,39 @@ test("network proxy state retries a transient lock instead of dropping lastGood"
   assert.equal(failures, 2);
 });
 
+test("network proxy state still loads lastGood when the first JSON parse is torn", (t) => {
+  const { engine } = freshEngine(t);
+  const { loadNetworkState, NETWORK_FILE } = require("../engine/proxy-resolve");
+  engine.ensureDir(path.dirname(NETWORK_FILE));
+  fs.writeFileSync(NETWORK_FILE, JSON.stringify({ lastGood: { source: "env", proxyUrl: "http://127.0.0.1:7890" } }), "utf8");
+  stubTornJsonReads(t, NETWORK_FILE);
+  const state = loadNetworkState();
+  assert.equal(state.lastGood.proxyUrl, "http://127.0.0.1:7890");
+});
+
+test("network proxy state restores lastGood from backup after persistent corruption", (t) => {
+  const { engine } = freshEngine(t);
+  const { loadNetworkState, NETWORK_FILE } = require("../engine/proxy-resolve");
+  engine.ensureDir(path.dirname(NETWORK_FILE));
+  const good = { lastGood: { source: "env", proxyUrl: "http://127.0.0.1:7890" } };
+  fs.writeFileSync(`${NETWORK_FILE}.bak`, JSON.stringify(good), "utf8");
+  fs.writeFileSync(NETWORK_FILE, "{ corrupted", "utf8");
+  const state = loadNetworkState();
+  assert.equal(state.lastGood.proxyUrl, "http://127.0.0.1:7890");
+  assert.equal(JSON.parse(fs.readFileSync(NETWORK_FILE, "utf8")).lastGood.proxyUrl, "http://127.0.0.1:7890");
+});
+
+test("network proxy state ignores a stale backup when the file is missing", (t) => {
+  const { engine } = freshEngine(t);
+  const { loadNetworkState, NETWORK_FILE } = require("../engine/proxy-resolve");
+  engine.ensureDir(path.dirname(NETWORK_FILE));
+  fs.writeFileSync(`${NETWORK_FILE}.bak`, JSON.stringify({
+    lastGood: { source: "env", proxyUrl: "http://127.0.0.1:1" },
+  }), "utf8");
+  const state = loadNetworkState();
+  assert.equal(state.lastGood, undefined);
+});
+
 test("Cursor http.proxy survives a transient settings lock", async (t) => {
   const { engine } = freshEngine(t);
   const previousAppdata = process.env.APPDATA;
@@ -2996,6 +3584,54 @@ test("Cursor http.proxy survives a transient settings lock", async (t) => {
   assert.equal(failures, 2);
 });
 
+test("Cursor http.proxy still loads when the first JSON parse sees a torn write", async (t) => {
+  const { engine } = freshEngine(t);
+  const previousAppdata = process.env.APPDATA;
+  const config = require("../engine/config");
+  const appdata = path.join(config.DATA_DIR, "appdata-cursor-proxy-torn");
+  const settingsDir = path.join(appdata, "Cursor", "User");
+  engine.ensureDir(settingsDir);
+  const settingsPath = path.join(settingsDir, "settings.json");
+  fs.writeFileSync(settingsPath, JSON.stringify({ "http.proxy": "http://127.0.0.1:7890" }), "utf8");
+  process.env.APPDATA = appdata;
+  t.after(() => {
+    process.env.APPDATA = previousAppdata;
+  });
+  stubTornJsonReads(t, settingsPath);
+  const { collectCandidates } = require("../engine/proxy-resolve");
+  const found = await collectCandidates("https://chatgpt.com/", {
+    windows: { enabled: false, server: "" },
+    extraPorts: [],
+    pacRule: "",
+  });
+  assert.ok(found.some((item) => item.source === "cursor" && item.proxyUrl === "http://127.0.0.1:7890"));
+});
+
+test("Cursor http.proxy still reads JSONC settings after parse retries", async (t) => {
+  const { engine } = freshEngine(t);
+  const previousAppdata = process.env.APPDATA;
+  const config = require("../engine/config");
+  const appdata = path.join(config.DATA_DIR, "appdata-cursor-proxy-jsonc");
+  const settingsDir = path.join(appdata, "Cursor", "User");
+  engine.ensureDir(settingsDir);
+  const settingsPath = path.join(settingsDir, "settings.json");
+  fs.writeFileSync(settingsPath, `{
+  // Cursor JSONC
+  "http.proxy": "http://127.0.0.1:7890",
+}`, "utf8");
+  process.env.APPDATA = appdata;
+  t.after(() => {
+    process.env.APPDATA = previousAppdata;
+  });
+  const { collectCandidates } = require("../engine/proxy-resolve");
+  const found = await collectCandidates("https://chatgpt.com/", {
+    windows: { enabled: false, server: "" },
+    extraPorts: [],
+    pacRule: "",
+  });
+  assert.ok(found.some((item) => item.source === "cursor" && item.proxyUrl === "http://127.0.0.1:7890"));
+});
+
 test("atomic writes retry when the target file is transiently locked", t => {
   const { engine } = freshEngine(t);
   const config = require("../engine/config");
@@ -3026,6 +3662,223 @@ test("atomic writes retry when the target file is transiently locked", t => {
     throw error;
   };
   assert.throws(() => writeTextAtomic(target, "should fail"), /ENOSPC/);
+});
+
+test("atomic writes retry when creating the parent directory is transiently locked", (t) => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  const { writeTextAtomic } = require("../engine/atomic-file");
+  engine.ensureDir(config.DATA_DIR);
+  const target = path.join(config.DATA_DIR, "mkdir-lock", "target.json");
+  const parent = path.dirname(target);
+  const originalMkdir = fs.mkdirSync;
+  let failures = 0;
+  fs.mkdirSync = (dir, options) => {
+    if (path.resolve(String(dir)) === path.resolve(parent) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalMkdir(dir, options);
+  };
+  t.after(() => { fs.mkdirSync = originalMkdir; });
+  writeTextAtomic(target, "mkdir-retried");
+  assert.equal(failures, 2);
+  assert.equal(fs.readFileSync(target, "utf8"), "mkdir-retried");
+});
+
+test("atomic writes retry when opening the temp file is transiently locked", (t) => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  const { writeTextAtomic } = require("../engine/atomic-file");
+  const target = path.join(config.DATA_DIR, "open-retry-target.json");
+  engine.ensureDir(config.DATA_DIR);
+  const originalOpen = fs.openSync;
+  let failures = 0;
+  fs.openSync = (file, flags, ...rest) => {
+    if (String(file).includes(`${path.basename(target)}.tmp.`) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalOpen(file, flags, ...rest);
+  };
+  t.after(() => { fs.openSync = originalOpen; });
+  writeTextAtomic(target, "open-retried");
+  assert.equal(failures, 2);
+  assert.equal(fs.readFileSync(target, "utf8"), "open-retried");
+});
+
+test("atomic writes retry when closing the temp file is transiently locked", (t) => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  const { writeTextAtomic } = require("../engine/atomic-file");
+  const target = path.join(config.DATA_DIR, "close-retry-target.json");
+  engine.ensureDir(config.DATA_DIR);
+  const originalOpen = fs.openSync;
+  const originalClose = fs.closeSync;
+  let tempFd = null;
+  let failures = 0;
+  fs.openSync = (file, flags, ...rest) => {
+    const fd = originalOpen(file, flags, ...rest);
+    if (String(file).includes(`${path.basename(target)}.tmp.`)) tempFd = fd;
+    return fd;
+  };
+  fs.closeSync = (fd) => {
+    if (fd === tempFd && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalClose(fd);
+  };
+  t.after(() => {
+    fs.openSync = originalOpen;
+    fs.closeSync = originalClose;
+  });
+  writeTextAtomic(target, "close-retried");
+  assert.equal(failures, 2);
+  assert.equal(fs.readFileSync(target, "utf8"), "close-retried");
+});
+
+test("Codex auth.json still writes when creating the Codex home is transiently locked", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "mkdir-auth@example.com", "acct-mkdir-auth", "mkdir-auth");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const config = require("../engine/config");
+  const originalMkdir = fs.mkdirSync;
+  let failures = 0;
+  fs.mkdirSync = (dir, options) => {
+    if (path.resolve(String(dir)) === path.resolve(config.CODEX_DIR) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalMkdir(dir, options);
+  };
+  t.after(() => { fs.mkdirSync = originalMkdir; });
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  assert.equal(failures, 2);
+  assert.equal(engine.inspectAuthState({ migrateProjection: false }).status, "aligned");
+});
+
+test("a Codex account still saves quota when creating the accounts directory is transiently locked", async (t) => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "mkdir-acct@example.com", "acct-mkdir-acct", "mkdir-acct");
+  const config = require("../engine/config");
+  const originalMkdir = fs.mkdirSync;
+  let failures = 0;
+  fs.mkdirSync = (dir, options) => {
+    if (path.resolve(String(dir)) === path.resolve(config.ACCTS_DIR) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalMkdir(dir, options);
+  };
+  t.after(() => { fs.mkdirSync = originalMkdir; });
+  account.quota = {
+    hourly_remaining_percentage: null,
+    hourly_window_present: false,
+    weekly_remaining_percentage: 70,
+    weekly_window_present: true,
+  };
+  engine.saveAcct(account);
+  assert.equal(failures, 2);
+  assert.equal(engine.loadAcct(account.id).quota.weekly_remaining_percentage, 70);
+});
+
+test("atomic write cleanup retries a locked temp file instead of leaving it behind", (t) => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  const { writeTextAtomic } = require("../engine/atomic-file");
+  const target = path.join(config.DATA_DIR, "cleanup-target.json");
+  engine.ensureDir(config.DATA_DIR);
+  fs.writeFileSync(target, "keep-me", "utf8");
+
+  const originalRename = fs.renameSync;
+  const originalUnlink = fs.unlinkSync;
+  let unlinkFailures = 0;
+  fs.renameSync = (from, to) => {
+    if (path.resolve(to) === path.resolve(target)) {
+      const error = new Error("ENOSPC: no space");
+      error.code = "ENOSPC";
+      throw error;
+    }
+    return originalRename(from, to);
+  };
+  fs.unlinkSync = (file) => {
+    if (String(file).includes(`${path.basename(target)}.tmp.`) && unlinkFailures < 2) {
+      unlinkFailures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalUnlink(file);
+  };
+  t.after(() => {
+    fs.renameSync = originalRename;
+    fs.unlinkSync = originalUnlink;
+  });
+
+  assert.throws(() => writeTextAtomic(target, "should fail"), (error) => error.code === "ENOSPC");
+  assert.equal(unlinkFailures, 2);
+  const leftover = fs.readdirSync(config.DATA_DIR).filter((name) => name.includes(".tmp."));
+  assert.deepEqual(leftover, []);
+  assert.equal(fs.readFileSync(target, "utf8"), "keep-me");
+});
+
+test("atomic writes retry when the backup copy is transiently locked", t => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  const { writeTextAtomic } = require("../engine/atomic-file");
+  const target = path.join(config.DATA_DIR, "copy-retry-target.json");
+  engine.ensureDir(config.DATA_DIR);
+  fs.writeFileSync(target, "original");
+
+  const originalCopy = fs.copyFileSync;
+  let failures = 0;
+  fs.copyFileSync = (from, to, ...rest) => {
+    if (path.resolve(from) === path.resolve(target) && String(to).endsWith(".bak") && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalCopy(from, to, ...rest);
+  };
+  t.after(() => { fs.copyFileSync = originalCopy; });
+
+  writeTextAtomic(target, "updated");
+  assert.equal(failures, 2);
+  assert.equal(fs.readFileSync(target, "utf8"), "updated");
+  assert.equal(fs.readFileSync(`${target}.bak`, "utf8"), "original");
+});
+
+test("atomic writes still back up the previous file when existsSync reports it missing", (t) => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  const { writeTextAtomic } = require("../engine/atomic-file");
+  const target = path.join(config.DATA_DIR, "copy-exists-lie.json");
+  engine.ensureDir(config.DATA_DIR);
+  fs.writeFileSync(target, "original");
+  const originalExists = fs.existsSync;
+  fs.existsSync = (file) => {
+    if (path.resolve(String(file)) === path.resolve(target)) return false;
+    return originalExists(file);
+  };
+  t.after(() => { fs.existsSync = originalExists; });
+  writeTextAtomic(target, "updated");
+  assert.equal(fs.readFileSync(target, "utf8"), "updated");
+  assert.equal(fs.readFileSync(`${target}.bak`, "utf8"), "original");
 });
 
 test("auth state reports an official agent identity as unsupported with identity details", async t => {
@@ -3082,6 +3935,232 @@ test("transient read errors do not quarantine account files or drop them from th
   assert.equal(engine.loadAcct(account.id).email, "locked@example.com");
 });
 
+test("a present Codex account still loads when existsSync reports it missing", async (t) => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "exists-lie@example.com", "acct-exists-lie", "exists-lie");
+  const filePath = engine.accountFilePath(account.id);
+  const originalExists = fs.existsSync;
+  fs.existsSync = (target) => {
+    if (path.resolve(String(target)) === path.resolve(filePath)) return false;
+    return originalExists(target);
+  };
+  t.after(() => { fs.existsSync = originalExists; });
+  const loaded = engine.loadAcct(account.id);
+  assert.equal(loaded.email, "exists-lie@example.com");
+  assert.equal(engine.loadIdx().accounts.some((item) => item.id === account.id), true);
+});
+
+test("a locked Codex index is not treated as missing and rebuilt empty", async (t) => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "idx-lock@example.com", "acct-idx-lock", "idx-lock");
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const config = require("../engine/config");
+  const originalExists = fs.existsSync;
+  fs.existsSync = (target) => {
+    if (path.resolve(String(target)) === path.resolve(config.IDX_PATH)) return false;
+    return originalExists(target);
+  };
+  t.after(() => { fs.existsSync = originalExists; });
+  const loaded = engine.loadIdx();
+  assert.equal(loaded.current_account_id, account.id);
+  assert.ok(loaded.accounts.some((item) => item.id === account.id));
+});
+
+test("a Codex index rebuild retries a locked accounts directory", async (t) => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "readdir-lock@example.com", "acct-readdir-lock", "readdir-lock");
+  const config = require("../engine/config");
+  fs.unlinkSync(config.IDX_PATH);
+  try { fs.unlinkSync(`${config.IDX_PATH}.bak`); } catch {}
+  const originalReaddir = fs.readdirSync;
+  let failures = 0;
+  fs.readdirSync = (dir, options) => {
+    if (path.resolve(String(dir)) === path.resolve(config.ACCTS_DIR) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalReaddir(dir, options);
+  };
+  t.after(() => { fs.readdirSync = originalReaddir; });
+  const loaded = engine.loadIdx();
+  assert.equal(failures, 2);
+  assert.ok(loaded.accounts.some((item) => item.id === account.id));
+  assert.equal(engine.loadAcct(account.id).email, "readdir-lock@example.com");
+});
+
+test("a missing Codex index rebuilds from account files instead of a stale backup", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await addAccount(engine, "idx-stale-a@example.com", "acct-idx-stale-a", "idx-stale-a");
+  const second = await addAccount(engine, "idx-stale-b@example.com", "acct-idx-stale-b", "idx-stale-b");
+  const index = engine.loadIdx();
+  index.current_account_id = second.id;
+  engine.saveIdx(index);
+  const config = require("../engine/config");
+  const stale = JSON.parse(fs.readFileSync(config.IDX_PATH, "utf8"));
+  stale.accounts = stale.accounts.filter((item) => item.id === first.id);
+  stale.current_account_id = first.id;
+  fs.writeFileSync(`${config.IDX_PATH}.bak`, JSON.stringify(stale), "utf8");
+  fs.unlinkSync(config.IDX_PATH);
+  const loaded = engine.loadIdx();
+  assert.ok(loaded.accounts.some((item) => item.id === first.id));
+  assert.ok(loaded.accounts.some((item) => item.id === second.id), "a stale index backup must not hide a remaining account file");
+  assert.equal(engine.loadAcct(second.id).email, "idx-stale-b@example.com");
+});
+
+test("a corrupt Codex index still restores from backup", async (t) => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "idx-bak@example.com", "acct-idx-bak", "idx-bak");
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const config = require("../engine/config");
+  fs.writeFileSync(`${config.IDX_PATH}.bak`, fs.readFileSync(config.IDX_PATH, "utf8"), "utf8");
+  fs.writeFileSync(config.IDX_PATH, "{ corrupted", "utf8");
+  const loaded = engine.loadIdx();
+  assert.equal(loaded.current_account_id, account.id);
+  assert.ok(loaded.accounts.some((item) => item.id === account.id));
+  assert.equal(JSON.parse(fs.readFileSync(config.IDX_PATH, "utf8")).current_account_id, account.id);
+});
+
+test("a Codex account still loads when the first JSON parse sees a torn write", async (t) => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "torn-acct@example.com", "acct-torn-acct", "torn-acct");
+  const filePath = engine.accountFilePath(account.id);
+  const staleBackup = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  staleBackup.email = "stale-backup@example.com";
+  fs.writeFileSync(`${filePath}.bak`, JSON.stringify(staleBackup), "utf8");
+  stubTornJsonReads(t, filePath);
+  const loaded = engine.loadAcct(account.id);
+  assert.equal(loaded.email, "torn-acct@example.com");
+  assert.equal(fs.existsSync(filePath), true, "a briefly torn account file must not be quarantined");
+  assert.equal(JSON.parse(fs.readFileSync(`${filePath}.bak`, "utf8")).email, "stale-backup@example.com");
+});
+
+test("a torn Codex index is not rebuilt without the current account", async (t) => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "torn-idx@example.com", "acct-torn-idx", "torn-idx");
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const config = require("../engine/config");
+  const staleIndex = JSON.parse(fs.readFileSync(config.IDX_PATH, "utf8"));
+  staleIndex.current_account_id = null;
+  fs.writeFileSync(`${config.IDX_PATH}.bak`, JSON.stringify(staleIndex), "utf8");
+  stubTornJsonReads(t, config.IDX_PATH);
+  const loaded = engine.loadIdx();
+  assert.equal(loaded.current_account_id, account.id);
+  assert.ok(loaded.accounts.some((item) => item.id === account.id));
+  assert.equal(fs.existsSync(config.IDX_PATH), true, "a briefly torn index must not be quarantined");
+});
+
+test("a torn Codex auth.json is not treated as missing official auth", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "torn-auth@example.com", "acct-torn-auth", "torn-auth");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const config = require("../engine/config");
+  stubTornJsonReads(t, path.join(config.CODEX_DIR, "auth.json"));
+  const state = engine.inspectAuthState({ migrateProjection: false });
+  assert.equal(state.status, "aligned");
+  assert.equal(state.requiresResolution, false);
+});
+
+test("auto-switch does not treat a torn auth.json as a login conflict", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "torn-as-auth@example.com", "acct-torn-as-auth", "torn-as-auth");
+  current.quota = {
+    hourly_remaining_percentage: null,
+    hourly_window_present: false,
+    weekly_remaining_percentage: 80,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = engine.ts();
+  engine.saveAcct(current);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const config = require("../engine/config");
+  stubTornJsonReads(t, path.join(config.CODEX_DIR, "auth.json"));
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+  assert.equal(result.switched, false);
+  assert.equal(result.reason, "quota_sufficient");
+});
+
+test("auto-switch does not treat a locked auth.json as a login conflict", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "lock-as-auth@example.com", "acct-lock-as-auth", "lock-as-auth");
+  current.quota = {
+    hourly_remaining_percentage: null,
+    hourly_window_present: false,
+    weekly_remaining_percentage: 80,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = engine.ts();
+  engine.saveAcct(current);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const config = require("../engine/config");
+  const authPath = path.join(config.CODEX_DIR, "auth.json");
+  const originalRead = fs.readFileSync;
+  fs.readFileSync = (file, encoding) => {
+    if (path.resolve(String(file)) === path.resolve(authPath)) {
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+  assert.equal(result.switched, false);
+  assert.notEqual(result.reason, "auth_conflict");
+  assert.equal(result.reason, "current_quota_refresh_failed");
+  assert.match(String(result.error || ""), /EPERM/);
+});
+
+test("auto-switch config still keeps the primary file when the first JSON parse is torn", (t) => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  engine.ensureDir(config.DATA_DIR);
+  engine.saveAutoSwitchCfg({
+    enabled: true,
+    primary_threshold: 15,
+    secondary_threshold: 25,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+  fs.writeFileSync(`${config.CFG_FILE}.bak`, JSON.stringify({ enabled: false, primary_threshold: 99 }), "utf8");
+  stubTornJsonReads(t, config.CFG_FILE);
+  const cfg = engine.loadAutoSwitchCfg();
+  assert.equal(cfg.enabled, true);
+  assert.equal(cfg.primary_threshold, 15);
+  assert.equal(JSON.parse(fs.readFileSync(config.CFG_FILE, "utf8")).enabled, true);
+});
+
 test("legacy backup recovery keeps the backup usable and migrates without plaintext residue", async t => {
   const { engine, codec } = freshEngine(t);
   const account = await addAccount(engine, "legacy@example.com", "acct-legacy", "legacy");
@@ -3112,6 +4191,37 @@ test("legacy backup recovery keeps the backup usable and migrates without plaint
   assert.ok(backupRaw.tokens_encrypted, "the refreshed backup must be encrypted, not plaintext");
   assert.equal(fs.readFileSync(`${filePath}.bak`, "utf8").includes("legacy-refresh-token"), false);
   assert.equal(codec.decrypt(backupRaw.tokens_encrypted).includes("legacy-refresh-token"), true);
+});
+
+test("legacy account migration retries a transient backup copy lock", async (t) => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "legacy-copy@example.com", "acct-legacy-copy", "legacy-copy");
+  const filePath = engine.accountFilePath(account.id);
+  const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  delete raw.tokens_encrypted;
+  raw.tokens = { ...account.tokens, refresh_token: "plain-copy-token" };
+  fs.writeFileSync(filePath, JSON.stringify(raw));
+
+  const originalCopy = fs.copyFileSync;
+  let failures = 0;
+  fs.copyFileSync = (from, to, ...rest) => {
+    if (path.resolve(from) === path.resolve(filePath) && String(to).endsWith(".bak") && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalCopy(from, to, ...rest);
+  };
+  t.after(() => { fs.copyFileSync = originalCopy; });
+
+  engine.listAccts();
+  await engine.flushPendingAccountRewrites();
+  assert.equal(failures, 2);
+  const backupRaw = JSON.parse(fs.readFileSync(`${filePath}.bak`, "utf8"));
+  assert.ok(backupRaw.tokens_encrypted);
+  assert.equal(fs.readFileSync(`${filePath}.bak`, "utf8").includes("plain-copy-token"), false);
+  assert.equal(engine.loadAcct(account.id).tokens.refresh_token, "plain-copy-token");
 });
 
 test("token refresh posts opt out of retries and cross-stack replays", async t => {
@@ -3202,6 +4312,120 @@ test("the daemon leaves banned current accounts alone", async t => {
   assert.equal(persisted.tokens.refresh_token, account.tokens.refresh_token);
 });
 
+test("the daemon skips ban-probe decrypts for ordinary accounts", async t => {
+  const { engine } = freshEngine(t);
+  const accounts = [];
+  for (const suffix of ["a", "b", "c", "d", "e"]) {
+    accounts.push(await addAccount(
+      engine,
+      `daemon-ordinary-${suffix}@example.com`,
+      `acct-daemon-ordinary-${suffix}`,
+      `daemon-ordinary-${suffix}`,
+    ));
+  }
+  const index = engine.loadIdx();
+  index.current_account_id = null;
+  engine.saveIdx(index);
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.pausedReason, null);
+  assert.equal(engine.listAccts({ secrets: false }).length, 5);
+  assert.equal(result.tokenRefreshes.length, 0);
+  // Unexpired listed tokens skip the token loop without decrypting.
+  // Probing all five would make this 5.
+  assert.equal(decrypts.count, 0);
+});
+
+test("the daemon still decrypts expired tokens that have a refresh token", async t => {
+  const { engine } = freshEngine(t);
+  const expired = await addAccount(engine, "daemon-expired@example.com", "acct-daemon-expired", "daemon-expired");
+  await addAccount(engine, "daemon-fresh-skip@example.com", "acct-daemon-fresh-skip", "daemon-fresh-skip");
+  expired.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+  engine.saveAcct(expired);
+  const index = engine.loadIdx();
+  index.current_account_id = null;
+  engine.saveIdx(index);
+  const tokenModule = require("../engine/token-refresh");
+  const originalRefresh = tokenModule.refreshOneTok;
+  let refreshedId = null;
+  tokenModule.refreshOneTok = async (account, options = {}) => {
+    refreshedId = account.id;
+    return originalRefresh(account, {
+      ...options,
+      httpJson: async () => ({
+        status: 200,
+        body: JSON.stringify({
+          access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
+          refresh_token: account.tokens.refresh_token,
+          id_token: account.tokens.id_token,
+        }),
+      }),
+    });
+  };
+  t.after(() => { tokenModule.refreshOneTok = originalRefresh; });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.pausedReason, null);
+  assert.equal(decrypts.count, 1);
+  assert.equal(refreshedId, expired.id);
+  assert.equal(result.tokenRefreshes.length, 1);
+  assert.equal(result.tokenRefreshes[0].ok, true);
+});
+
+test("the daemon writes the current auth projection without a second decrypt after quota refresh", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "daemon-proj@example.com", "acct-daemon-proj", "daemon-proj");
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(account);
+  engine.writeProjection(account, auth);
+
+  const quotaModule = require("../engine/quota");
+  const originalFetch = quotaModule.fetchQuotaWithTokenRepair;
+  quotaModule.fetchQuotaWithTokenRepair = async () => ({
+    hourly_remaining_percentage: null,
+    hourly_window_present: false,
+    weekly_remaining_percentage: 80,
+    weekly_window_present: true,
+  });
+  t.after(() => { quotaModule.fetchQuotaWithTokenRepair = originalFetch; });
+
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.pausedReason, null);
+  assert.equal(result.failures.length, 0);
+  // inspectAuthState at start, quota-lock load, inspectAuthState after quota.
+  // The token loop used to decrypt the unexpired current account too.
+  assert.equal(decrypts.count, 3);
+  const persisted = engine.loadAcct(account.id);
+  assert.equal(persisted.quota.weekly_remaining_percentage, 80);
+});
+
+test("the daemon skips decrypts for reauth accounts without leftover tokens", async (t) => {
+  const { engine } = freshEngine(t);
+  const reauth = await addAccount(engine, "daemon-reauth-empty@example.com", "acct-daemon-reauth-empty", "daemon-reauth-empty");
+  reauth.requires_reauth = true;
+  reauth.tokens.refresh_token = "";
+  reauth.tokens.access_token = "";
+  engine.saveAcct(reauth);
+  await addAccount(engine, "daemon-live-empty@example.com", "acct-daemon-live-empty", "daemon-live-empty");
+  const index = engine.loadIdx();
+  index.current_account_id = null;
+  engine.saveIdx(index);
+  const listed = engine.listAccts({ secrets: false }).find((item) => item.id === reauth.id);
+  assert.equal(listed.has_refresh, false);
+  assert.equal(listed.has_access, false);
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.pausedReason, null);
+  assert.equal(decrypts.count, 0);
+});
+
 test("the daemon does not treat reauth token skips as worker failures", async t => {
   const { engine } = freshEngine(t);
   const account = await addAccount(engine, "reauth-expired@example.com", "acct-reauth-expired", "reauth-expired");
@@ -3234,6 +4458,65 @@ test("token refreshAll skips banned accounts without counting them as passed", a
   assert.equal(bannedResult.banned, true);
   assert.equal(liveResult.ok, true);
   assert.equal(summary.okCount, 1);
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const again = await engine.refreshAll(false);
+  assert.equal(again.results.find((item) => item.email === banned.email).banned, true);
+  assert.equal(again.okCount, 1);
+  assert.ok(decrypts.count < 3);
+});
+
+test("token refreshAll skips reauth accounts without a refresh token", async (t) => {
+  const { engine } = freshEngine(t);
+  const reauth = await addAccount(engine, "reauth-norefresh@example.com", "acct-reauth-norefresh", "reauth-norefresh");
+  reauth.requires_reauth = true;
+  reauth.tokens.refresh_token = "";
+  engine.saveAcct(reauth);
+  const live = await addAccount(engine, "live-refresh@example.com", "acct-live-refresh", "live-refresh");
+  const listed = engine.listAccts({ secrets: false }).find((item) => item.id === reauth.id);
+  assert.equal(listed.requires_reauth, true);
+  assert.equal(listed.has_refresh, false);
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const summary = await engine.refreshAll(false);
+  assert.equal(summary.results.find((item) => item.email === reauth.email).reauthRequired, true);
+  assert.equal(summary.results.find((item) => item.email === live.email).ok, true);
+  assert.equal(decrypts.count, 0);
+});
+
+test("token refreshAll skips unexpired accounts without decrypting them", async (t) => {
+  const { engine } = freshEngine(t);
+  await addAccount(engine, "fresh-batch-a@example.com", "acct-fresh-batch-a", "fresh-batch-a");
+  await addAccount(engine, "fresh-batch-b@example.com", "acct-fresh-batch-b", "fresh-batch-b");
+  const index = engine.loadIdx();
+  index.current_account_id = null;
+  engine.saveIdx(index);
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const summary = await engine.refreshAll(false);
+  assert.equal(summary.okCount, 2);
+  assert.equal(summary.results.every((item) => item.skipped === true), true);
+  assert.equal(decrypts.count, 0);
+});
+
+test("token refreshAll does not decrypt the current account after skipping unexpired tokens", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "fresh-current-skip@example.com", "acct-fresh-current-skip", "fresh-current-skip");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const config = require("../engine/config");
+  const authPath = path.join(config.CODEX_DIR, "auth.json");
+  const before = fs.readFileSync(authPath, "utf8");
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const summary = await engine.refreshAll(false);
+  assert.equal(summary.okCount, 1);
+  assert.equal(summary.results[0].skipped, true);
+  assert.equal(decrypts.count, 0);
+  assert.equal(fs.readFileSync(authPath, "utf8"), before);
 });
 
 test("the daemon probes leftover access tokens on reauth accounts to detect bans", async t => {
@@ -3299,10 +4582,12 @@ test("daemon ban probe keeps the in-memory account after leftover usage errors",
   const result = await engine.runDaemonWorker();
   assert.equal(result.pausedReason, null);
   assert.equal(result.failures.filter((item) => item.stage === "ban_probe").length, 0);
+  // Ban-probe decrypt of the leftover-token account. The spare unexpired
+  // account and the reauth leftover access used to decrypt in the token loop.
+  assert.equal(decrypts.count, 1);
   const persisted = engine.loadAcct(account.id);
   assert.equal(persisted.banned, true);
   assert.equal(persisted.requires_reauth, true);
-  assert.equal(decrypts.count, 5);
 });
 
 test("auto-switch trusts fresh cached quota instead of refreshing the current account again", async t => {
@@ -3341,6 +4626,107 @@ test("auto-switch trusts fresh cached quota instead of refreshing the current ac
     "a quota refreshed moments ago must not trigger a second usage request");
 });
 
+test("auto-switch keeps the refreshed current account without decrypting it again", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "stale-current@example.com", "acct-stale-current", "stale-current");
+  current.quota = {
+    hourly_remaining_percentage: null,
+    hourly_window_present: false,
+    weekly_remaining_percentage: 80,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = engine.ts() - 601;
+  engine.saveAcct(current);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+
+  const quotaModule = require("../engine/quota");
+  const originalRefresh = quotaModule.refreshQuota;
+  quotaModule.refreshQuota = async (account) => {
+    account.quota = {
+      hourly_remaining_percentage: null,
+      hourly_window_present: false,
+      weekly_remaining_percentage: 80,
+      weekly_window_present: true,
+    };
+    account.quota_error = null;
+    account.usage_updated_at = engine.ts();
+    engine.saveAcct(account);
+    return account.quota;
+  };
+  t.after(() => { quotaModule.refreshQuota = originalRefresh; });
+
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+  assert.equal(result.reason, "quota_sufficient");
+  // inspectAuthState plus the quota-refresh load. Reloading the same account
+  // after refreshQuota mutated it in place would make this 3.
+  assert.equal(decrypts.count, 2);
+});
+
+test("auto-switch does not decrypt a fresh-quota candidate until the actual switch", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "fresh-cand-current@example.com", "acct-fresh-cand-current", "fresh-cand-current");
+  const candidate = await addAccount(engine, "fresh-cand-ready@example.com", "acct-fresh-cand-ready", "fresh-cand-ready");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 0,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  candidate.quota = {
+    hourly_remaining_percentage: 90,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 90,
+    weekly_window_present: true,
+  };
+  candidate.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+
+  const switchModule = require("../engine/switch");
+  const originalSwitch = switchModule.doSwitch;
+  let switchedTo = null;
+  switchModule.doSwitch = async (account) => {
+    switchedTo = account.id;
+    return { account };
+  };
+  t.after(() => { switchModule.doSwitch = originalSwitch; });
+
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+  assert.equal(result.switched, true);
+  assert.equal(switchedTo, candidate.id);
+  // inspectAuthState (current) plus the switch-lock loads of current and the
+  // winner. Decrypting the listed candidate just to read cached quota would
+  // make this 4.
+  assert.equal(decrypts.count, 3);
+});
+
 test("auto-switch config recovery ignores stale backups on ENOENT and survives double corruption", t => {
   const { engine } = freshEngine(t);
   const config = require("../engine/config");
@@ -3362,6 +4748,24 @@ test("auto-switch config recovery ignores stale backups on ENOENT and survives d
   assert.equal(fs.existsSync(config.CFG_FILE), false, "the corrupt primary must be quarantined");
   const quarantined = fs.readdirSync(config.DATA_DIR).filter(name => name.includes("invalid-json"));
   assert.ok(quarantined.length >= 1);
+});
+
+test("auto-switch config still restores from backup when existsSync reports it missing", (t) => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  engine.ensureDir(config.DATA_DIR);
+  fs.writeFileSync(config.CFG_FILE, "{ corrupted", "utf8");
+  fs.writeFileSync(`${config.CFG_FILE}.bak`, JSON.stringify({ enabled: true, primary_threshold: 15 }), "utf8");
+  const originalExists = fs.existsSync;
+  fs.existsSync = (file) => {
+    if (path.resolve(String(file)) === path.resolve(`${config.CFG_FILE}.bak`)) return false;
+    return originalExists(file);
+  };
+  t.after(() => { fs.existsSync = originalExists; });
+  const cfg = engine.loadAutoSwitchCfg();
+  assert.equal(cfg.enabled, true);
+  assert.equal(cfg.primary_threshold, 15);
+  assert.equal(JSON.parse(fs.readFileSync(config.CFG_FILE, "utf8")).enabled, true);
 });
 
 test("a mismatched reauthorization still merges into an existing same-identity record", async t => {
@@ -3430,6 +4834,30 @@ test("codex collapse folds same-identity files and keeps current", async (t) => 
   assert.equal(remaining.length, 1);
   assert.equal(remaining[0].id, first.id);
   assert.equal(engine.loadIdx().current_account_id, first.id);
+});
+
+test("codex collapse does not decrypt unique accounts", async (t) => {
+  const { engine } = freshEngine(t);
+  await addAccount(engine, "unique-a@example.com", "acct-unique-a", "unique-a");
+  await addAccount(engine, "unique-b@example.com", "acct-unique-b", "unique-b");
+  await addAccount(engine, "unique-c@example.com", "acct-unique-c", "unique-c");
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  engine.collapseDuplicateCodexAccounts();
+  assert.equal(engine.listAccts({ secrets: false }).length, 3);
+  assert.equal(decrypts.count, 0);
+});
+
+test("codex upsert of a unique account does not decrypt spare vault files", async (t) => {
+  const { engine } = freshEngine(t);
+  await addAccount(engine, "spare-a@example.com", "acct-spare-a", "spare-a");
+  await addAccount(engine, "spare-b@example.com", "acct-spare-b", "spare-b");
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const created = await addAccount(engine, "unique-new@example.com", "acct-unique-new", "unique-new");
+  assert.equal(created.email, "unique-new@example.com");
+  assert.equal(engine.listAccts({ secrets: false }).length, 3);
+  assert.equal(decrypts.count, 0);
 });
 
 test("codex unknown emails do not merge without account ids", () => {

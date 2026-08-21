@@ -161,6 +161,26 @@ function foldDuplicateAccounts(accounts, sameIdentity, currentId, persist, onErr
   return changed;
 }
 
+function foldDuplicateAccountsIfNeeded({ listAccounts, loadAccount, sameIdentity, currentId, persist, onError }) {
+  const listed = listAccounts({ secrets: false });
+  const duplicateIds = [];
+  for (const group of groupByIdentity(listed, sameIdentity)) {
+    if (group.length < 2) continue;
+    for (const account of group) duplicateIds.push(account.id);
+  }
+  if (!duplicateIds.length) return false;
+  const full = [];
+  const seen = new Set();
+  for (const id of duplicateIds) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const account = loadAccount(id);
+    if (account) full.push(account);
+  }
+  if (full.length < 2) return false;
+  return foldDuplicateAccounts(full, sameIdentity, currentId, persist, onError);
+}
+
 function extraIdentityIds(preview, saveId, accounts, sameIdentity) {
   return accounts
     .filter((account) => account.id !== saveId && sameIdentity(preview, account))
@@ -195,6 +215,7 @@ module.exports = {
   groupByIdentity,
   absorbIdentitySource,
   foldDuplicateAccounts,
+  foldDuplicateAccountsIfNeeded,
   extraIdentityIds,
   mergePreservedQuota,
 };

@@ -13,7 +13,7 @@ const {
   setCurrentAntigravityAccountId,
   deleteAntigravityAcct,
 } = require("./antigravity-storage");
-const { extraIdentityIds, foldDuplicateAccounts, mergePreservedQuota, pickIdentityKeeper, usableAuthId, usableEmail } = require("./account-identity");
+const { extraIdentityIds, foldDuplicateAccountsIfNeeded, mergePreservedQuota, pickIdentityKeeper, usableAuthId, usableEmail } = require("./account-identity");
 const { withAccountLock, withAccountLocks } = require("./operation-locks");
 const { logInfo, logWarn } = require("./logger");
 
@@ -40,11 +40,12 @@ function findSameAntigravityId(preview, accounts = listAntigravityAccts({ secret
 }
 
 function collapseDuplicateAntigravityAccounts() {
-  return foldDuplicateAccounts(
-    listAntigravityAccts(),
-    sameAntigravityIdentity,
-    loadAntigravityIdx().current_antigravity_account_id || null,
-    (keeper, extras) => {
+  return foldDuplicateAccountsIfNeeded({
+    listAccounts: listAntigravityAccts,
+    loadAccount: loadAntigravityAcct,
+    sameIdentity: sameAntigravityIdentity,
+    currentId: loadAntigravityIdx().current_antigravity_account_id || null,
+    persist: (keeper, extras) => {
       const currentId = loadAntigravityIdx().current_antigravity_account_id;
       if (currentId && extras.some((item) => item.id === currentId)) {
         setCurrentAntigravityAccountId(keeper.id);
@@ -55,8 +56,8 @@ function collapseDuplicateAntigravityAccounts() {
         deleteAntigravityAcct(extra.id, { allowCurrent: true });
       }
     },
-    (error) => logWarn(`Antigravity account fold skipped: ${error.message}`),
-  );
+    onError: (error) => logWarn(`Antigravity account fold skipped: ${error.message}`),
+  });
 }
 
 function accountFromAntigravityTokens(tokens, existing = null) {
@@ -112,8 +113,8 @@ async function upsertAntigravityAccount(tokens, options = {}) {
       merged.id = saveId;
       saveAntigravityAcct(merged);
       upsertAntigravityIndex(merged);
-      collapseDuplicateAntigravityAccounts();
-      return loadAntigravityAcct(saveId) || merged;
+      const folded = collapseDuplicateAntigravityAccounts();
+      return folded ? (loadAntigravityAcct(saveId) || merged) : merged;
     });
 
     if (!mismatch && !loadAntigravityIdx().current_antigravity_account_id) {
@@ -212,8 +213,9 @@ async function syncCurrentAntigravityFromOfficialUncached() {
     }));
     if (match && current?.id !== match.id) {
       setCurrentAntigravityAccountId(match.id);
+      return loadAntigravityAcct(match.id) || current;
     }
-    return currentAntigravityAcct();
+    return current;
   });
 }
 

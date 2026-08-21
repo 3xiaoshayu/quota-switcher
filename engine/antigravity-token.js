@@ -1,8 +1,8 @@
 const { ANTIGRAVITY_TOKEN_URL, TOKEN_SKEW_SEC } = require("./config");
-const { ts } = require("./crypto-utils");
+const { ts, isExpiryStale } = require("./crypto-utils");
 const { extractErrorCode } = require("./http-client");
 const { getAntigravityRuntime } = require("./antigravity-runtime");
-const { readOfficialOauthClient } = require("./antigravity-oauth-client");
+const { listOfficialOauthClients } = require("./antigravity-oauth-client");
 const { listAntigravityAccts, loadAntigravityAcct, saveAntigravityAcct, upsertAntigravityIndex } = require("./antigravity-storage");
 const { withAccountLock, mapLimit } = require("./operation-locks");
 const { logInfo, logWarn } = require("./logger");
@@ -49,11 +49,20 @@ function markAntigravityReauth(account, reason) {
   return account;
 }
 
-async function exchangeGoogleToken(fields) {
-  const runtime = getAntigravityRuntime();
-  const client = typeof runtime.oauthClient === "function"
-    ? runtime.oauthClient()
-    : readOfficialOauthClient(typeof runtime.exePath === "function" ? runtime.exePath() : undefined);
+function isInvalidClientResponse(response, payload) {
+  return /invalid_client/i.test(String(payload?.error || payload?.error_description || response?.body || ""));
+}
+
+function clientsForGoogleTokenExchange(runtime) {
+  if (typeof runtime.oauthClient === "function") {
+    const client = runtime.oauthClient();
+    return client?.clientId ? [client] : [];
+  }
+  const exePath = typeof runtime.exePath === "function" ? runtime.exePath() : undefined;
+  return listOfficialOauthClients(exePath);
+}
+
+async function postGoogleToken(runtime, client, fields) {
   const response = await runtime.httpJson(ANTIGRAVITY_TOKEN_URL, {
     method: "POST",
     idempotent: false,
@@ -67,8 +76,30 @@ async function exchangeGoogleToken(fields) {
       ...fields,
     }),
   });
-  const payload = parseJsonBody(response.body);
-  return { response, payload, client };
+  return { response, payload: parseJsonBody(response.body), client };
+}
+
+async function exchangeGoogleToken(fields) {
+  const runtime = getAntigravityRuntime();
+  const clients = clientsForGoogleTokenExchange(runtime);
+  if (!clients.length) {
+    const error = new Error("Could not read the official Antigravity OAuth client");
+    error.code = "antigravity_oauth_client_missing";
+    throw error;
+  }
+  const queue = fields.grant_type === "refresh_token" ? clients : [clients[0]];
+  let last = null;
+  for (let index = 0; index < queue.length; index += 1) {
+    last = await postGoogleToken(runtime, queue[index], fields);
+    const ok = last.response.status >= 200 && last.response.status < 300 && last.payload.access_token;
+    if (ok) return last;
+    if (index + 1 < queue.length && isInvalidClientResponse(last.response, last.payload)) {
+      logWarn("Antigravity token refresh got invalid_client; retrying with the published official client");
+      continue;
+    }
+    return last;
+  }
+  return last;
 }
 
 async function refreshAntigravityToken(account, options = {}) {
@@ -153,15 +184,30 @@ async function refreshAllAntigravityTokens(force = false) {
   const listedAccounts = listAntigravityAccts({ secrets: false });
   const results = await mapLimit(listedAccounts, 5, async (listed) => {
     return withAccountLock(listed.id, async () => {
-      const account = loadAntigravityAcct(listed.id) || listed;
-      if (account.requires_reauth) {
+      if (listed.requires_reauth) {
         return {
-          email: account.email,
+          email: listed.email,
           ok: false,
           skipped: true,
           reauthRequired: true,
         };
       }
+      if (listed.has_refresh === false) {
+        return {
+          email: listed.email,
+          ok: false,
+          skipped: true,
+          reauthRequired: true,
+        };
+      }
+      if (!force && !isExpiryStale(listed.token_exp)) {
+        return {
+          email: listed.email,
+          ok: true,
+          skipped: true,
+        };
+      }
+      const account = loadAntigravityAcct(listed.id) || listed;
       if (!account?.tokens?.refresh_token) {
         return {
           email: account.email,

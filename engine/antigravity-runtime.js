@@ -1,4 +1,3 @@
-const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const cp = require("node:child_process");
@@ -9,6 +8,7 @@ const {
   restoreWindowsAntigravityCredential,
 } = require("./antigravity-credential");
 const { logInfo, logWarn } = require("./logger");
+const { pathExists, unlinkIfPresent } = require("./atomic-file");
 const { isThisAppPath } = require("./app-brand");
 
 function sleep(ms) {
@@ -61,10 +61,10 @@ function preferUserDataDir(exePath) {
   if (fromExe) return fromExe;
   const candidates = userDataCandidates();
   for (const candidate of candidates) {
-    if (fs.existsSync(stateDbForUserData(candidate))) return candidate;
+    if (pathExists(stateDbForUserData(candidate))) return candidate;
   }
   for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate;
+    if (pathExists(candidate)) return candidate;
   }
   return candidates[0];
 }
@@ -85,14 +85,14 @@ function defaultExeCandidates() {
 
 function firstExistingExe() {
   for (const candidate of defaultExeCandidates()) {
-    if (fs.existsSync(candidate)) return candidate;
+    if (pathExists(candidate)) return candidate;
   }
   return null;
 }
 
 function parseRunningExe(output) {
   const exe = String(output || "").trim().replace(/^['"]+|['"]+$/g, "");
-  return exe && fs.existsSync(exe) ? exe : null;
+  return exe && pathExists(exe) ? exe : null;
 }
 
 const RUNNING_COMMAND = "$p = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and ($_.Name -eq 'Antigravity IDE.exe' -or ($_.Name -eq 'Antigravity.exe' -and ($_.ExecutablePath -like '*\\Antigravity IDE\\*' -or $_.ExecutablePath -like '*\\Programs\\antigravity\\*' -or $_.ExecutablePath -like '*\\Programs\\Antigravity\\*'))) } | Select-Object -First 1 -ExpandProperty ExecutablePath; if ($p) { $p } else { '' }";
@@ -214,10 +214,7 @@ function clearStaleAntigravityLock(userDataDir) {
   for (const name of ["lockfile", "DevToolsActivePort"]) {
     const target = path.join(userDataDir, name);
     try {
-      if (fs.existsSync(target)) {
-        fs.unlinkSync(target);
-        cleared = true;
-      }
+      if (unlinkIfPresent(target)) cleared = true;
     } catch (error) {
       logWarn(`Could not clear official Antigravity lock ${name}: ${error.message}`);
     }

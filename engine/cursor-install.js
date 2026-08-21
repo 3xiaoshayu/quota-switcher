@@ -1,4 +1,4 @@
-const fs = require("node:fs");
+const { pathExists } = require("./atomic-file");
 const {
   defaultCursorExePath,
   defaultVscdbPath,
@@ -27,8 +27,8 @@ function resolveFastExePath(runtime) {
 }
 
 function buildStatus(exePath, dbPath, source) {
-  const installed = !!exePath && fs.existsSync(exePath);
-  const vscdbPresent = !!dbPath && fs.existsSync(dbPath);
+  const installed = !!exePath && pathExists(exePath);
+  const vscdbPresent = !!dbPath && pathExists(dbPath);
   return {
     installed,
     exePath: installed ? exePath : null,
@@ -59,7 +59,7 @@ async function getCursorInstallationStatusAsync() {
   const dbPath = resolveDbPath(runtime);
   let exePath = resolveFastExePath(runtime);
   let source = "local-install";
-  if (!hasCustomExeResolver(runtime) && (!exePath || !fs.existsSync(exePath))) {
+  if (!hasCustomExeResolver(runtime) && (!exePath || !pathExists(exePath))) {
     exePath = await findRunningCursorExeAsync();
     source = "running-process";
   }

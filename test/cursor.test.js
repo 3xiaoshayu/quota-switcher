@@ -228,7 +228,7 @@ test("cursor official sync matches identity without decrypting other accounts", 
   assert.equal(current.id, keep.account.id);
   // current + matched load/save path; listing two encrypted files would add 2 more.
   assert.ok(decrypts.count >= 1);
-  assert.ok(decrypts.count < 6);
+  assert.ok(decrypts.count < 4);
 });
 
 test("cursor token batch check lists without decrypting then loads each account", async (t) => {
@@ -251,8 +251,42 @@ test("cursor token batch check lists without decrypting then loads each account"
   decrypts.reset();
   const summary = await engine.refreshAllCursorTokens(false);
   assert.equal(summary.results.length, 2);
-  assert.ok(decrypts.count >= 2);
-  assert.ok(decrypts.count < 5);
+  assert.equal(summary.results.find((item) => item.email === "batch-live@example.com").skipped, true);
+  assert.equal(summary.results.find((item) => item.email === "batch-dead@example.com").reauthRequired, true);
+  assert.equal(decrypts.count, 0);
+});
+
+test("cursor token refreshAll still decrypts expired accounts that have a refresh token", async (t) => {
+  const { engine } = freshEngine(t);
+  await engine.upsertCursorAccount({
+    email: "batch-expired@example.com",
+    auth_id: "user_batch_expired",
+    access_token: jwt({
+      email: "batch-expired@example.com",
+      sub: "user_batch_expired",
+      exp: Math.floor(Date.now() / 1000) - 10,
+    }),
+    refresh_token: "refresh-batch-expired",
+  });
+  await engine.upsertCursorAccount({
+    email: "batch-fresh@example.com",
+    auth_id: "user_batch_fresh",
+    access_token: jwt({
+      email: "batch-fresh@example.com",
+      sub: "user_batch_fresh",
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }),
+    refresh_token: "refresh-batch-fresh",
+  });
+  engine.setCursorRuntimeForTests({
+    httpJson: async () => ({ status: 200, body: JSON.stringify({ accessToken: "rotated-access" }) }),
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const summary = await engine.refreshAllCursorTokens(false);
+  assert.equal(summary.results.find((item) => item.email === "batch-expired@example.com").ok, true);
+  assert.equal(summary.results.find((item) => item.email === "batch-fresh@example.com").skipped, true);
+  assert.equal(decrypts.count, 1);
 });
 
 function itemText(dbPath, key) {
@@ -484,6 +518,51 @@ test("cursor official sync follows vscdb even when WAL is pending", async (t) =>
   holder.close();
 });
 
+test("cursor vscdb snapshot still captures rows when existsSync reports the db missing", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "state.vscdb");
+  await engine.writeCursorAuth(dbPath, {
+    "cursorAuth/accessToken": cursorToken("snap-lie@example.com", "snap-lie"),
+    "cursorAuth/cachedEmail": "snap-lie@example.com",
+    "cursorAuth/authId": "user_snap_lie",
+  });
+  const originalExists = fs.existsSync;
+  fs.existsSync = (file) => {
+    if (path.resolve(String(file)) === path.resolve(dbPath)) return false;
+    return originalExists(file);
+  };
+  t.after(() => { fs.existsSync = originalExists; });
+  const { snapshotItems, restoreItems } = require("../engine/sqlite-native");
+  const snapshot = await snapshotItems(dbPath, ["cursorAuth/cachedEmail"], {});
+  assert.equal(snapshot.missing, false);
+  assert.ok(snapshot.rows["cursorAuth/cachedEmail"]);
+  restoreItems(snapshot, {});
+  fs.existsSync = originalExists;
+  assert.equal(fs.existsSync(dbPath), true);
+});
+
+test("restoring a missing vscdb snapshot retries when unlink is transiently locked", (t) => {
+  const { root } = freshEngine(t);
+  const dbPath = path.join(root, "missing-restore.vscdb");
+  fs.writeFileSync(dbPath, "placeholder");
+  const originalUnlink = fs.unlinkSync;
+  let failures = 0;
+  fs.unlinkSync = (target) => {
+    if (path.resolve(String(target)) === path.resolve(dbPath) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalUnlink(target);
+  };
+  t.after(() => { fs.unlinkSync = originalUnlink; });
+  const { restoreItems } = require("../engine/sqlite-native");
+  restoreItems({ dbPath, missing: true, rows: {} }, {});
+  assert.equal(failures, 2);
+  assert.equal(fs.existsSync(dbPath), false);
+});
+
 test("cursor list sync can fill an empty current from official vscdb", async (t) => {
   const { engine, root } = freshEngine(t);
   const dbPath = path.join(root, "state.vscdb");
@@ -613,6 +692,22 @@ test("cursor token check does not pass accounts that still need reauth", async (
   const summary = await engine.refreshAllCursorTokens(false);
   assert.equal(summary.results[0].ok, false);
   assert.equal(summary.results[0].reauthRequired, true);
+  const live = await engine.upsertCursorAccount({
+    email: "live-check@example.com",
+    auth_id: "user_live_check",
+    access_token: jwt({
+      email: "live-check@example.com",
+      sub: "user_live_check",
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }),
+    refresh_token: "refresh-live-check",
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const again = await engine.refreshAllCursorTokens(false);
+  assert.equal(again.results.find((item) => item.email === account.email).reauthRequired, true);
+  assert.equal(again.results.find((item) => item.email === live.account.email).ok, true);
+  assert.equal(decrypts.count, 0);
 });
 
 test("cursor token refresh clears leftover quota_error", async (t) => {
@@ -716,6 +811,45 @@ test("cursor switch writes vscdb after close and rolls back on write failure", a
   assert.equal(values["glass.lastSignedInAuthId"], "auth0|user_next");
   assert.equal(engine.currentCursorAcct().id, created.account.id);
   assert.equal(engine.listAccts().length, 0);
+});
+
+test("cursor switch still relaunches Cursor.exe when existsSync reports it missing", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "cursor-state.vscdb");
+  const exePath = path.join(root, "Cursor.exe");
+  fs.writeFileSync(exePath, "fake");
+  await engine.writeCursorAuth(dbPath, {
+    "cursorAuth/accessToken": "old-token",
+    "cursorAuth/cachedEmail": "old@example.com",
+  });
+  const created = await engine.upsertCursorAccount({
+    email: "exe-lie@example.com",
+    auth_id: "user_exe_lie",
+    access_token: cursorToken("exe-lie@example.com", "exe-lie"),
+    refresh_token: "refresh-exe-lie",
+  });
+  const launched = [];
+  engine.setCursorRuntimeForTests({
+    vscdbPath: () => dbPath,
+    cursorExePath: () => exePath,
+    listProcesses: async () => [],
+    launch: (target) => {
+      launched.push(target);
+      return true;
+    },
+    sleep: async () => {},
+  });
+  const originalExists = fs.existsSync;
+  fs.existsSync = (file) => {
+    if (path.resolve(String(file)) === path.resolve(exePath)) return false;
+    return originalExists(file);
+  };
+  t.after(() => { fs.existsSync = originalExists; });
+  const switched = await engine.doCursorSwitch(engine.loadCursorAcct(created.account.id));
+  assert.equal(switched.launched, true);
+  assert.deepEqual(launched, [exePath]);
+  const values = await engine.readCursorAuth(dbPath, { copyFirst: false });
+  assert.equal(values["cursorAuth/cachedEmail"], "exe-lie@example.com");
 });
 
 test("cursor switch returns the in-memory account without a final decrypt", async (t) => {
@@ -1036,6 +1170,31 @@ test("cursor auth write leaves a large extra blob in place without copying the f
   assert.equal(hits.read, 0);
   assert.equal(hits.copy, 0);
   assert.ok(elapsed < 2000, `writeCursorAuth took ${elapsed}ms`);
+});
+
+test("cursor auth write retries when creating the vscdb parent directory is locked", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "nested-lock", "cursor-state.vscdb");
+  const parent = path.dirname(dbPath);
+  const originalMkdir = fs.mkdirSync;
+  let failures = 0;
+  fs.mkdirSync = (dir, options) => {
+    if (path.resolve(String(dir)) === path.resolve(parent) && failures < 2) {
+      failures += 1;
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalMkdir(dir, options);
+  };
+  t.after(() => { fs.mkdirSync = originalMkdir; });
+  await engine.writeCursorAuth(dbPath, {
+    "cursorAuth/accessToken": "mkdir-token",
+    "cursorAuth/cachedEmail": "mkdir@example.com",
+  });
+  assert.equal(failures, 2);
+  const values = await engine.readCursorAuth(dbPath, { copyFirst: false });
+  assert.equal(values["cursorAuth/cachedEmail"], "mkdir@example.com");
 });
 
 test("cursor switch writes login keys even when a leftover WAL file is present", async (t) => {
@@ -1440,6 +1599,42 @@ test("cursor pending oauth can be discarded without touching Codex", async (t) =
   await login;
 });
 
+test("cursor pending oauth still restores from backup after persistent corruption", async (t) => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  let releaseSleep = null;
+  engine.setCursorRuntimeForTests({
+    openUrl: async () => {},
+    sleep: () => new Promise((resolve) => { releaseSleep = resolve; }),
+    httpJson: async () => ({ status: 404, body: "" }),
+  });
+  const login = engine.cursorLoginFlow().catch((error) => error);
+  const pendingPath = config.CURSOR_OAUTH_PENDING_PATH;
+  const startedAt = Date.now();
+  while (!fs.existsSync(pendingPath) && Date.now() - startedAt < 2000) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  const envelope = fs.readFileSync(pendingPath, "utf8");
+  engine.cancelCursorOAuth();
+  if (releaseSleep) releaseSleep();
+  await login;
+
+  fs.writeFileSync(`${pendingPath}.bak`, envelope, "utf8");
+  fs.writeFileSync(pendingPath, "{ corrupted", "utf8");
+  engine.setCursorRuntimeForTests({
+    openUrl: async () => {},
+    sleep: async () => {},
+    httpJson: async () => ({ status: 404, body: "" }),
+  });
+  assert.equal(engine.restorePendingCursorOAuth(), true);
+  try {
+    assert.equal(engine.getCursorOAuthStatus().pending, true);
+    assert.equal(JSON.parse(fs.readFileSync(pendingPath, "utf8")).protected_payload.length > 0, true);
+  } finally {
+    engine.cancelCursorOAuth();
+  }
+});
+
 test("cursor quota usage_limited only follows plan remaining", async (t) => {
   const { engine } = freshEngine(t);
   const created = await engine.upsertCursorAccount({
@@ -1540,6 +1735,52 @@ test("cursor collapse folds same-email files and keeps current", async (t) => {
   assert.equal(remaining.length, 1);
   assert.equal(remaining[0].id, first.account.id);
   assert.equal(engine.currentCursorAcct().id, first.account.id);
+});
+
+test("cursor collapse does not decrypt unique accounts", async (t) => {
+  const { engine } = freshEngine(t);
+  await engine.upsertCursorAccount({
+    email: "unique-a@example.com",
+    auth_id: "user_unique_a",
+    access_token: cursorToken("unique-a@example.com", "unique-a"),
+    refresh_token: "refresh-unique-a",
+  });
+  await engine.upsertCursorAccount({
+    email: "unique-b@example.com",
+    auth_id: "user_unique_b",
+    access_token: cursorToken("unique-b@example.com", "unique-b"),
+    refresh_token: "refresh-unique-b",
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  engine.collapseDuplicateCursorAccounts();
+  assert.equal(engine.listCursorAccts({ secrets: false }).length, 2);
+  assert.equal(decrypts.count, 0);
+});
+
+test("cursor still finds Cursor.exe when existsSync reports it missing", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-exe-lie-"));
+  const previousLocal = process.env.LOCALAPPDATA;
+  process.env.LOCALAPPDATA = path.join(root, "Local");
+  clearEngineModules();
+  const originalExists = fs.existsSync;
+  try {
+    const exePath = path.join(root, "Local", "Programs", "cursor", "Cursor.exe");
+    fs.mkdirSync(path.dirname(exePath), { recursive: true });
+    fs.writeFileSync(exePath, "fake");
+    fs.existsSync = (file) => {
+      if (path.resolve(String(file)) === path.resolve(exePath)) return false;
+      return originalExists(file);
+    };
+    const runtime = require("../engine/cursor-runtime");
+    assert.equal(runtime.firstExistingCursorExe(), exePath);
+  } finally {
+    fs.existsSync = originalExists;
+    if (previousLocal == null) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = previousLocal;
+    fs.rmSync(root, { recursive: true, force: true });
+    clearEngineModules();
+  }
 });
 
 test("cursor default exe path does not query running processes", () => {
@@ -1931,4 +2172,48 @@ test("cursor refreshAll publishes from the in-memory account without a second de
   assert.equal(skipped.success, true);
   assert.ok(skipped.data.every((item) => item.skipped === true && item.reason === "reauthorization_required"));
   assert.equal(decrypts.count, 2);
+});
+
+test("cursor refreshAll skips persisted reauth accounts without decrypting them", async (t) => {
+  const { engine } = freshEngine(t);
+  const reauth = await engine.upsertCursorAccount({
+    email: "batch-reauth@example.com",
+    auth_id: "user_batch_reauth",
+    access_token: cursorToken("batch-reauth@example.com", "batch-reauth"),
+    refresh_token: "refresh-batch-reauth",
+  });
+  const stored = engine.loadCursorAcct(reauth.account.id);
+  stored.requires_reauth = true;
+  engine.saveCursorAcct(stored);
+  const live = await engine.upsertCursorAccount({
+    email: "batch-live@example.com",
+    auth_id: "user_batch_live",
+    access_token: cursorToken("batch-live@example.com", "batch-live"),
+    refresh_token: "refresh-batch-live",
+  });
+  engine.refreshCursorQuota = async (account) => {
+    account.quota = { membership_type: "pro" };
+    return account.quota;
+  };
+  const handlers = new Map();
+  delete require.cache[require.resolve("../src/main/ipc-handlers")];
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.3", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const result = await handlers.get("cursor:refreshAllQuotas")({});
+  assert.equal(result.success, true);
+  const skipped = result.data.find((item) => item.id === reauth.account.id);
+  const okRow = result.data.find((item) => item.id === live.account.id);
+  assert.equal(skipped.skipped, true);
+  assert.equal(skipped.reason, "reauthorization_required");
+  assert.equal(okRow.quota.membership_type, "pro");
+  assert.equal(decrypts.count, 1);
 });

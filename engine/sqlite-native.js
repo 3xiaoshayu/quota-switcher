@@ -1,6 +1,6 @@
-const fs = require("node:fs");
 const path = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
+const { pathExists, unlinkIfPresent, mkdirSyncWithRetry } = require("./atomic-file");
 
 const SQLITE_BUSY = 5;
 const SQLITE_LOCKED = 6;
@@ -94,8 +94,8 @@ function asText(value) {
 
 function openVscdb(dbPath, options = {}) {
   const readOnly = options.readOnly === true;
-  if (readOnly && !fs.existsSync(dbPath)) return null;
-  if (!readOnly) fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  if (readOnly && !pathExists(dbPath)) return null;
+  if (!readOnly) mkdirSyncWithRetry(path.dirname(dbPath));
   const fallbackTimeout = readOnly ? timing.readTimeoutMs : timing.writeTimeoutMs;
   return new DatabaseSync(dbPath, {
     readOnly,
@@ -184,7 +184,7 @@ function setSqliteReadTransport(transport) {
 }
 
 async function readVscdbItemRowsLocal(dbPath, keys, options = {}) {
-  if (!dbPath || !fs.existsSync(dbPath)) return null;
+  if (!dbPath || !pathExists(dbPath)) return null;
   return withVscdb(dbPath, { readOnly: true, labels: options.labels }, (db) => {
     const rows = {};
     for (const key of keys || []) {
@@ -210,7 +210,7 @@ async function readVscdbItemRows(dbPath, keys, options = {}) {
 }
 
 async function snapshotItems(dbPath, keys, labels, options = {}) {
-  if (!dbPath || !fs.existsSync(dbPath)) {
+  if (!dbPath || !pathExists(dbPath)) {
     return missingSnapshot(dbPath, keys);
   }
   return withVscdb(dbPath, {
@@ -223,7 +223,7 @@ async function snapshotItems(dbPath, keys, labels, options = {}) {
 function restoreItems(snapshot, labels) {
   if (!snapshot?.dbPath) return;
   if (snapshot.missing) {
-    try { fs.unlinkSync(snapshot.dbPath); } catch {}
+    try { unlinkIfPresent(snapshot.dbPath); } catch {}
     return;
   }
   try {
@@ -262,7 +262,7 @@ async function waitForVscdbWritable(dbPath, options = {}) {
   const pollMs = options.pollMs ?? timing.waitWritablePollMs;
   const wait = typeof options.sleep === "function" ? options.sleep : sleep;
   if (!dbPath) return true;
-  if (!fs.existsSync(dbPath)) return true;
+  if (!pathExists(dbPath)) return true;
 
   const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
   let lastError;

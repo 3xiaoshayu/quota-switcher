@@ -3,6 +3,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
+const { writeFileWithRetry, unlinkIfPresent } = require("./atomic-file");
+
 const CREDENTIAL_TARGET = "gemini:antigravity";
 
 const READ_SCRIPT = `
@@ -238,7 +240,7 @@ async function writeWindowsAntigravityCredential(account, runCommand) {
   const payload = buildAntigravityCredentialPayload(account);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ag-cred-"));
   const filePath = path.join(dir, "payload.json");
-  fs.writeFileSync(filePath, payload, { encoding: "utf8" });
+  writeFileWithRetry(filePath, payload, "utf8");
   try {
     await runPowerShell(WRITE_SCRIPT, runCommand, {
       timeout: 8000,
@@ -246,7 +248,7 @@ async function writeWindowsAntigravityCredential(account, runCommand) {
     });
     return true;
   } finally {
-    try { fs.unlinkSync(filePath); } catch {}
+    try { unlinkIfPresent(filePath); } catch {}
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
   }
 }

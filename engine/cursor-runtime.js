@@ -1,9 +1,9 @@
-const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const cp = require("node:child_process");
 const { httpJson } = require("./http-client");
 const { logWarn } = require("./logger");
+const { pathExists } = require("./atomic-file");
 const { isThisAppPath } = require("./app-brand");
 
 function sleep(ms) {
@@ -39,14 +39,14 @@ function defaultCursorExeCandidates() {
 
 function firstExistingCursorExe() {
   for (const candidate of defaultCursorExeCandidates()) {
-    if (fs.existsSync(candidate)) return candidate;
+    if (pathExists(candidate)) return candidate;
   }
   return null;
 }
 
 function parseRunningCursorExe(output) {
   const exe = String(output || "").trim().replace(/^['"]+|['"]+$/g, "");
-  if (exe && fs.existsSync(exe)) return exe;
+  if (exe && pathExists(exe)) return exe;
   return null;
 }
 

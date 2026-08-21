@@ -1,4 +1,3 @@
-const fs = require("node:fs");
 const path = require("node:path");
 const { ts } = require("./crypto-utils");
 const { getAntigravityRuntime, usesWindowsSystemCredential, preferUserDataDirForExe } = require("./antigravity-runtime");
@@ -14,6 +13,7 @@ const {
 const { getAntigravityInstallationStatusAsync, assertOfficialAntigravityInstalled } = require("./antigravity-install");
 const { logInfo, logWarn, logError } = require("./logger");
 const { describeCaughtError } = require("./sqlite-native");
+const { pathExists } = require("./atomic-file");
 
 const GRACEFUL_WAIT_MS = 1500;
 const FORCE_WAIT_MS = 4000;
@@ -107,11 +107,11 @@ async function clearStaleLockWithRetry(runtime, userDataDir) {
   if (!userDataDir || typeof runtime.clearStaleLock !== "function") return;
   runtime.clearStaleLock(userDataDir);
   const lockPath = path.join(userDataDir, "lockfile");
-  if (!fs.existsSync(lockPath)) return;
+  if (!pathExists(lockPath)) return;
   const deadline = Date.now() + LOCK_RETRY_MS;
-  while (fs.existsSync(lockPath) && Date.now() < deadline) {
+  while (pathExists(lockPath) && Date.now() < deadline) {
     runtime.clearStaleLock(userDataDir);
-    if (!fs.existsSync(lockPath)) return;
+    if (!pathExists(lockPath)) return;
     await runtime.sleep(LOCK_POLL_MS);
   }
 }
@@ -137,7 +137,7 @@ async function doAntigravitySwitch(account) {
   if (!install.installed) {
     assertOfficialAntigravityInstalled();
   }
-  const launchPath = install.exePath && fs.existsSync(install.exePath) ? install.exePath : null;
+  const launchPath = install.exePath && pathExists(install.exePath) ? install.exePath : null;
   const userDataDir = resolveUserDataDir(runtime, launchPath);
   const writeCredential = usesWindowsSystemCredential(launchPath);
   const writeVscdb = !writeCredential;

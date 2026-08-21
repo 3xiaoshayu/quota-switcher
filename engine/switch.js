@@ -1,10 +1,9 @@
-const fs = require("node:fs");
 const path = require("node:path");
 const cp = require("node:child_process");
 const { tsIso, ts } = require("./crypto-utils");
 const { CODEX_DIR, CODEX_AUMID, IDX_PATH } = require("./config");
 const { loadIdx, saveIdx, saveAcct, ensureDir, accountFilePath } = require("./storage");
-const { writeJsonAtomic, writeTextAtomic, renameWithRetry, captureFile, readFileWithRetry } = require("./atomic-file");
+const { writeJsonAtomic, writeTextAtomic, captureFile, readFileWithRetry, restoreCapturedFile } = require("./atomic-file");
 const { writeManagedProjection, inspectAuthState } = require("./auth-state");
 const { assertOfficialCodexInstalledAsync } = require("./codex-installation");
 const { logInfo, logWarn, logError } = require("./logger");
@@ -211,8 +210,14 @@ function writeProjection(account, authValue = null) {
 
 function clearApiBaseUrl() {
   const configPath = path.join(CODEX_DIR, "config.toml");
-  if (!fs.existsSync(configPath)) return false;
-  const lines = readFileWithRetry(configPath, "utf8").split(/\r?\n/);
+  let text;
+  try {
+    text = readFileWithRetry(configPath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+  const lines = text.split(/\r?\n/);
   let inRoot = true;
   const filtered = lines.filter((line) => {
     if (/^\s*\[/.test(line)) inRoot = false;
@@ -286,14 +291,7 @@ async function startCodex(options = {}) {
 }
 
 function restoreFile(filePath, content) {
-  if (content === null) {
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-    return;
-  }
-  ensureDir(path.dirname(filePath));
-  const tempPath = `${filePath}.rollback.tmp`;
-  fs.writeFileSync(tempPath, content);
-  renameWithRetry(tempPath, filePath);
+  restoreCapturedFile(filePath, content);
 }
 
 async function doSwitch(account, options = {}) {

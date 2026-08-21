@@ -1,4 +1,3 @@
-const fs = require("node:fs");
 const http = require("node:http");
 const { b64url } = require("./crypto-utils");
 const {
@@ -9,7 +8,7 @@ const {
   ANTIGRAVITY_SCOPES,
 } = require("./config");
 const { protectData, unprotectData, ensureDir } = require("./storage");
-const { writeJsonAtomic, readJsonWithRetry } = require("./atomic-file");
+const { writeJsonAtomic, readJsonWithBackup, unlinkIfPresent } = require("./atomic-file");
 const { getAntigravityRuntime } = require("./antigravity-runtime");
 const { readOfficialOauthClient } = require("./antigravity-oauth-client");
 const { upsertAntigravityAccount } = require("./antigravity-local");
@@ -65,14 +64,13 @@ function persistPending(pending) {
 }
 
 function clearPendingFile() {
-  try { fs.unlinkSync(ANTIGRAVITY_OAUTH_PENDING_PATH); } catch {}
-  try { fs.unlinkSync(`${ANTIGRAVITY_OAUTH_PENDING_PATH}.bak`); } catch {}
+  try { unlinkIfPresent(ANTIGRAVITY_OAUTH_PENDING_PATH); } catch {}
+  try { unlinkIfPresent(`${ANTIGRAVITY_OAUTH_PENDING_PATH}.bak`); } catch {}
 }
 
 function loadPending() {
-  if (!fs.existsSync(ANTIGRAVITY_OAUTH_PENDING_PATH)) return null;
   try {
-    const envelope = readJsonWithRetry(ANTIGRAVITY_OAUTH_PENDING_PATH);
+    const envelope = readJsonWithBackup(ANTIGRAVITY_OAUTH_PENDING_PATH);
     const pending = JSON.parse(unprotectData(envelope.protected_payload));
     if (!pending.expiresAt || pending.expiresAt <= Date.now()) {
       clearPendingFile();
@@ -80,7 +78,8 @@ function loadPending() {
       return null;
     }
     return pending;
-  } catch {
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.transientIoError) return null;
     clearPendingFile();
     return null;
   }
@@ -222,7 +221,7 @@ function createCallbackListener(pending) {
     finish(error);
   });
   server.listen(pending.callbackPort, "127.0.0.1", () => {
-    if (active && active.pending === pending) active.server = server;
+    if (active && active.pending === pending && !active.settled) active.server = server;
     resolveReady();
   });
   return { server, ready, codePromise };
@@ -306,12 +305,29 @@ function startSession(pending, runner) {
 }
 
 async function runPendingFlow(pending) {
+  if (!active || active.pending !== pending || active.settled) {
+    const error = new Error("OAuth authorization was cancelled");
+    error.code = "oauth_cancelled";
+    throw error;
+  }
   const runtime = getAntigravityRuntime();
   const client = typeof runtime.oauthClient === "function"
     ? runtime.oauthClient()
     : readOfficialOauthClient(typeof runtime.exePath === "function" ? runtime.exePath() : undefined);
   const listener = createCallbackListener(pending);
+  if (active && active.pending === pending && !active.settled) active.server = listener.server;
+  else {
+    closeServer(listener.server);
+    const error = new Error("OAuth authorization was cancelled");
+    error.code = "oauth_cancelled";
+    throw error;
+  }
   await listener.ready;
+  if (!active || active.pending !== pending || active.settled) {
+    const error = new Error("OAuth authorization was cancelled");
+    error.code = "oauth_cancelled";
+    throw error;
+  }
   openBrowser(buildAuthUrl(pending, client));
   const code = await listener.codePromise;
   return finishAntigravityLogin(pending, code);

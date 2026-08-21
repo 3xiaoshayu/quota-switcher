@@ -118,9 +118,11 @@ function nodeHttpJson(url, opts, headers, timeout, signature = null) {
     const mod = u.protocol === "https:" ? https : http;
     const agent = getAgentForSignature(signature, u.protocol);
     let settled = false;
+    let deadlineTimer = null;
     const finish = (fn, value) => {
       if (settled) return;
       settled = true;
+      if (deadlineTimer) clearTimeout(deadlineTimer);
       fn(value);
     };
     const req = mod.request(url, { method: opts.method || "GET", headers, timeout, agent }, (res) => {
@@ -143,6 +145,14 @@ function nodeHttpJson(url, opts, headers, timeout, signature = null) {
         }
       });
     });
+    // Socket idle timeout resets whenever a byte arrives, so a slow trickle
+    // would hang quota refresh forever. Bound the whole request as well.
+    if (timeout > 0) {
+      deadlineTimer = setTimeout(() => {
+        req.destroy();
+        finish(reject, new Error("请求超时"));
+      }, timeout);
+    }
     req.on("timeout", () => { req.destroy(); finish(reject, new Error("请求超时")); });
     req.on("error", (error) => finish(reject, error));
     if (opts.body) req.write(typeof opts.body === "string" ? opts.body : JSON.stringify(opts.body));

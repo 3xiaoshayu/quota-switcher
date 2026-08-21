@@ -51,7 +51,10 @@ function authFingerprint(value) {
 function readJson(filePath) {
   try {
     return readJsonWithRetry(filePath);
-  } catch {
+  } catch (error) {
+    // A leftover lock is not "missing official auth". Let callers retry or
+    // fail instead of pausing the daemon on a fake login conflict.
+    if (error?.transientIoError) throw error;
     return null;
   }
 }
@@ -123,7 +126,7 @@ function findMatchingAccount(official, accounts) {
       const accountId = account.account_id || account.tokens?.account_id || extractChatgptAccountId(account.tokens?.access_token || "");
       return official.identity?.accountId && accountId === official.identity.accountId;
     })
-    || null;
+    || accounts.find((account) => identityMatchesAccount(official.identity, account));
 }
 
 function identityMatchesAccount(identity, account) {

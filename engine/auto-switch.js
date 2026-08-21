@@ -66,10 +66,21 @@ async function autoSwitchTick(cfg, options = {}) {
   // rotation sync), so hold the account lock while it runs.
   let authState = options.authState || null;
   if (!authState) {
-    const preIdx = loadIdx();
-    authState = preIdx.current_account_id
-      ? await withAccountLock(preIdx.current_account_id, async () => inspectAuthState({ migrateProjection: false }))
-      : inspectAuthState({ migrateProjection: false });
+    try {
+      const preIdx = loadIdx();
+      authState = preIdx.current_account_id
+        ? await withAccountLock(preIdx.current_account_id, async () => inspectAuthState({ migrateProjection: false }))
+        : inspectAuthState({ migrateProjection: false });
+    } catch (error) {
+      // A leftover lock on official auth.json is not a login conflict.
+      // Reuse the existing check-failed reason so the UI does not treat this
+      // as "官方登录不一致" and does not invent a new copy string.
+      return {
+        switched: false,
+        reason: "current_quota_refresh_failed",
+        error: error.message || String(error),
+      };
+    }
   }
   if (authState.requiresResolution) {
     return { switched: false, reason: "auth_conflict", authState };
@@ -100,20 +111,21 @@ async function autoSwitchTick(cfg, options = {}) {
     && !accountMustLeave(account)
     && (ts() - (account.usage_updated_at || 0) <= 600);
   if (!mustLeave && !quotaIsFresh(cur)) {
+    let fresh = null;
     try {
       await withAccountLock(cur.id, async () => {
         if (isCancelled()) return;
-        const fresh = loadAcct(cur.id);
+        fresh = loadAcct(cur.id);
         if (!fresh) { cur = null; return; }
         if (isCancelled()) return;
         await refreshQuota(fresh, { force: false });
         if (isCancelled()) return;
-        cur = loadAcct(fresh.id) || fresh;
+        cur = fresh;
       });
     } catch (error) {
       // A failed refresh (e.g. retry backoff) with fresh-enough cached data
       // should not stall automatic switching for the whole backoff window.
-      const cached = loadAcct(curId);
+      const cached = fresh || loadAcct(curId);
       if (accountMustLeave(cached)) {
         cur = cached;
       } else if (quotaIsFresh(cached) || (error?.code === "quota_retry_pending" && cached)) {
@@ -141,18 +153,18 @@ async function autoSwitchTick(cfg, options = {}) {
     if (isCancelled()) return cancelled();
     if (listed.id === curId) continue;
     if (!monitoredIds.includes(listed.id)) continue;
-    let candidate = loadAcct(listed.id) || listed;
-    if (accountMustLeave(candidate)) continue;
-    if (!candidate.quota || candidate.quota_error || (ts() - (candidate.usage_updated_at || 0) > 600)) {
+    if (accountMustLeave(listed)) continue;
+    let candidate = listed;
+    if (!listed.quota || listed.quota_error || (ts() - (listed.usage_updated_at || 0) > 600)) {
       try {
-        await withAccountLock(candidate.id, async () => {
+        await withAccountLock(listed.id, async () => {
           if (isCancelled()) return;
-          const fresh = loadAcct(candidate.id);
+          const fresh = loadAcct(listed.id);
           if (!fresh) { candidate = null; return; }
           if (isCancelled()) return;
           await refreshQuota(fresh, { force: false });
           if (isCancelled()) return;
-          candidate = loadAcct(fresh.id) || fresh;
+          candidate = fresh;
         });
       } catch { continue; }
     }
