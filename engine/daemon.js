@@ -5,7 +5,7 @@ const { loadAutoSwitchCfg, normalizeSyncIntervalMinutes } = require("./config-ma
 const { autoSwitchTick } = require("./auto-switch");
 const { loadIdx, listAccts, loadAcct } = require("./storage");
 const { writeAuthJson, writeProjection } = require("./switch");
-const { inspectAuthState } = require("./auth-state");
+const { inspectAuthState, canMirrorOfficialAuth } = require("./auth-state");
 const { withAccountLock } = require("./operation-locks");
 const { logWarn } = require("./logger");
 
@@ -42,7 +42,22 @@ async function runDaemonWorker(options = {}) {
   // inspectAuthState can write the current account file (official token
   // rotation sync); hold the account lock so it cannot interleave with an
   // in-flight refresh of the same account.
-  const preIndex = loadIdx();
+  let preIndex;
+  try {
+    preIndex = loadIdx();
+  } catch (error) {
+    failures.push(failure("account_index", null, error));
+    return {
+      startedAt,
+      completedAt: Date.now(),
+      accountsUpdated,
+      tokenRefreshes,
+      autoSwitchResult,
+      failures,
+      pausedReason: null,
+      authState,
+    };
+  }
   try {
     authState = preIndex.current_account_id
       ? await withAccountLock(preIndex.current_account_id, async () => inspectAuthState({ migrateProjection: false }))
@@ -138,7 +153,22 @@ async function runDaemonWorker(options = {}) {
   }
 
   if (isCancelled()) return stopped();
-  const index = loadIdx();
+  let index;
+  try {
+    index = loadIdx();
+  } catch (error) {
+    failures.push(failure("account_index", null, error));
+    return {
+      startedAt,
+      completedAt: Date.now(),
+      accountsUpdated,
+      tokenRefreshes,
+      autoSwitchResult,
+      failures,
+      pausedReason: null,
+      authState,
+    };
+  }
   if (index.current_account_id) {
     await withAccountLock(index.current_account_id, async () => {
       if (isCancelled()) return;
@@ -163,9 +193,15 @@ async function runDaemonWorker(options = {}) {
       }
 
       if (isCancelled()) return;
-      const latestIndex = loadIdx();
+      let latestIndex;
+      try {
+        latestIndex = loadIdx();
+      } catch (error) {
+        failures.push(failure("account_index", current, error));
+        return;
+      }
       const latestAuthState = inspectAuthState({ migrateProjection: false });
-      if (latestIndex.current_account_id === current.id && latestAuthState.status === "aligned") {
+      if (latestIndex.current_account_id === current.id && canMirrorOfficialAuth(latestAuthState)) {
         try {
           if (isCancelled()) return;
           const authValue = writeAuthJson(current);
@@ -179,8 +215,14 @@ async function runDaemonWorker(options = {}) {
   }
 
   if (isCancelled()) return stopped();
-  const config = loadAutoSwitchCfg();
-  if (config.enabled) {
+  let config = null;
+  try {
+    config = loadAutoSwitchCfg();
+  } catch (error) {
+    // A leftover lock must not throw away token/quota work already done.
+    failures.push(failure("auto_switch_config", null, error));
+  }
+  if (config && config.enabled) {
     try {
       autoSwitchResult = await autoSwitchTick(config, { isCancelled, authState });
       if (isCancelled() || autoSwitchResult?.reason === "cancelled") return stopped();

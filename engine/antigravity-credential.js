@@ -4,6 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const { writeFileWithRetry, unlinkIfPresent } = require("./atomic-file");
+const { logWarn } = require("./logger");
 
 const CREDENTIAL_TARGET = "gemini:antigravity";
 
@@ -35,7 +36,11 @@ public class AgCredRead {
 }
 "@
 $ptr = [IntPtr]::Zero
-if (-not [AgCredRead]::CredRead("${CREDENTIAL_TARGET}", 1, 0, [ref]$ptr)) { "" ; exit 0 }
+if (-not [AgCredRead]::CredRead("${CREDENTIAL_TARGET}", 1, 0, [ref]$ptr)) {
+  $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+  if ($err -eq 1168) { "" ; exit 0 }
+  throw "CredRead failed: $err"
+}
 try {
   $cred = [Runtime.InteropServices.Marshal]::PtrToStructure($ptr, [type][AgCredRead+CREDENTIAL])
   if ($cred.CredentialBlobSize -le 0) { "" ; exit 0 }
@@ -55,8 +60,6 @@ using System.Runtime.InteropServices;
 public class AgCredWrite {
   [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
   public static extern bool CredWrite(ref CREDENTIAL credential, uint flags);
-  [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-  public static extern bool CredDelete(string target, int type, int flags);
   [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
   public struct CREDENTIAL {
     public int Flags;
@@ -81,7 +84,6 @@ $bytes = [Text.Encoding]::UTF8.GetBytes($json)
 $ptr = [Runtime.InteropServices.Marshal]::AllocHGlobal($bytes.Length)
 try {
   [Runtime.InteropServices.Marshal]::Copy($bytes, 0, $ptr, $bytes.Length)
-  [void][AgCredWrite]::CredDelete("${CREDENTIAL_TARGET}", 1, 0)
   $cred = New-Object AgCredWrite+CREDENTIAL
   $cred.Type = 1
   $cred.TargetName = "${CREDENTIAL_TARGET}"
@@ -227,12 +229,8 @@ async function runPowerShell(script, runCommand, extra = {}) {
 
 async function readWindowsAntigravityCredential(runCommand) {
   if (process.platform !== "win32") return null;
-  try {
-    const { stdout } = await runPowerShell(READ_SCRIPT, runCommand);
-    return parseCredentialBlob(stdout);
-  } catch {
-    return null;
-  }
+  const { stdout } = await runPowerShell(READ_SCRIPT, runCommand);
+  return parseCredentialBlob(stdout);
 }
 
 async function writeWindowsAntigravityCredential(account, runCommand) {
@@ -241,6 +239,10 @@ async function writeWindowsAntigravityCredential(account, runCommand) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ag-cred-"));
   const filePath = path.join(dir, "payload.json");
   writeFileWithRetry(filePath, payload, "utf8");
+  try {
+    const descriptor = fs.openSync(filePath, "r+");
+    try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
+  } catch {}
   try {
     await runPowerShell(WRITE_SCRIPT, runCommand, {
       timeout: 8000,
@@ -262,6 +264,10 @@ async function deleteWindowsAntigravityCredential(runCommand) {
 }
 
 async function restoreWindowsAntigravityCredential(snapshot, runCommand) {
+  if (snapshot?.snapshotFailed) {
+    logWarn("Antigravity credential snapshot failed; leaving the official credential unchanged");
+    return false;
+  }
   if (!snapshot || !(snapshot.refresh_token || snapshot.access_token)) {
     return deleteWindowsAntigravityCredential(runCommand);
   }
@@ -270,6 +276,7 @@ async function restoreWindowsAntigravityCredential(snapshot, runCommand) {
 
 module.exports = {
   CREDENTIAL_TARGET,
+  READ_SCRIPT,
   parseCredentialBlob,
   buildAntigravityCredentialPayload,
   readWindowsAntigravityCredential,

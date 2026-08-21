@@ -80,6 +80,7 @@ function loadPending() {
     return pending;
   } catch (error) {
     if (error?.code === "ENOENT" || error?.transientIoError) return null;
+    if (!(error instanceof SyntaxError)) return null;
     clearPendingFile();
     return null;
   }

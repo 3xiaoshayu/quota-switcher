@@ -33,7 +33,7 @@ export interface AccountQuota {
   agThirdPartyFiveHourRemaining?: number | null;
   agThirdPartyFiveHourResetAt?: string | number | null;
   priority: 'High' | 'Normal' | 'Low' | 'Ultra';
-  plan: 'Plus' | 'Pro' | 'Go' | 'Standard' | 'Enterprise' | 'Team' | 'Free' | 'Ultra';
+  plan: 'Plus' | 'Pro' | 'Pro+' | 'Go' | 'Standard' | 'Enterprise' | 'Team' | 'Business' | 'Edu' | 'Free' | 'Ultra';
   tokenValidity: string;
   tokenValidityPct?: number | null;
   resetInFiveHour: string;

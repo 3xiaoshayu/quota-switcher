@@ -4,7 +4,7 @@ const { httpJson, buildCodexHeaders, extractErrorCode, setHttpJsonTransport } = 
 const { setSecretCodec, protectData, unprotectData, ensureDir, normalizeAccountId, accountFilePath, loadIdx, saveIdx, withIndexLock, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct, getStorageDiagnostics, rebuildIndex, flushPendingAccountRewrites, resetPendingAccountRewritesForTests } = require("./storage");
 const { writeAuthJson, writeProjection, clearApiBaseUrl, killCodex, startCodex, doSwitch, launchOfficialCodex, setSwitchRuntimeForTests } = require("./switch");
 const { oauthLoginFlow, restorePendingOAuth, cancelOAuth, completeOAuthManually, getOAuthStatus, setOpenUrlHandler, setOAuthAccountSavedHandler, upsert, sameAccountIdentity, collapseDuplicateCodexAccounts } = require("./oauth");
-const { inspectAuthState, adoptOfficialAuth, reapplyManagedAuth, authFingerprint, identityMatchesAccount } = require("./auth-state");
+const { inspectAuthState, canMirrorOfficialAuth, adoptOfficialAuth, reapplyManagedAuth, authFingerprint, identityMatchesAccount } = require("./auth-state");
 const { initLogger, logInfo, logWarn, logError, getLogDir, sanitizeMessage } = require("./logger");
 const { refreshOneTok, needsRefresh, refreshAll } = require("./token-refresh");
 const { fetchQuota, fetchQuotaWithTokenRepair, isQuotaAuthError, refreshQuota, probeUsageOnly, canProbeUsageWithoutRefresh, needsBanProbe, extractQuotaMetrics, normalizeQuota } = require("./quota");
@@ -48,7 +48,7 @@ module.exports = {
   // oauth
   oauthLoginFlow, restorePendingOAuth, cancelOAuth, completeOAuthManually, getOAuthStatus, setOpenUrlHandler, setOAuthAccountSavedHandler, upsert, sameAccountIdentity, collapseDuplicateCodexAccounts,
   // auth state
-  inspectAuthState, adoptOfficialAuth, reapplyManagedAuth, authFingerprint, identityMatchesAccount,
+  inspectAuthState, canMirrorOfficialAuth, adoptOfficialAuth, reapplyManagedAuth, authFingerprint, identityMatchesAccount,
   // logger
   initLogger, logInfo, logWarn, logError, getLogDir, sanitizeMessage,
   // token-refresh

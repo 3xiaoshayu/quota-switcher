@@ -170,7 +170,34 @@ test("conflict auth inspect still matches a legacy record without plaintext acco
   const conflict = engine.inspectAuthState({ migrateProjection: false });
   assert.equal(conflict.status, "conflict");
   assert.equal(conflict.matchedAccountId, second.id);
-  assert.ok(decrypts.count >= 2);
+  // Current account plus the one stripped record. A vault-wide decrypt used to be 3.
+  assert.equal(decrypts.count, 2);
+});
+
+test("conflict auth inspect does not decrypt identified neighbors of a legacy match", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await addAccount(engine, "first-legacy-spare@example.com", "acct-first-legacy-spare", "first-legacy-spare");
+  const second = await addAccount(engine, "second-legacy-spare@example.com", "acct-second-legacy-spare", "second-legacy-spare");
+  await addAccount(engine, "spare-legacy-spare@example.com", "acct-spare-legacy-spare", "spare-legacy-spare");
+  const index = engine.loadIdx();
+  index.current_account_id = first.id;
+  engine.saveIdx(index);
+  engine.writeAuthJson(first);
+  engine.writeProjection(first, engine.writeAuthJson(first));
+  const filePath = engine.accountFilePath(second.id);
+  const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  delete raw.account_id;
+  delete raw.email;
+  fs.writeFileSync(filePath, JSON.stringify(raw), "utf8");
+  const secondAuth = require("../engine/switch").buildAuthJson(engine.loadAcct(second.id));
+  const config = require("../engine/config");
+  fs.writeFileSync(path.join(config.CODEX_DIR, "auth.json"), JSON.stringify(secondAuth), "utf8");
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const conflict = engine.inspectAuthState({ migrateProjection: false });
+  assert.equal(conflict.status, "conflict");
+  assert.equal(conflict.matchedAccountId, second.id);
+  assert.equal(decrypts.count, 2);
 });
 
 test("conflict auth inspect matches a listed email without decrypting the rest of the vault", async (t) => {
@@ -1207,6 +1234,23 @@ test("storage restores valid backups and preserves DPAPI failures", async t => {
   engine.setSecretCodec(codec);
 });
 
+test("a readable account with a corrupt token payload does not restore a stale backup", async (t) => {
+  const { engine, codec } = freshEngine(t);
+  const account = await addAccount(engine, "payload-keep@example.com", "acct-payload-keep", "payload-keep");
+  const filePath = engine.accountFilePath(account.id);
+  const primary = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  const stale = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  stale.email = "payload-stale@example.com";
+  stale.tokens_encrypted = codec.encrypt(JSON.stringify(tokens("payload-stale@example.com", "acct-payload-stale", "payload-stale")));
+  fs.writeFileSync(`${filePath}.bak`, `${JSON.stringify(stale, null, 2)}\n`, "utf8");
+  primary.tokens_encrypted = codec.encrypt("{");
+  fs.writeFileSync(filePath, `${JSON.stringify(primary, null, 2)}\n`, "utf8");
+  assert.equal(engine.loadAcct(account.id), null);
+  assert.equal(JSON.parse(fs.readFileSync(filePath, "utf8")).email, "payload-keep@example.com");
+  assert.equal(JSON.parse(fs.readFileSync(`${filePath}.bak`, "utf8")).email, "payload-stale@example.com");
+  assert.ok(engine.getStorageDiagnostics().some((item) => item.type === "account_credentials"));
+});
+
 test("account file access rejects unsafe ids and delete rolls back on index failure", async t => {
   const { engine } = freshEngine(t);
   const first = await addAccount(engine, "delete-one@example.com", "acct-delete-one", "delete-one");
@@ -1322,6 +1366,137 @@ test("auth state detects drift, migrates legacy projections, and adopts official
   assert.equal(conflictWarnings().length, 2);
 });
 
+test("identity-only aligned inspect does not authorize pushing vault tokens to official auth", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "mirror-rotate@example.com", "acct-mirror-rotate", "mirror-rotate");
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const originalAuth = engine.writeAuthJson(account);
+  engine.writeProjection(account, originalAuth);
+  const aligned = engine.inspectAuthState({ migrateProjection: false });
+  assert.equal(aligned.status, "aligned");
+  assert.equal(aligned.safeToMirrorOfficial, true);
+  assert.equal(engine.canMirrorOfficialAuth(aligned), true);
+
+  const rotatedTokens = tokens("mirror-rotate@example.com", "acct-mirror-rotate", "mirror-rotate-official");
+  const rotatedAuth = {
+    ...originalAuth,
+    tokens: {
+      ...rotatedTokens,
+      account_id: "acct-mirror-rotate",
+    },
+  };
+  const config = require("../engine/config");
+  const authPath = path.join(config.CODEX_DIR, "auth.json");
+  fs.writeFileSync(authPath, JSON.stringify(rotatedAuth), "utf8");
+  const rotated = engine.inspectAuthState({ migrateProjection: false });
+  assert.equal(rotated.status, "aligned");
+  assert.equal(rotated.safeToMirrorOfficial, false);
+  assert.equal(engine.canMirrorOfficialAuth(rotated), false);
+  assert.equal(engine.loadAcct(account.id).tokens.access_token, account.tokens.access_token);
+});
+
+test("the daemon does not overwrite an official Codex token rotation", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "daemon-rotate@example.com", "acct-daemon-rotate", "daemon-rotate");
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const originalAuth = engine.writeAuthJson(account);
+  engine.writeProjection(account, originalAuth);
+  const rotatedTokens = tokens("daemon-rotate@example.com", "acct-daemon-rotate", "daemon-rotate-official");
+  const rotatedAuth = {
+    ...originalAuth,
+    tokens: {
+      ...rotatedTokens,
+      account_id: "acct-daemon-rotate",
+    },
+  };
+  const config = require("../engine/config");
+  const authPath = path.join(config.CODEX_DIR, "auth.json");
+  fs.writeFileSync(authPath, JSON.stringify(rotatedAuth), "utf8");
+
+  const quotaModule = require("../engine/quota");
+  const originalFetch = quotaModule.fetchQuotaWithTokenRepair;
+  quotaModule.fetchQuotaWithTokenRepair = async () => ({
+    hourly_remaining_percentage: null,
+    hourly_window_present: false,
+    weekly_remaining_percentage: 70,
+    weekly_window_present: true,
+  });
+  t.after(() => { quotaModule.fetchQuotaWithTokenRepair = originalFetch; });
+
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.pausedReason, null);
+  assert.equal(JSON.parse(fs.readFileSync(authPath, "utf8")).tokens.access_token, rotatedTokens.access_token);
+  assert.equal(engine.loadAcct(account.id).tokens.access_token, account.tokens.access_token);
+});
+
+test("token refresh still mirrors official auth when the projection matches", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "refresh-mirror@example.com", "acct-refresh-mirror", "refresh-mirror");
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const originalAuth = engine.writeAuthJson(account);
+  engine.writeProjection(account, originalAuth);
+  const refreshed = tokens("refresh-mirror@example.com", "acct-refresh-mirror", "refresh-mirror-new");
+  const config = require("../engine/config");
+  const authPath = path.join(config.CODEX_DIR, "auth.json");
+  const result = await engine.refreshOneTok(account, {
+    force: true,
+    httpJson: async () => ({
+      status: 200,
+      headers: {},
+      body: JSON.stringify({
+        id_token: refreshed.id_token,
+        access_token: refreshed.access_token,
+        refresh_token: refreshed.refresh_token,
+      }),
+    }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(JSON.parse(fs.readFileSync(authPath, "utf8")).tokens.access_token, refreshed.access_token);
+});
+
+test("token refresh does not overwrite an official Codex token rotation", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "refresh-rotate@example.com", "acct-refresh-rotate", "refresh-rotate");
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const originalAuth = engine.writeAuthJson(account);
+  engine.writeProjection(account, originalAuth);
+  const rotatedTokens = tokens("refresh-rotate@example.com", "acct-refresh-rotate", "refresh-rotate-official");
+  const rotatedAuth = {
+    ...originalAuth,
+    tokens: {
+      ...rotatedTokens,
+      account_id: "acct-refresh-rotate",
+    },
+  };
+  const config = require("../engine/config");
+  const authPath = path.join(config.CODEX_DIR, "auth.json");
+  fs.writeFileSync(authPath, JSON.stringify(rotatedAuth), "utf8");
+  const refreshed = tokens("refresh-rotate@example.com", "acct-refresh-rotate", "refresh-rotate-vault");
+  const result = await engine.refreshOneTok(account, {
+    force: true,
+    httpJson: async () => ({
+      status: 200,
+      headers: {},
+      body: JSON.stringify({
+        id_token: refreshed.id_token,
+        access_token: refreshed.access_token,
+        refresh_token: refreshed.refresh_token,
+      }),
+    }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(JSON.parse(fs.readFileSync(authPath, "utf8")).tokens.access_token, rotatedTokens.access_token);
+  assert.equal(engine.loadAcct(account.id).tokens.access_token, refreshed.access_token);
+});
+
 test("auth state accepts and synchronizes token rotation for the same official identity", async t => {
   const { engine } = freshEngine(t);
   const account = await addAccount(engine, "same@example.com", "acct-same", "first-token");
@@ -1348,6 +1523,88 @@ test("auth state accepts and synchronizes token rotation for the same official i
   assert.equal(state.requiresResolution, false);
   assert.equal(synchronized.tokens.access_token, rotatedTokens.access_token);
   assert.equal(engine.inspectAuthState().status, "aligned");
+});
+
+test("inspect does not pull older official tokens over a fresher vault", async t => {
+  const { engine } = freshEngine(t);
+  const now = Math.floor(Date.now() / 1000);
+  const account = await addAccount(engine, "fresh-vault@example.com", "acct-fresh-vault", "fresh-vault");
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const originalAuth = engine.writeAuthJson(account);
+  engine.writeProjection(account, originalAuth);
+  const vaultClaims = {
+    email: "fresh-vault@example.com",
+    exp: now + 7200,
+    "https://api.openai.com/auth": {
+      account_id: "acct-fresh-vault",
+      user_id: "user-fresh-vault",
+      chatgpt_plan_type: "plus",
+      organizations: [],
+    },
+  };
+  account.tokens = {
+    id_token: jwt(vaultClaims),
+    access_token: jwt(vaultClaims),
+    refresh_token: "refresh-fresh-vault-new",
+  };
+  engine.saveAcct(account);
+  const staleOfficial = tokens("fresh-vault@example.com", "acct-fresh-vault", "fresh-vault-old");
+  const config = require("../engine/config");
+  fs.writeFileSync(path.join(config.CODEX_DIR, "auth.json"), JSON.stringify({
+    ...originalAuth,
+    tokens: {
+      ...staleOfficial,
+      account_id: "acct-fresh-vault",
+    },
+  }), "utf8");
+  const state = engine.inspectAuthState();
+  const loaded = engine.loadAcct(account.id);
+  assert.equal(state.status, "aligned");
+  assert.equal(loaded.tokens.access_token, account.tokens.access_token);
+  assert.equal(loaded.tokens.refresh_token, "refresh-fresh-vault-new");
+});
+
+test("switching the current Codex account does not revert a fresher vault token", async t => {
+  const { engine } = freshEngine(t);
+  const now = Math.floor(Date.now() / 1000);
+  const account = await addAccount(engine, "switch-fresh@example.com", "acct-switch-fresh", "switch-fresh");
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const originalAuth = engine.writeAuthJson(account);
+  engine.writeProjection(account, originalAuth);
+  const vaultClaims = {
+    email: "switch-fresh@example.com",
+    exp: now + 7200,
+    "https://api.openai.com/auth": {
+      account_id: "acct-switch-fresh",
+      user_id: "user-switch-fresh",
+      chatgpt_plan_type: "plus",
+      organizations: [],
+    },
+  };
+  account.tokens = {
+    id_token: jwt(vaultClaims),
+    access_token: jwt(vaultClaims),
+    refresh_token: "refresh-switch-fresh-new",
+  };
+  engine.saveAcct(account);
+  const staleOfficial = tokens("switch-fresh@example.com", "acct-switch-fresh", "switch-fresh-old");
+  const config = require("../engine/config");
+  fs.writeFileSync(path.join(config.CODEX_DIR, "auth.json"), JSON.stringify({
+    ...originalAuth,
+    tokens: {
+      ...staleOfficial,
+      account_id: "acct-switch-fresh",
+    },
+  }), "utf8");
+  const skipped = await engine.doSwitch(engine.loadAcct(account.id));
+  assert.equal(skipped.already, true);
+  const loaded = engine.loadAcct(account.id);
+  assert.equal(loaded.tokens.refresh_token, "refresh-switch-fresh-new");
+  assert.equal(loaded.tokens.access_token, account.tokens.access_token);
 });
 
 test("token refresh rechecks official auth before writing refreshed credentials", async t => {
@@ -2064,6 +2321,37 @@ test("daemon pauses before network work when official authentication conflicts",
   assert.deepEqual(result.tokenRefreshes, []);
 });
 
+test("the daemon does not restore a stale index backup after a non-JSON filesystem error", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "daemon-idx-fs@example.com", "acct-daemon-idx-fs", "daemon-idx-fs");
+  const other = await addAccount(engine, "daemon-idx-fs-b@example.com", "acct-daemon-idx-fs-b", "daemon-idx-fs-b");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const config = require("../engine/config");
+  const good = fs.readFileSync(config.IDX_PATH, "utf8");
+  const stale = JSON.parse(good);
+  stale.current_account_id = other.id;
+  fs.writeFileSync(`${config.IDX_PATH}.bak`, `${JSON.stringify(stale, null, 2)}\n`, "utf8");
+  const originalRead = fs.readFileSync;
+  fs.readFileSync = (file, encoding) => {
+    if (path.resolve(String(file)) === path.resolve(config.IDX_PATH)) {
+      const error = new Error("EISDIR: illegal operation on a directory");
+      error.code = "EISDIR";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.pausedReason, null);
+  assert.equal(result.failures.some((item) => item.stage === "account_index" && item.code === "EISDIR"), true);
+  assert.deepEqual(result.tokenRefreshes, []);
+  fs.readFileSync = originalRead;
+  assert.equal(JSON.parse(fs.readFileSync(config.IDX_PATH, "utf8")).current_account_id, current.id);
+  assert.equal(JSON.parse(fs.readFileSync(`${config.IDX_PATH}.bak`, "utf8")).current_account_id, other.id);
+});
+
 test("the daemon does not pause as an auth conflict when official auth.json stays locked", async t => {
   const { engine } = freshEngine(t);
   const account = await addAccount(engine, "daemon-auth-lock@example.com", "acct-daemon-auth-lock", "daemon-auth-lock");
@@ -2089,6 +2377,33 @@ test("the daemon does not pause as an auth conflict when official auth.json stay
   assert.equal(result.failures.some((item) => item.stage === "auth_inspect"), true);
   assert.equal(result.accountsUpdated, 0);
   assert.deepEqual(result.tokenRefreshes, []);
+});
+
+test("the daemon does not pause as an auth conflict when official auth.json hits a non-JSON filesystem error", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "daemon-auth-fs@example.com", "acct-daemon-auth-fs", "daemon-auth-fs");
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(account);
+  engine.writeProjection(account, auth);
+  const config = require("../engine/config");
+  const authPath = path.join(config.CODEX_DIR, "auth.json");
+  const originalRead = fs.readFileSync;
+  fs.readFileSync = (file, encoding) => {
+    if (path.resolve(String(file)) === path.resolve(authPath)) {
+      const error = new Error("EISDIR: illegal operation on a directory");
+      error.code = "EISDIR";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.pausedReason, null);
+  assert.equal(result.failures.some((item) => item.stage === "auth_inspect" && item.code === "EISDIR"), true);
+  fs.readFileSync = originalRead;
+  assert.ok(JSON.parse(fs.readFileSync(authPath, "utf8")).tokens.access_token);
 });
 
 test("daemon restart during in-flight work schedules an immediate replacement run", async t => {
@@ -2429,20 +2744,74 @@ test("Codex switch rollback retries when restoring a locked official file", asyn
     launch: () => { throw new Error("launch failed"); },
     sleep: async () => {},
   });
-  const originalWrite = fs.writeFileSync;
+  const originalOpen = fs.openSync;
   let failures = 0;
-  fs.writeFileSync = (target, ...rest) => {
-    if (path.resolve(String(target)) === path.resolve(`${authPath}.rollback.tmp`) && failures < 2) {
+  fs.openSync = (target, ...rest) => {
+    if (String(target).includes(".rollback.tmp") && failures < 2) {
       failures += 1;
       const error = new Error("EPERM: operation not permitted");
       error.code = "EPERM";
       throw error;
     }
-    return originalWrite(target, ...rest);
+    return originalOpen(target, ...rest);
   };
-  t.after(() => { fs.writeFileSync = originalWrite; });
+  t.after(() => { fs.openSync = originalOpen; });
   await assert.rejects(() => engine.doSwitch(target), /launch failed/);
   assert.equal(failures, 2);
+  assert.equal(fs.readFileSync(authPath, "utf8"), flushed);
+  assert.equal(engine.loadIdx().current_account_id, current.id);
+});
+
+test("Codex switch rollback fsyncs the restored official file before rename", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "rollback-fsync@example.com", "acct-rollback-fsync", "rollback-fsync");
+  const target = await addAccount(engine, "rollback-fsync-target@example.com", "acct-rollback-fsync-target", "rollback-fsync-target");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const config = require("../engine/config");
+  const authPath = path.join(config.CODEX_DIR, "auth.json");
+  const flushed = JSON.stringify({ tokens: { access_token: "flushed-for-rollback-fsync", id_token: "", refresh_token: "" } });
+  let living = [{ name: "Codex.exe", pid: 2147483645 }];
+  engine.setSwitchRuntimeForTests({
+    assertInstalled() {},
+    listProcesses: async () => living,
+    gracefulClose: async () => {
+      fs.writeFileSync(authPath, flushed, "utf8");
+      living = [];
+      return true;
+    },
+    forceClose: async () => {
+      living = [];
+      return true;
+    },
+    launch: () => { throw new Error("launch failed"); },
+    sleep: async () => {},
+  });
+  const originalFsync = fs.fsyncSync;
+  const originalRename = fs.renameSync;
+  let fsyncs = 0;
+  let renamedAuth = false;
+  fs.fsyncSync = (fd) => {
+    if (!renamedAuth) fsyncs += 1;
+    return originalFsync(fd);
+  };
+  fs.renameSync = (fromPath, toPath) => {
+    if (path.resolve(String(toPath)) === path.resolve(authPath)) {
+      assert.ok(fsyncs >= 1, "rollback must fsync before replacing auth.json");
+      renamedAuth = true;
+    }
+    return originalRename(fromPath, toPath);
+  };
+  t.after(() => {
+    fs.fsyncSync = originalFsync;
+    fs.renameSync = originalRename;
+  });
+  await assert.rejects(() => engine.doSwitch(target), /launch failed/);
+  assert.ok(fsyncs >= 1);
+  assert.equal(renamedAuth, true);
   assert.equal(fs.readFileSync(authPath, "utf8"), flushed);
   assert.equal(engine.loadIdx().current_account_id, current.id);
 });
@@ -2788,6 +3157,64 @@ test("pending OAuth still restores when the first JSON parse sees a torn write",
   assert.equal(restoredEngine.restorePendingOAuth(), true);
   assert.equal(restoredEngine.getOAuthStatus().pending, true);
   assert.equal(fs.existsSync(pendingPath), true, "a briefly torn pending file must not be cleared");
+  assert.equal(restoredEngine.cancelOAuth(), true);
+});
+
+test("readJsonWithBackup does not promote a backup on a non-JSON filesystem error", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-json-backup-"));
+  const filePath = path.join(root, "probe.json");
+  fs.writeFileSync(filePath, `${JSON.stringify({ keep: true })}\n`, "utf8");
+  fs.writeFileSync(`${filePath}.bak`, `${JSON.stringify({ keep: false })}\n`, "utf8");
+  const originalRead = fs.readFileSync;
+  fs.readFileSync = (file, encoding) => {
+    if (path.resolve(String(file)) === path.resolve(filePath)) {
+      const error = new Error("EISDIR: illegal operation on a directory");
+      error.code = "EISDIR";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => {
+    fs.readFileSync = originalRead;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const { readJsonWithBackup } = require("../engine/atomic-file");
+  assert.throws(
+    () => readJsonWithBackup(filePath),
+    (error) => error.code === "EISDIR",
+  );
+  fs.readFileSync = originalRead;
+  assert.equal(JSON.parse(fs.readFileSync(filePath, "utf8")).keep, true);
+  assert.equal(JSON.parse(fs.readFileSync(`${filePath}.bak`, "utf8")).keep, false);
+});
+
+test("pending OAuth is not cleared on a non-JSON filesystem error", async (t) => {
+  const { engine, codec } = freshEngine(t);
+  const pendingPromise = engine.oauthLoginFlow({ openBrowser: false });
+  const pendingPath = require("../engine/oauth").PENDING_PATH;
+  const envelope = fs.readFileSync(pendingPath, "utf8");
+  engine.cancelOAuth();
+  await assert.rejects(pendingPromise, /cancelled/);
+
+  fs.writeFileSync(pendingPath, envelope, "utf8");
+  const originalRead = fs.readFileSync;
+  fs.readFileSync = (target, encoding) => {
+    if (path.resolve(String(target)) === path.resolve(pendingPath)) {
+      const error = new Error("EISDIR: illegal operation on a directory");
+      error.code = "EISDIR";
+      throw error;
+    }
+    return originalRead(target, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+  clearEngineModules();
+  const restoredEngine = require("../engine");
+  restoredEngine.setSecretCodec(codec);
+  assert.equal(restoredEngine.restorePendingOAuth(), false);
+  fs.readFileSync = originalRead;
+  assert.equal(fs.readFileSync(pendingPath, "utf8"), envelope);
+  assert.equal(restoredEngine.restorePendingOAuth(), true);
+  assert.equal(restoredEngine.getOAuthStatus().pending, true);
   assert.equal(restoredEngine.cancelOAuth(), true);
 });
 
@@ -3471,6 +3898,58 @@ test("Cursor account index retries a transient lock instead of rebuilding", asyn
   assert.equal(failures, 2);
 });
 
+test("auto-switch config does not restore a stale backup after a leftover lock", t => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  engine.ensureDir(config.DATA_DIR);
+  fs.writeFileSync(config.CFG_FILE, JSON.stringify({ enabled: true, primary_threshold: 15 }), "utf8");
+  fs.writeFileSync(`${config.CFG_FILE}.bak`, JSON.stringify({ enabled: false, primary_threshold: 99 }), "utf8");
+  const originalRead = fs.readFileSync;
+  fs.readFileSync = (file, encoding) => {
+    if (path.resolve(String(file)) === path.resolve(config.CFG_FILE)) {
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+  assert.throws(
+    () => engine.loadAutoSwitchCfg(),
+    (error) => error.code === "EPERM" && error.transientIoError === true,
+  );
+  fs.readFileSync = originalRead;
+  assert.equal(JSON.parse(fs.readFileSync(config.CFG_FILE, "utf8")).enabled, true);
+  assert.equal(JSON.parse(fs.readFileSync(config.CFG_FILE, "utf8")).primary_threshold, 15);
+  assert.equal(JSON.parse(fs.readFileSync(`${config.CFG_FILE}.bak`, "utf8")).enabled, false);
+});
+
+test("auto-switch config does not restore a stale backup on a non-JSON filesystem error", t => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  engine.ensureDir(config.DATA_DIR);
+  fs.writeFileSync(config.CFG_FILE, JSON.stringify({ enabled: true, primary_threshold: 15 }), "utf8");
+  fs.writeFileSync(`${config.CFG_FILE}.bak`, JSON.stringify({ enabled: false, primary_threshold: 99 }), "utf8");
+  const originalRead = fs.readFileSync;
+  fs.readFileSync = (file, encoding) => {
+    if (path.resolve(String(file)) === path.resolve(config.CFG_FILE)) {
+      const error = new Error("EISDIR: illegal operation on a directory");
+      error.code = "EISDIR";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+  assert.throws(
+    () => engine.loadAutoSwitchCfg(),
+    (error) => error.code === "EISDIR",
+  );
+  fs.readFileSync = originalRead;
+  assert.equal(JSON.parse(fs.readFileSync(config.CFG_FILE, "utf8")).enabled, true);
+  assert.equal(JSON.parse(fs.readFileSync(config.CFG_FILE, "utf8")).primary_threshold, 15);
+  assert.equal(JSON.parse(fs.readFileSync(`${config.CFG_FILE}.bak`, "utf8")).enabled, false);
+});
+
 test("auto-switch config retries a transient lock instead of resetting", t => {
   const { engine } = freshEngine(t);
   const config = require("../engine/config");
@@ -3536,6 +4015,34 @@ test("network proxy state restores lastGood from backup after persistent corrupt
   const state = loadNetworkState();
   assert.equal(state.lastGood.proxyUrl, "http://127.0.0.1:7890");
   assert.equal(JSON.parse(fs.readFileSync(NETWORK_FILE, "utf8")).lastGood.proxyUrl, "http://127.0.0.1:7890");
+});
+
+test("network proxy state does not restore a stale backup on a non-JSON filesystem error", (t) => {
+  const { engine } = freshEngine(t);
+  const { loadNetworkState, persistLastGood, NETWORK_FILE } = require("../engine/proxy-resolve");
+  engine.ensureDir(path.dirname(NETWORK_FILE));
+  const good = { lastGood: { source: "env", proxyUrl: "http://127.0.0.1:7890" }, keep: "primary" };
+  fs.writeFileSync(NETWORK_FILE, JSON.stringify(good), "utf8");
+  fs.writeFileSync(`${NETWORK_FILE}.bak`, JSON.stringify({
+    lastGood: { source: "env", proxyUrl: "http://127.0.0.1:1" },
+    keep: "stale",
+  }), "utf8");
+  const originalRead = fs.readFileSync;
+  fs.readFileSync = (file, encoding) => {
+    if (path.resolve(String(file)) === path.resolve(NETWORK_FILE)) {
+      const error = new Error("EISDIR: illegal operation on a directory");
+      error.code = "EISDIR";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+  const state = loadNetworkState();
+  assert.equal(state.lastGood, undefined);
+  persistLastGood({ source: "env", proxyUrl: "http://127.0.0.1:9" });
+  fs.readFileSync = originalRead;
+  assert.deepEqual(JSON.parse(fs.readFileSync(NETWORK_FILE, "utf8")), good);
+  assert.equal(JSON.parse(fs.readFileSync(`${NETWORK_FILE}.bak`, "utf8")).keep, "stale");
 });
 
 test("network proxy state ignores a stale backup when the file is missing", (t) => {
@@ -3935,6 +4442,28 @@ test("transient read errors do not quarantine account files or drop them from th
   assert.equal(engine.loadAcct(account.id).email, "locked@example.com");
 });
 
+test("a non-JSON filesystem error does not quarantine a Codex account file", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "acct-fs@example.com", "acct-acct-fs", "acct-fs");
+  const filePath = engine.accountFilePath(account.id);
+  const original = fs.readFileSync(filePath, "utf8");
+  const originalRead = fs.readFileSync;
+  fs.readFileSync = (target, ...rest) => {
+    if (path.resolve(String(target)) === path.resolve(filePath)) {
+      const error = new Error("EISDIR: illegal operation on a directory");
+      error.code = "EISDIR";
+      throw error;
+    }
+    return originalRead(target, ...rest);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+  assert.equal(engine.loadAcct(account.id), null);
+  fs.readFileSync = originalRead;
+  assert.equal(fs.readFileSync(filePath, "utf8"), original);
+  assert.equal(engine.loadAcct(account.id).email, "acct-fs@example.com");
+  assert.ok(engine.loadIdx().accounts.some((item) => item.id === account.id));
+});
+
 test("a present Codex account still loads when existsSync reports it missing", async (t) => {
   const { engine } = freshEngine(t);
   const account = await addAccount(engine, "exists-lie@example.com", "acct-exists-lie", "exists-lie");
@@ -3992,6 +4521,77 @@ test("a Codex index rebuild retries a locked accounts directory", async (t) => {
   assert.equal(engine.loadAcct(account.id).email, "readdir-lock@example.com");
 });
 
+test("upserting the first Codex account does not mark it current", async (t) => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "idx-first-upsert@example.com", "acct-idx-first-upsert", "idx-first-upsert");
+  assert.equal(engine.currentAcct(), null);
+  assert.equal(engine.loadIdx().current_account_id, null);
+  assert.ok(engine.loadIdx().accounts.some((item) => item.id === account.id));
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.pausedReason, null);
+  assert.notEqual(result.authState?.status, "missing_official_auth");
+});
+
+test("a missing Codex index rebuilds the current account from last_used", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await addAccount(engine, "idx-rebuild-a@example.com", "acct-idx-rebuild-a", "idx-rebuild-a");
+  const second = await addAccount(engine, "idx-rebuild-b@example.com", "acct-idx-rebuild-b", "idx-rebuild-b");
+  first.last_used = 100;
+  engine.saveAcct(first);
+  second.last_used = 200;
+  engine.saveAcct(second);
+  const index = engine.loadIdx();
+  index.current_account_id = second.id;
+  engine.saveIdx(index);
+  const config = require("../engine/config");
+  fs.unlinkSync(config.IDX_PATH);
+  try { fs.unlinkSync(`${config.IDX_PATH}.bak`); } catch {}
+  const loaded = engine.loadIdx();
+  assert.equal(loaded.current_account_id, second.id);
+  assert.ok(loaded.accounts.some((item) => item.id === first.id));
+  assert.ok(loaded.accounts.some((item) => item.id === second.id));
+});
+
+test("an unreadable Codex index without backup keeps the most recently used current account", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await addAccount(engine, "idx-unreadable-a@example.com", "acct-idx-unreadable-a", "idx-unreadable-a");
+  const second = await addAccount(engine, "idx-unreadable-b@example.com", "acct-idx-unreadable-b", "idx-unreadable-b");
+  first.last_used = 300;
+  engine.saveAcct(first);
+  second.last_used = 100;
+  engine.saveAcct(second);
+  const index = engine.loadIdx();
+  index.current_account_id = first.id;
+  engine.saveIdx(index);
+  const config = require("../engine/config");
+  try { fs.unlinkSync(`${config.IDX_PATH}.bak`); } catch {}
+  fs.writeFileSync(config.IDX_PATH, "{ corrupted", "utf8");
+  const loaded = engine.loadIdx();
+  assert.equal(loaded.current_account_id, first.id);
+  assert.ok(loaded.accounts.some((item) => item.id === first.id));
+  assert.ok(loaded.accounts.some((item) => item.id === second.id));
+});
+
+test("the daemon does not pause as an auth conflict after a missing index rebuilds current", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "idx-daemon-rebuild@example.com", "acct-idx-daemon-rebuild", "idx-daemon-rebuild");
+  current.last_used = 400;
+  engine.saveAcct(current);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const config = require("../engine/config");
+  fs.unlinkSync(config.IDX_PATH);
+  try { fs.unlinkSync(`${config.IDX_PATH}.bak`); } catch {}
+  const result = await engine.runDaemonWorker();
+  assert.equal(engine.loadIdx().current_account_id, current.id);
+  assert.equal(result.pausedReason, null);
+  assert.notEqual(result.authState?.status, "unmanaged_official_auth");
+  assert.notEqual(result.authState?.status, "auth_conflict");
+});
+
 test("a missing Codex index rebuilds from account files instead of a stale backup", async (t) => {
   const { engine } = freshEngine(t);
   const first = await addAccount(engine, "idx-stale-a@example.com", "acct-idx-stale-a", "idx-stale-a");
@@ -4011,6 +4611,91 @@ test("a missing Codex index rebuilds from account files instead of a stale backu
   assert.equal(engine.loadAcct(second.id).email, "idx-stale-b@example.com");
 });
 
+test("a corrupt Codex index does not resurrect a deleted account from backup", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await addAccount(engine, "idx-ghost-a@example.com", "acct-idx-ghost-a", "idx-ghost-a");
+  const second = await addAccount(engine, "idx-ghost-b@example.com", "acct-idx-ghost-b", "idx-ghost-b");
+  const index = engine.loadIdx();
+  index.current_account_id = second.id;
+  engine.saveIdx(index);
+  const config = require("../engine/config");
+  fs.writeFileSync(`${config.IDX_PATH}.bak`, fs.readFileSync(config.IDX_PATH, "utf8"), "utf8");
+  engine.deleteAcct(second.id, { allowCurrent: true });
+  fs.writeFileSync(config.IDX_PATH, "{ corrupted", "utf8");
+  const loaded = engine.loadIdx();
+  assert.equal(loaded.accounts.some((item) => item.id === second.id), false);
+  assert.ok(loaded.accounts.some((item) => item.id === first.id));
+  assert.notEqual(loaded.current_account_id, second.id);
+  assert.equal(engine.loadAcct(second.id), null);
+});
+
+test("a non-JSON filesystem error does not restore a stale Codex index backup", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await addAccount(engine, "idx-fs-a@example.com", "acct-idx-fs-a", "idx-fs-a");
+  const second = await addAccount(engine, "idx-fs-b@example.com", "acct-idx-fs-b", "idx-fs-b");
+  const index = engine.loadIdx();
+  index.current_account_id = second.id;
+  engine.saveIdx(index);
+  const config = require("../engine/config");
+  const good = fs.readFileSync(config.IDX_PATH, "utf8");
+  const stale = JSON.parse(good);
+  stale.current_account_id = first.id;
+  stale.accounts = stale.accounts.filter((item) => item.id === first.id);
+  fs.writeFileSync(`${config.IDX_PATH}.bak`, `${JSON.stringify(stale, null, 2)}\n`, "utf8");
+  const originalRead = fs.readFileSync;
+  fs.readFileSync = (file, encoding) => {
+    if (path.resolve(String(file)) === path.resolve(config.IDX_PATH)) {
+      const error = new Error("EISDIR: illegal operation on a directory");
+      error.code = "EISDIR";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+  assert.throws(() => engine.loadIdx(), (error) => error.code === "EISDIR");
+  fs.readFileSync = originalRead;
+  const loaded = JSON.parse(fs.readFileSync(config.IDX_PATH, "utf8"));
+  assert.equal(loaded.current_account_id, second.id);
+  assert.ok(loaded.accounts.some((item) => item.id === second.id));
+  assert.equal(JSON.parse(fs.readFileSync(`${config.IDX_PATH}.bak`, "utf8")).current_account_id, first.id);
+});
+
+test("a non-JSON filesystem error does not rebuild a Cursor index", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertCursorAccount({
+    email: "idx-fs-cursor@example.com",
+    auth_id: "user_idx_fs_cursor",
+    access_token: jwt({
+      email: "idx-fs-cursor@example.com",
+      sub: "user_idx_fs_cursor",
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }),
+    refresh_token: "refresh-idx-fs-cursor",
+  });
+  const config = require("../engine/config");
+  const rawIndex = JSON.parse(fs.readFileSync(config.CURSOR_IDX_PATH, "utf8"));
+  rawIndex.current_cursor_account_id = created.account.id;
+  rawIndex.accounts.push({ id: "cursor_marker_not_a_file", email: "marker@example.com" });
+  fs.writeFileSync(config.CURSOR_IDX_PATH, `${JSON.stringify(rawIndex, null, 2)}\n`);
+  const good = fs.readFileSync(config.CURSOR_IDX_PATH, "utf8");
+  const originalRead = fs.readFileSync;
+  fs.readFileSync = (file, encoding) => {
+    if (path.resolve(String(file)) === path.resolve(config.CURSOR_IDX_PATH)) {
+      const error = new Error("EISDIR: illegal operation on a directory");
+      error.code = "EISDIR";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+  assert.throws(() => engine.loadCursorIdx(), (error) => error.code === "EISDIR");
+  fs.readFileSync = originalRead;
+  const loaded = JSON.parse(fs.readFileSync(config.CURSOR_IDX_PATH, "utf8"));
+  assert.equal(loaded.current_cursor_account_id, created.account.id);
+  assert.equal(loaded.accounts.some((item) => item.id === "cursor_marker_not_a_file"), true);
+  assert.equal(fs.readFileSync(config.CURSOR_IDX_PATH, "utf8"), good);
+});
+
 test("a corrupt Codex index still restores from backup", async (t) => {
   const { engine } = freshEngine(t);
   const account = await addAccount(engine, "idx-bak@example.com", "acct-idx-bak", "idx-bak");
@@ -4024,6 +4709,62 @@ test("a corrupt Codex index still restores from backup", async (t) => {
   assert.equal(loaded.current_account_id, account.id);
   assert.ok(loaded.accounts.some((item) => item.id === account.id));
   assert.equal(JSON.parse(fs.readFileSync(config.IDX_PATH, "utf8")).current_account_id, account.id);
+});
+
+test("a corrupt Cursor index still restores from backup", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertCursorAccount({
+    email: "idx-cursor-bak@example.com",
+    auth_id: "user_idx_cursor_bak",
+    access_token: jwt({
+      email: "idx-cursor-bak@example.com",
+      sub: "user_idx_cursor_bak",
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }),
+    refresh_token: "refresh-idx-cursor-bak",
+  });
+  engine.setCurrentCursorAccountId(created.account.id);
+  const config = require("../engine/config");
+  fs.writeFileSync(`${config.CURSOR_IDX_PATH}.bak`, fs.readFileSync(config.CURSOR_IDX_PATH, "utf8"), "utf8");
+  fs.writeFileSync(config.CURSOR_IDX_PATH, "{ corrupted", "utf8");
+  const loaded = engine.loadCursorIdx();
+  assert.equal(loaded.current_cursor_account_id, created.account.id);
+  assert.ok(loaded.accounts.some((item) => item.id === created.account.id));
+  assert.equal(JSON.parse(fs.readFileSync(config.CURSOR_IDX_PATH, "utf8")).current_cursor_account_id, created.account.id);
+});
+
+test("a corrupt Cursor index does not resurrect a deleted account from backup", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await engine.upsertCursorAccount({
+    email: "idx-cursor-ghost-a@example.com",
+    auth_id: "user_idx_cursor_ghost_a",
+    access_token: jwt({
+      email: "idx-cursor-ghost-a@example.com",
+      sub: "user_idx_cursor_ghost_a",
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }),
+    refresh_token: "refresh-idx-cursor-ghost-a",
+  });
+  const second = await engine.upsertCursorAccount({
+    email: "idx-cursor-ghost-b@example.com",
+    auth_id: "user_idx_cursor_ghost_b",
+    access_token: jwt({
+      email: "idx-cursor-ghost-b@example.com",
+      sub: "user_idx_cursor_ghost_b",
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }),
+    refresh_token: "refresh-idx-cursor-ghost-b",
+  });
+  engine.setCurrentCursorAccountId(second.account.id);
+  const config = require("../engine/config");
+  fs.writeFileSync(`${config.CURSOR_IDX_PATH}.bak`, fs.readFileSync(config.CURSOR_IDX_PATH, "utf8"), "utf8");
+  engine.deleteCursorAcct(second.account.id, { allowCurrent: true });
+  fs.writeFileSync(config.CURSOR_IDX_PATH, "{ corrupted", "utf8");
+  const loaded = engine.loadCursorIdx();
+  assert.equal(loaded.accounts.some((item) => item.id === second.account.id), false);
+  assert.ok(loaded.accounts.some((item) => item.id === first.account.id));
+  assert.notEqual(loaded.current_cursor_account_id, second.account.id);
+  assert.equal(engine.loadCursorAcct(second.account.id), null);
 });
 
 test("a Codex account still loads when the first JSON parse sees a torn write", async (t) => {
@@ -4055,6 +4796,27 @@ test("a torn Codex index is not rebuilt without the current account", async (t) 
   assert.equal(loaded.current_account_id, account.id);
   assert.ok(loaded.accounts.some((item) => item.id === account.id));
   assert.equal(fs.existsSync(config.IDX_PATH), true, "a briefly torn index must not be quarantined");
+});
+
+test("a corrupt Codex auth.json still restores from backup instead of pausing", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "auth-bak@example.com", "acct-auth-bak", "auth-bak");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const config = require("../engine/config");
+  const authPath = path.join(config.CODEX_DIR, "auth.json");
+  fs.writeFileSync(`${authPath}.bak`, fs.readFileSync(authPath, "utf8"), "utf8");
+  fs.writeFileSync(authPath, "{ corrupted", "utf8");
+  const state = engine.inspectAuthState({ migrateProjection: false });
+  assert.equal(state.status, "aligned");
+  assert.equal(state.requiresResolution, false);
+  assert.ok(JSON.parse(fs.readFileSync(authPath, "utf8")).tokens.access_token);
+  const worker = await engine.runDaemonWorker();
+  assert.equal(worker.pausedReason, null);
+  assert.notEqual(worker.authState?.status, "missing_official_auth");
 });
 
 test("a torn Codex auth.json is not treated as missing official auth", async (t) => {
@@ -4372,6 +5134,97 @@ test("the daemon still decrypts expired tokens that have a refresh token", async
   assert.equal(refreshedId, expired.id);
   assert.equal(result.tokenRefreshes.length, 1);
   assert.equal(result.tokenRefreshes[0].ok, true);
+});
+
+test("the daemon keeps finished refresh work when auto-switch config is briefly locked", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "daemon-cfg-lock@example.com", "acct-daemon-cfg-lock", "daemon-cfg-lock");
+  account.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+  engine.saveAcct(account);
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(account);
+  engine.writeProjection(account, auth);
+  engine.saveAutoSwitchCfg({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+  const tokenRefresh = require("../engine/token-refresh");
+  const originalRefresh = tokenRefresh.refreshOneTok;
+  tokenRefresh.refreshOneTok = async (acct) => {
+    acct.token_generation = Number(acct.token_generation || 0) + 1;
+    return { ok: true, skipped: false, gen: acct.token_generation };
+  };
+  const config = require("../engine/config");
+  const originalRead = fs.readFileSync;
+  fs.readFileSync = (file, encoding) => {
+    if (path.resolve(String(file)) === path.resolve(config.CFG_FILE)) {
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => {
+    tokenRefresh.refreshOneTok = originalRefresh;
+    fs.readFileSync = originalRead;
+  });
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.pausedReason, null);
+  assert.ok(result.tokenRefreshes.some((item) => item.ok === true));
+  assert.ok(result.failures.some((item) => item.stage === "auto_switch_config"));
+  assert.equal(result.autoSwitchResult, null);
+});
+
+test("the daemon keeps quota work when a later index read hits a non-JSON filesystem error", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "daemon-idx-late@example.com", "acct-daemon-idx-late", "daemon-idx-late");
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(account);
+  engine.writeProjection(account, auth);
+  const config = require("../engine/config");
+  const good = fs.readFileSync(config.IDX_PATH, "utf8");
+  const stale = JSON.parse(good);
+  stale.current_account_id = null;
+  fs.writeFileSync(`${config.IDX_PATH}.bak`, `${JSON.stringify(stale, null, 2)}\n`, "utf8");
+  const quotaModule = require("../engine/quota");
+  const originalFetch = quotaModule.fetchQuotaWithTokenRepair;
+  let allowIndex = true;
+  quotaModule.fetchQuotaWithTokenRepair = async () => {
+    allowIndex = false;
+    return {
+      hourly_remaining_percentage: null,
+      hourly_window_present: false,
+      weekly_remaining_percentage: 80,
+      weekly_window_present: true,
+    };
+  };
+  const originalRead = fs.readFileSync;
+  fs.readFileSync = (file, encoding) => {
+    if (!allowIndex && path.resolve(String(file)) === path.resolve(config.IDX_PATH)) {
+      const error = new Error("EISDIR: illegal operation on a directory");
+      error.code = "EISDIR";
+      throw error;
+    }
+    return originalRead(file, encoding);
+  };
+  t.after(() => {
+    quotaModule.fetchQuotaWithTokenRepair = originalFetch;
+    fs.readFileSync = originalRead;
+  });
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.pausedReason, null);
+  assert.ok(result.accountsUpdated >= 1);
+  assert.equal(result.failures.some((item) => item.stage === "account_index" && item.code === "EISDIR"), true);
+  fs.readFileSync = originalRead;
+  assert.equal(JSON.parse(fs.readFileSync(config.IDX_PATH, "utf8")).current_account_id, account.id);
+  assert.equal(JSON.parse(fs.readFileSync(`${config.IDX_PATH}.bak`, "utf8")).current_account_id, null);
 });
 
 test("the daemon writes the current auth projection without a second decrypt after quota refresh", async t => {
@@ -5407,6 +6260,26 @@ test("deferred plaintext rewrite retries a transient stat lock", async t => {
   assert.ok(afterFlush.tokens_encrypted, "deferred rewrite must still encrypt after a transient stat lock");
   assert.equal(afterFlush.tokens, undefined);
   assert.equal(fs.readFileSync(filePath, "utf8").includes("plain-stat-token"), false);
+});
+
+test("deferred plaintext rewrite does not clobber a newer saveAcct", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "defer-save@example.com", "acct-defer-save", "defer-save");
+  const filePath = engine.accountFilePath(account.id);
+  const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  delete raw.tokens_encrypted;
+  raw.tokens = { ...account.tokens, refresh_token: "plain-before-save" };
+  fs.writeFileSync(filePath, JSON.stringify(raw));
+
+  engine.listAccts();
+  const fresh = engine.loadAcct(account.id);
+  fresh.tokens.refresh_token = "saved-after-list";
+  fresh.token_generation = Number(fresh.token_generation || 0) + 5;
+  engine.saveAcct(fresh);
+  await engine.flushPendingAccountRewrites();
+  const loaded = engine.loadAcct(account.id);
+  assert.equal(loaded.tokens.refresh_token, "saved-after-list");
+  assert.equal(loaded.token_generation, fresh.token_generation);
 });
 
 test("deferred plaintext rewrite is discarded when the file changes first", async t => {

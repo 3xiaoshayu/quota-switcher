@@ -190,11 +190,19 @@ function restoreCapturedFile(filePath, content) {
     return;
   }
   ensureParent(filePath);
-  const tempPath = `${filePath}.rollback.tmp`;
+  const tempPath = `${filePath}.rollback.tmp.${uniqueSuffix()}`;
+  let descriptor = null;
   try {
-    writeFileWithRetry(tempPath, content);
+    descriptor = withTransientIoRetry(() => fs.openSync(tempPath, "w"));
+    withTransientIoRetry(() => fs.writeFileSync(descriptor, content));
+    withTransientIoRetry(() => fs.fsyncSync(descriptor));
+    withTransientIoRetry(() => fs.closeSync(descriptor));
+    descriptor = null;
     renameWithRetry(tempPath, filePath);
   } catch (error) {
+    if (descriptor !== null) {
+      try { fs.closeSync(descriptor); } catch {}
+    }
     try { unlinkIfPresent(tempPath); } catch {}
     throw error;
   }
@@ -233,6 +241,7 @@ function readJsonWithBackup(filePath) {
     return readJsonWithRetry(filePath);
   } catch (error) {
     if (error?.code === "ENOENT" || error?.transientIoError) throw error;
+    if (!(error instanceof SyntaxError)) throw error;
     try {
       const value = readJsonWithRetry(`${filePath}.bak`);
       try { restoreBackup(filePath); } catch {}

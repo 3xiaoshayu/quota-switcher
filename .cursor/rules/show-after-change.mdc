@@ -10,4 +10,4 @@ alwaysApply: true
 1. 需要时先重建渲染进程（`npm run renderer:build`）
 2. 启动 Electron 桌面应用（源码 `electron .` / `npm run start`），不要只在对话里描述
 3. 尽量把改到的页面/弹窗打开到能看见的状态
-4. 展示时不要真的切 Codex 账号、不要点完 OAuth 授权、不要替用户处理登录冲突（采用/重写）
+4. 展示界面时不要点完 OAuth、不要替用户处理登录冲突（采用/重写）。后端验证可以真切 Codex / 反重力；Cursor **绝对不能切**。

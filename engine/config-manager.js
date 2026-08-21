@@ -49,6 +49,10 @@ function loadAutoSwitchCfg() {
   // A missing file is a fresh start (or an intentional reset), not
   // corruption: do not resurrect a stale backup for it.
   if (primaryError.code === "ENOENT") return normalizeAutoSwitchCfg();
+  // A leftover lock is also not corruption. Restoring .bak here can flip
+  // enabled/thresholds while the real file is still good.
+  if (primaryError.transientIoError) throw primaryError;
+  if (primaryError.code && !(primaryError instanceof SyntaxError)) throw primaryError;
 
   try {
     const restored = normalizeAutoSwitchCfg(readJsonWithRetry(`${CFG_FILE}.bak`));

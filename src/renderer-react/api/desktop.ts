@@ -792,8 +792,10 @@ export function avatarGradient(id: string): string {
 
 function planForUi(planType: string | null | undefined): AccountQuota['plan'] {
   const value = String(planType || '').toLowerCase().trim();
-  if (value.includes('enterprise')) return 'Enterprise';
-  if (value.includes('team') || value.includes('business')) return 'Team';
+  if (value.includes('enterprise') || value === 'hc') return 'Enterprise';
+  if (value.includes('edu')) return 'Edu';
+  // ChatGPT Team was renamed to Business. JWT may still say team.
+  if (value.includes('team') || value.includes('business')) return 'Business';
   if (value.includes('plus')) return 'Plus';
   if (value.includes('pro')) return 'Pro';
   if (value === 'go' || value.includes('chatgptgo') || value.includes('goplan')) return 'Go';
@@ -802,9 +804,17 @@ function planForUi(planType: string | null | undefined): AccountQuota['plan'] {
 
 function cursorPlanForUi(planType: string | null | undefined): AccountQuota['plan'] {
   const value = String(planType || '').toLowerCase().trim();
+  if (!value) return 'Free';
+  if (value.includes('ultra')) return 'Ultra';
+  if (/(?:pro\s*\+|pro\+|pro_plus|pro-plus|proplus)/.test(value)) return 'Pro+';
   if (value.includes('pro')) return 'Pro';
-  if (value.includes('plus')) return 'Plus';
-  if (value.includes('team') || value.includes('business') || value.includes('enterprise')) return 'Team';
+  // Cursor stores every paid org seat as "enterprise": Teams Standard,
+  // Teams Premium, and true Enterprise. The usage API does not say which.
+  if (
+    value.includes('team')
+    || value.includes('business')
+    || value.includes('enterprise')
+  ) return 'Team';
   if (value === 'go' || value.includes('chatgptgo') || value.includes('goplan')) return 'Go';
   return 'Free';
 }
@@ -824,13 +834,13 @@ export function planCaption(account: Pick<AccountQuota, 'plan' | 'status'>): str
 function priorityForUi(account: DesktopAccount): AccountQuota['priority'] {
   const plan = String(account.plan_type || '').toLowerCase();
   if (plan.includes('enterprise')) return 'Ultra';
-  if (plan.includes('plus') || plan.includes('pro') || plan.includes('team')) return 'High';
+  if (plan.includes('plus') || plan.includes('pro') || plan.includes('team') || plan.includes('business') || plan.includes('edu')) return 'High';
   return 'Normal';
 }
 
 function cursorPriorityForUi(account: DesktopAccount): AccountQuota['priority'] {
   const plan = cursorPlanForUi(account.plan_type || account.quota?.membership_type || account.quota?.plan_type);
-  if (plan === 'Team' || plan === 'Pro' || plan === 'Plus') return 'High';
+  if (plan === 'Team' || plan === 'Pro' || plan === 'Pro+' || plan === 'Plus' || plan === 'Ultra') return 'High';
   return 'Normal';
 }
 

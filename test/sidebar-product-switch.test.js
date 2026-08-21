@@ -19,6 +19,8 @@ test("sidebar product switch is an official-icon dock", () => {
   assert.match(sidebar, /assets\/products\/cursor\.png/);
   assert.match(sidebar, /assets\/products\/antigravity\.png/);
   assert.doesNotMatch(sidebar, /grid-cols-2/);
+  assert.match(sidebar, /leading-\[1\.25\]/);
+  assert.doesNotMatch(sidebar, /text-\[10px\] font-semibold leading-none truncate max-w-full/);
   assert.match(products, /PRODUCT_ICON_DOCK_LIMIT = 5/);
 });
 

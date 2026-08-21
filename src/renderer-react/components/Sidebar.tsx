@@ -101,7 +101,7 @@ function ProductSwitch({
                 <ProductIcon id={item.id} className="w-9 h-9 rounded-[10px]" />
               </span>
               <span
-                className={`text-[10px] font-semibold leading-none truncate max-w-full ${
+                className={`text-[10px] font-semibold leading-[1.25] truncate max-w-full ${
                   selected ? 'text-label' : 'text-label-3'
                 }`}
               >

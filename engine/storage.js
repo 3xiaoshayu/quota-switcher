@@ -47,6 +47,7 @@ module.exports = {
   accountFilePath: store.accountFilePath,
   loadIdx: store.loadIdx,
   saveIdx: store.saveIdx,
+  upsertIndex: store.upsertIndex,
   withIndexLock: store.withIndexLock,
   loadAcct: store.loadAcct,
   saveAcct: store.saveAcct,

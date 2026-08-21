@@ -533,6 +533,10 @@ test("dashboard maps OpenAI plan types to official names", async () => {
       { id: "pro", email: "pro@example.com", plan_type: "pro", token_status: tokenStatus },
       { id: "go", email: "go@example.com", plan_type: "go", token_status: tokenStatus },
       { id: "ent", email: "ent@example.com", plan_type: "enterprise", token_status: tokenStatus },
+      { id: "biz", email: "biz@example.com", plan_type: "business", token_status: tokenStatus },
+      { id: "team", email: "team@example.com", plan_type: "team", token_status: tokenStatus },
+      { id: "hc", email: "hc@example.com", plan_type: "hc", token_status: tokenStatus },
+      { id: "edu", email: "edu@example.com", plan_type: "edu", token_status: tokenStatus },
       { id: "free", email: "free@example.com", plan_type: "free", token_status: tokenStatus },
       { id: "freeplan", email: "freeplan@example.com", plan_type: "chatgptfreeplan", token_status: tokenStatus },
       { id: "goplan", email: "goplan@example.com", plan_type: "chatgptgoplan", token_status: tokenStatus },
@@ -542,11 +546,13 @@ test("dashboard maps OpenAI plan types to official names", async () => {
   const snapshot = await desktopApi.loadDashboardState();
   assert.deepEqual(
     snapshot.accounts.map((account) => account.plan),
-    ["Plus", "Pro", "Go", "Enterprise", "Free", "Free", "Go"],
+    ["Plus", "Pro", "Go", "Enterprise", "Business", "Business", "Enterprise", "Edu", "Free", "Free", "Go"],
   );
   const { planLabel } = loadDesktopExports(bridge());
   assert.equal(planLabel("Plus"), "Plus Plan");
   assert.equal(planLabel("Pro"), "Pro Plan");
+  assert.equal(planLabel("Business"), "Business Plan");
+  assert.equal(planLabel("Edu"), "Edu Plan");
   assert.equal(planLabel("Team Plan"), "Team Plan");
   assert.equal(planLabel("Go"), "Go Plan");
   assert.equal(planLabel("Free"), "Free Plan");
@@ -1198,6 +1204,71 @@ test("cursor account mapping never uses ban status and rounds leftover quota", (
   assert.equal(staleBars[2].remaining, null);
 });
 
+test("cursor personal plans map Ultra and Pro+ instead of falling through to Free", () => {
+  const { mapCursorAccountForUi, planLabel } = loadDesktopExports(bridge());
+  const liveToken = { accessAvailable: true, refreshAvailable: true, expired: false, timeLeft: 3600 };
+  const ultra = mapCursorAccountForUi({
+    id: "cursor_ultra",
+    email: "ultra@example.com",
+    plan_type: "ultra",
+    quota: { membership_type: "ultra", plan_remaining_percentage: 100 },
+    token_status: liveToken,
+  }, { id: "cursor_ultra" });
+  assert.equal(ultra.plan, "Ultra");
+  assert.equal(ultra.priority, "High");
+  assert.equal(planLabel(ultra.plan), "Ultra Plan");
+
+  const fromQuotaOnly = mapCursorAccountForUi({
+    id: "cursor_ultra_quota",
+    email: "ultra-quota@example.com",
+    quota: { membership_type: "ultra" },
+    token_status: liveToken,
+  }, null);
+  assert.equal(fromQuotaOnly.plan, "Ultra");
+
+  const proPlus = mapCursorAccountForUi({
+    id: "cursor_pro_plus",
+    email: "proplus@example.com",
+    plan_type: "pro_plus",
+    token_status: liveToken,
+  }, null);
+  assert.equal(proPlus.plan, "Pro+");
+  assert.equal(planLabel(proPlus.plan), "Pro+ Plan");
+
+  const pro = mapCursorAccountForUi({
+    id: "cursor_pro",
+    email: "pro@example.com",
+    plan_type: "pro",
+    token_status: liveToken,
+  }, null);
+  assert.equal(pro.plan, "Pro");
+  assert.equal(planLabel(pro.plan), "Pro Plan");
+
+  const hobby = mapCursorAccountForUi({
+    id: "cursor_hobby",
+    email: "hobby@example.com",
+    plan_type: "hobby",
+    token_status: liveToken,
+  }, null);
+  assert.equal(hobby.plan, "Free");
+});
+
+test("cursor org seats stay Team because the API only reports enterprise", () => {
+  const { mapCursorAccountForUi, planLabel } = loadDesktopExports(bridge());
+  const liveToken = { accessAvailable: true, refreshAvailable: true, expired: false, timeLeft: 3600 };
+  for (const planType of ["enterprise", "team", "team_premium", "teams_standard"]) {
+    const mapped = mapCursorAccountForUi({
+      id: `cursor_${planType}`,
+      email: `${planType}@example.com`,
+      plan_type: planType,
+      quota: { membership_type: planType },
+      token_status: liveToken,
+    }, null);
+    assert.equal(mapped.plan, "Team", planType);
+    assert.equal(planLabel(mapped.plan), "Team Plan");
+  }
+});
+
 test("token validity bar uses update or create time when jwt iat is missing", () => {
   const { mapCursorAccountForUi, mapAccountForUi } = loadDesktopExports(bridge());
   const now = Math.floor(Date.now() / 1000);
@@ -1422,6 +1493,15 @@ test("antigravity plans map to Free Pro Ultra without Standard", () => {
   }, null);
   assert.equal(pro.plan, "Pro");
   assert.equal(planLabel(pro.plan), "Pro Plan");
+
+  const googlePro = mapAntigravityAccountForUi({
+    id: "antigravity_g1_pro",
+    email: "ag@example.com",
+    plan_type: "g1-pro-tier",
+    quota: { tier: "g1-pro-tier" },
+  }, null);
+  assert.equal(googlePro.plan, "Pro");
+  assert.equal(planLabel(googlePro.plan), "Pro Plan");
 
   const ultra = mapAntigravityAccountForUi({
     id: "antigravity_ultra",

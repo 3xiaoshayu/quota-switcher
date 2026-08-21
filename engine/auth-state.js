@@ -1,7 +1,7 @@
 const path = require("node:path");
 const { CODEX_DIR } = require("./config");
 const { sha256hex, jwtPayload, extractChatgptAccountId } = require("./crypto-utils");
-const { writeJsonAtomic, readJsonWithRetry } = require("./atomic-file");
+const { writeJsonAtomic, readJsonWithBackup } = require("./atomic-file");
 const { loadIdx, saveIdx, loadAcct, saveAcct, listAccts } = require("./storage");
 const { logInfo, logWarn } = require("./logger");
 
@@ -11,7 +11,10 @@ let lastConflictWarning = null;
 
 function returnNonConflict(state) {
   lastConflictWarning = null;
-  return state;
+  return {
+    safeToMirrorOfficial: false,
+    ...state,
+  };
 }
 
 function returnConflict(state, officialFingerprint) {
@@ -50,11 +53,13 @@ function authFingerprint(value) {
 
 function readJson(filePath) {
   try {
-    return readJsonWithRetry(filePath);
+    return readJsonWithBackup(filePath);
   } catch (error) {
     // A leftover lock is not "missing official auth". Let callers retry or
     // fail instead of pausing the daemon on a fake login conflict.
     if (error?.transientIoError) throw error;
+    if (error?.code === "ENOENT") return null;
+    if (error?.code && !(error instanceof SyntaxError)) throw error;
     return null;
   }
 }
@@ -129,6 +134,33 @@ function findMatchingAccount(official, accounts) {
     || accounts.find((account) => identityMatchesAccount(official.identity, account));
 }
 
+function accountHasPlainIdentity(account) {
+  return !!(account?.email || account?.account_id || account?.tokens?.account_id);
+}
+
+function findMatchingManagedAccount(official) {
+  const listed = listAccts({ secrets: false });
+  const fromMeta = findMatchingAccount(official, listed);
+  if (fromMeta) return fromMeta;
+
+  const unidentified = [];
+  const identified = [];
+  for (const item of listed) {
+    if (accountHasPlainIdentity(item)) identified.push(item);
+    else unidentified.push(item);
+  }
+
+  for (const item of unidentified) {
+    const loaded = loadAcct(item.id);
+    if (loaded && findMatchingAccount(official, [loaded])) return loaded;
+  }
+  for (const item of identified) {
+    const loaded = loadAcct(item.id);
+    if (loaded && findMatchingAccount(official, [loaded])) return loaded;
+  }
+  return null;
+}
+
 function identityMatchesAccount(identity, account) {
   if (!identity || !account) return false;
   const officialAccountId = String(identity.accountId || "");
@@ -138,6 +170,33 @@ function identityMatchesAccount(identity, account) {
   const officialEmail = String(identity.email || "").trim().toLowerCase();
   const managedEmail = String(account.email || "").trim().toLowerCase();
   return !!officialEmail && officialEmail === managedEmail;
+}
+
+function tokenAgeHint(accessToken) {
+  const payload = jwtPayload(accessToken);
+  const exp = Number(payload?.exp);
+  const iat = Number(payload?.iat);
+  return {
+    exp: Number.isFinite(exp) ? exp : null,
+    iat: Number.isFinite(iat) ? iat : null,
+  };
+}
+
+function officialAuthLooksOlder(official, current) {
+  const officialAge = tokenAgeHint(official?.tokens?.access_token);
+  const vaultAge = tokenAgeHint(current?.tokens?.access_token);
+  if (officialAge.exp != null && vaultAge.exp != null && officialAge.exp < vaultAge.exp) {
+    return true;
+  }
+  if (
+    (officialAge.exp == null || vaultAge.exp == null || officialAge.exp === vaultAge.exp)
+    && officialAge.iat != null
+    && vaultAge.iat != null
+    && officialAge.iat < vaultAge.iat
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function syncCurrentAccountFromOfficial(current, official) {
@@ -217,11 +276,17 @@ function inspectAuthState(options = {}) {
       matchedAccountId: current.id,
       officialIdentity: publicOfficialIdentity(official),
       message: null,
+      // Official still matches the last write, or the vault already matches.
+      // Identity-only alignment must not push stale vault tokens over a
+      // Codex-app rotation.
+      safeToMirrorOfficial: true,
     });
   }
 
   if (sameIdentity) {
-    if (migrateProjection) syncCurrentAccountFromOfficial(current, official);
+    if (migrateProjection && !officialAuthLooksOlder(official, current)) {
+      syncCurrentAccountFromOfficial(current, official);
+    }
     return returnNonConflict({
       status: "aligned",
       requiresResolution: false,
@@ -232,8 +297,7 @@ function inspectAuthState(options = {}) {
     });
   }
 
-  const matching = findMatchingAccount(official, listAccts({ secrets: false }))
-    || findMatchingAccount(official, listAccts());
+  const matching = findMatchingManagedAccount(official);
 
   if (!current) {
     return returnNonConflict({
@@ -254,6 +318,13 @@ function inspectAuthState(options = {}) {
     officialIdentity: publicOfficialIdentity(official),
     message: "Official Codex was signed into a different account outside this manager.",
   }, official.fingerprint);
+}
+
+function canMirrorOfficialAuth(authState) {
+  return !!authState
+    && authState.status === "aligned"
+    && authState.safeToMirrorOfficial === true
+    && !!authState.currentAccountId;
 }
 
 async function adoptOfficialAuth() {
@@ -304,6 +375,7 @@ module.exports = {
   writeManagedProjection,
   identityMatchesAccount,
   inspectAuthState,
+  canMirrorOfficialAuth,
   adoptOfficialAuth,
   reapplyManagedAuth,
 };

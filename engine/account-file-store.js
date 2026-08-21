@@ -76,6 +76,9 @@ function tryReadJsonWithBackup(filePath, kind) {
     return { value: readJson(filePath), recovered: false };
   } catch (primaryError) {
     if (primaryError.code === "ENOENT" || primaryError.transientIoError) throw primaryError;
+    // Leftover locks and other filesystem errors are not torn JSON.
+    // Promoting .bak here can drop newer accounts and flip current.
+    if (!(primaryError instanceof SyntaxError)) throw primaryError;
     const backupPath = `${filePath}.bak`;
     try {
       const value = readJson(backupPath);
@@ -280,7 +283,12 @@ function loadAccountPath(filePath, options = {}) {
       return null;
     }
     if (parseError?.code === "ENOENT") return null;
-    if (allowRestore) {
+    if (parseError?.code && !(parseError instanceof SyntaxError)) {
+      recordDiagnostic("account_read", filePath, parseError.message, false);
+      if (typeof options.onTransient === "function") options.onTransient(filePath, parseError);
+      return null;
+    }
+    if (allowRestore && parseError instanceof SyntaxError) {
       try {
         const backupRaw = readJson(`${filePath}.bak`);
         const account = decodeAccount(backupRaw, `${filePath}.bak`, { secrets: true });
@@ -317,25 +325,14 @@ function loadAccountPath(filePath, options = {}) {
     }
     return decoded;
   } catch (error) {
-    if (error instanceof AccountCredentialError && error.kind === "decrypt") {
+    // A readable JSON record with a bad credential payload must not be
+    // replaced by an older .bak. Only torn/invalid JSON restores backups.
+    if (error instanceof AccountCredentialError) {
       recordDiagnostic("account_credentials", filePath, error.message, false);
       if (typeof options.onCredentialFailure === "function") options.onCredentialFailure(filePath, error);
       return null;
     }
-    if (allowRestore) {
-      try {
-        const account = decodeAccount(readJson(`${filePath}.bak`), `${filePath}.bak`, { secrets: true });
-        restoreBackup(filePath);
-        migrateLegacyAccount(account, filePath);
-        recordDiagnostic("account_credentials", filePath, error.message, true);
-        return secrets ? account : omitSecrets(account);
-      } catch (backupError) {
-        if (backupError?.code !== "ENOENT") {
-          recordDiagnostic("account_backup", `${filePath}.bak`, backupError.message, false);
-        }
-      }
-    }
-    const type = error instanceof AccountCredentialError ? "account_credentials" : "account_data";
+    const type = "account_data";
     recordDiagnostic(type, filePath, error.message, false);
     if (typeof options.onUnreadable === "function") options.onUnreadable(filePath, error);
     return null;
@@ -442,6 +439,14 @@ function createAccountFileStore(spec) {
     writeJsonAtomic(indexPath, normalizeIndex(index));
   }
 
+  function pickRebuiltCurrentId(accounts, preferredCurrentId, fallbackIndex) {
+    const ids = new Set(accounts.map((account) => account.id));
+    if (preferredCurrentId && ids.has(preferredCurrentId)) return preferredCurrentId;
+    const fallbackCurrent = fallbackIndex?.[currentField];
+    if (fallbackCurrent && ids.has(fallbackCurrent)) return fallbackCurrent;
+    return accounts[0]?.id || null;
+  }
+
   function rebuildIndex(reason, preferredCurrentId = null, options = {}) {
     const stats = {};
     const accounts = scanAccounts({ stats });
@@ -467,11 +472,10 @@ function createAccountFileStore(spec) {
       }
       return options.fallbackIndex ? normalizeIndex(options.fallbackIndex) : emptyIndex();
     }
-    const ids = new Set(accounts.map((account) => account.id));
     const index = {
       version: indexVersion,
       accounts: accounts.map(accountSummary),
-      [currentField]: preferredCurrentId && ids.has(preferredCurrentId) ? preferredCurrentId : null,
+      [currentField]: pickRebuiltCurrentId(accounts, preferredCurrentId, options.fallbackIndex),
     };
     saveIdx(index);
     if (recordIndexDiagnostics) {
@@ -482,13 +486,47 @@ function createAccountFileStore(spec) {
     return index;
   }
 
+  function listedAccountFileIds() {
+    try {
+      return readdirSyncWithRetry(accountsDir)
+        .filter((name) => name.startsWith(prefix) && name.endsWith(".json"))
+        .map((name) => name.slice(0, -".json".length));
+    } catch (error) {
+      if (error?.code === "ENOENT") return [];
+      throw error;
+    }
+  }
+
+  function reconcileRestoredIndex(index) {
+    const fileIds = new Set(listedAccountFileIds());
+    const next = normalizeIndex(index);
+    const beforeIds = next.accounts.map((item) => item.id).sort().join("|");
+    const beforeCurrent = next[currentField] || null;
+    next.accounts = next.accounts.filter((item) => fileIds.has(item.id));
+    if (next[currentField] && !fileIds.has(next[currentField])) {
+      next[currentField] = null;
+    }
+    const afterIds = next.accounts.map((item) => item.id).sort().join("|");
+    if (beforeIds !== afterIds || beforeCurrent !== (next[currentField] || null)) {
+      saveIdx(next);
+    }
+    return next;
+  }
+
   function loadIdx() {
     ensureDir(dataDir);
     try {
-      const raw = useIndexBackup
-        ? tryReadJsonWithBackup(indexPath, "account_index").value
-        : readJson(indexPath);
-      const index = normalizeIndex(raw);
+      let recovered = false;
+      let raw;
+      if (useIndexBackup) {
+        const result = tryReadJsonWithBackup(indexPath, "account_index");
+        raw = result.value;
+        recovered = result.recovered;
+      } else {
+        raw = readJson(indexPath);
+      }
+      let index = normalizeIndex(raw);
+      if (recovered) index = reconcileRestoredIndex(index);
       if (index.accounts.length === 0) {
         let hasAccountFiles = false;
         try {
@@ -511,8 +549,12 @@ function createAccountFileStore(spec) {
           ? rebuildIndex("index missing", null, { fallbackIndex: emptyIndex() })
           : emptyIndex();
       }
-      if (useIndexBackup && error.transientIoError) {
-        recordDiagnostic("account_index", indexPath, error.message, false);
+      if (error.transientIoError || (error?.code && !(error instanceof SyntaxError))) {
+        if (recordIndexDiagnostics) {
+          recordDiagnostic("account_index", indexPath, error.message, false);
+        } else {
+          logWarn(`Account index unreadable: ${error.message}`);
+        }
         throw error;
       }
       if (quarantineUnreadableIndex) {
@@ -639,8 +681,33 @@ function createAccountFileStore(spec) {
     saveIdx(index);
   }
 
+  function readIndexOrEmpty() {
+    ensureDir(dataDir);
+    try {
+      let recovered = false;
+      let raw;
+      if (useIndexBackup) {
+        const result = tryReadJsonWithBackup(indexPath, "account_index");
+        raw = result.value;
+        recovered = result.recovered;
+      } else {
+        raw = readJson(indexPath);
+      }
+      let index = normalizeIndex(raw);
+      if (recovered) index = reconcileRestoredIndex(index);
+      return index;
+    } catch (error) {
+      if (error?.code === "ENOENT") return emptyIndex();
+      if (error.transientIoError || (error?.code && !(error instanceof SyntaxError))) throw error;
+      return loadIdx();
+    }
+  }
+
   function upsertIndex(account) {
-    const index = loadIdx();
+    // Adding or updating a row must not treat a missing index as "recover
+    // current from last_used". That recovery belongs to loadIdx after a
+    // vanished file; first OAuth/import leaves current unset until a switch.
+    const index = readIndexOrEmpty();
     const summary = accountSummary(account);
     const position = index.accounts.findIndex((item) => item.id === account.id);
     if (position >= 0) index.accounts[position] = summary;

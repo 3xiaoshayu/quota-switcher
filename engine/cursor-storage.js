@@ -15,6 +15,8 @@ const store = createAccountFileStore({
   currentField: "current_cursor_account_id",
   indexVersion: "1.0",
   pathRequiresPrefix: true,
+  useIndexBackup: true,
+  quarantineUnreadableIndex: true,
   logIndexRebuild: true,
   rebuildLogLabel: "Cursor account index",
   saveForeignPrefixError: "Invalid cursor account id",

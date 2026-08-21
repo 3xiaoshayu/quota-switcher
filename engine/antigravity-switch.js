@@ -99,7 +99,9 @@ async function snapshotCredentialIfNeeded(runtime, writeCredential) {
   try {
     return await runtime.readSystemCredential(runtime.execFile);
   } catch {
-    return null;
+    // null used to mean "empty credential" and rollback would delete it.
+    // A failed read must not be treated as empty.
+    return { snapshotFailed: true };
   }
 }
 
@@ -172,6 +174,9 @@ async function doAntigravitySwitch(account) {
     if (writeVscdb) {
       await writeAntigravityAuth(dbPath, injectToken(account));
       wrote = true;
+    }
+    if (typeof runtime.afterOfficialWrite === "function") {
+      await runtime.afterOfficialWrite();
     }
     writeMs = Date.now() - writeStarted;
     metaSnapshot = snapshotAntigravityMeta(account.id);

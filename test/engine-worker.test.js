@@ -13,6 +13,8 @@ const {
   isEngineWorkerAlive,
   httpJson,
   readVscdbItems,
+  setRpcTimeoutMsForTests,
+  setEngineWorkerForTests,
 } = require("../src/main/engine-worker-host");
 const { readVscdbItemRows, setSqliteReadTransport } = require("../engine/sqlite-native");
 
@@ -110,6 +112,36 @@ test("unknown engine worker operations fail closed", async () => {
       return true;
     },
   );
+});
+
+test("engine worker RPC timeout kills the stuck child and falls back in-process", async (t) => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ via: "local-after-timeout" }));
+  });
+  const port = await listen(server);
+  let killed = 0;
+  setRpcTimeoutMsForTests(30);
+  setEngineWorkerForTests({
+    child: {
+      postMessage() {},
+      kill() { killed += 1; },
+    },
+  });
+  t.after(() => {
+    setRpcTimeoutMsForTests();
+    setEngineWorkerForTests();
+    stopEngineWorker();
+  });
+  try {
+    const result = await httpJson(`http://127.0.0.1:${port}/`, { timeout: 3000 });
+    assert.equal(result.status, 200);
+    assert.match(result.body, /local-after-timeout/);
+    assert.equal(killed, 1);
+    assert.equal(isEngineWorkerAlive(), false);
+  } finally {
+    await closeServer(server);
+  }
 });
 
 test("worker host HTTP falls back in-process when the child is down", async () => {

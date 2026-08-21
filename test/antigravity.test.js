@@ -403,6 +403,47 @@ test("antigravity accounts stay out of Codex and Cursor lists", async (t) => {
   assert.equal(engine.loadAcct(result.account.id), null);
 });
 
+test("a corrupt Antigravity index still restores from backup", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "idx-ag-bak@example.com",
+    access_token: "ya29.idx-ag-bak",
+    refresh_token: "1//idx-ag-bak",
+  });
+  engine.setCurrentAntigravityAccountId(created.account.id);
+  const config = require("../engine/config");
+  fs.writeFileSync(`${config.ANTIGRAVITY_IDX_PATH}.bak`, fs.readFileSync(config.ANTIGRAVITY_IDX_PATH, "utf8"), "utf8");
+  fs.writeFileSync(config.ANTIGRAVITY_IDX_PATH, "{ corrupted", "utf8");
+  const loaded = engine.loadAntigravityIdx();
+  assert.equal(loaded.current_antigravity_account_id, created.account.id);
+  assert.ok(loaded.accounts.some((item) => item.id === created.account.id));
+  assert.equal(JSON.parse(fs.readFileSync(config.ANTIGRAVITY_IDX_PATH, "utf8")).current_antigravity_account_id, created.account.id);
+});
+
+test("a corrupt Antigravity index does not resurrect a deleted account from backup", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await engine.upsertAntigravityAccount({
+    email: "idx-ag-ghost-a@example.com",
+    access_token: "ya29.idx-ag-ghost-a",
+    refresh_token: "1//idx-ag-ghost-a",
+  });
+  const second = await engine.upsertAntigravityAccount({
+    email: "idx-ag-ghost-b@example.com",
+    access_token: "ya29.idx-ag-ghost-b",
+    refresh_token: "1//idx-ag-ghost-b",
+  });
+  engine.setCurrentAntigravityAccountId(second.account.id);
+  const config = require("../engine/config");
+  fs.writeFileSync(`${config.ANTIGRAVITY_IDX_PATH}.bak`, fs.readFileSync(config.ANTIGRAVITY_IDX_PATH, "utf8"), "utf8");
+  engine.deleteAntigravityAcct(second.account.id, { allowCurrent: true });
+  fs.writeFileSync(config.ANTIGRAVITY_IDX_PATH, "{ corrupted", "utf8");
+  const loaded = engine.loadAntigravityIdx();
+  assert.equal(loaded.accounts.some((item) => item.id === second.account.id), false);
+  assert.ok(loaded.accounts.some((item) => item.id === first.account.id));
+  assert.notEqual(loaded.current_antigravity_account_id, second.account.id);
+  assert.equal(engine.loadAntigravityAcct(second.account.id), null);
+});
+
 test("antigravity import dedupes by email and refresh fingerprint", async (t) => {
   const { engine } = freshEngine(t);
   const first = await engine.upsertAntigravityAccount({
@@ -1517,6 +1558,56 @@ test("antigravity oauth listener ignores empty probes then accepts the Google co
   }
 });
 
+test("antigravity pending oauth is not cleared on a non-JSON filesystem error", async (t) => {
+  process.env.ANTIGRAVITY_MANAGER_CALLBACK_PORT = String(18000 + Math.floor(Math.random() * 2000));
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  engine.setAntigravityRuntimeForTests({
+    openUrl: async () => {},
+    oauthClient: () => ({
+      clientId: "1234567890-abc.apps.googleusercontent.com",
+      clientSecret: "GOCSPX-test",
+    }),
+  });
+  const login = engine.antigravityLoginFlow().catch((error) => error);
+  const pendingPath = config.ANTIGRAVITY_OAUTH_PENDING_PATH;
+  const startedAt = Date.now();
+  while (!fs.existsSync(pendingPath) && Date.now() - startedAt < 2000) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  const envelope = fs.readFileSync(pendingPath, "utf8");
+  engine.cancelAntigravityOAuth();
+  await login;
+
+  fs.writeFileSync(pendingPath, envelope, "utf8");
+  const originalRead = fs.readFileSync;
+  fs.readFileSync = (target, encoding) => {
+    if (path.resolve(String(target)) === path.resolve(pendingPath)) {
+      const error = new Error("EISDIR: illegal operation on a directory");
+      error.code = "EISDIR";
+      throw error;
+    }
+    return originalRead(target, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+  engine.setAntigravityRuntimeForTests({
+    openUrl: async () => {},
+    oauthClient: () => ({
+      clientId: "1234567890-abc.apps.googleusercontent.com",
+      clientSecret: "GOCSPX-test",
+    }),
+  });
+  assert.equal(engine.restorePendingAntigravityOAuth(), false);
+  fs.readFileSync = originalRead;
+  assert.equal(fs.readFileSync(pendingPath, "utf8"), envelope);
+  assert.equal(engine.restorePendingAntigravityOAuth(), true);
+  try {
+    assert.equal(engine.getAntigravityOAuthStatus().pending, true);
+  } finally {
+    engine.cancelAntigravityOAuth();
+  }
+});
+
 test("antigravity pending oauth still restores from backup after persistent corruption", async (t) => {
   process.env.ANTIGRAVITY_MANAGER_CALLBACK_PORT = String(18000 + Math.floor(Math.random() * 2000));
   const { engine } = freshEngine(t);
@@ -1615,6 +1706,33 @@ test("antigravity hub credential payload uses consumer auth_method", () => {
   const parsed = parseCredentialBlob(JSON.stringify(payload));
   assert.equal(parsed.refresh_token, "1//hub");
   assert.equal(parsed.access_token, "ya29.hub");
+});
+
+test("antigravity credential write overwrites without deleting first", async () => {
+  const { writeWindowsAntigravityCredential } = require("../engine/antigravity-credential");
+  let script = "";
+  let fsyncedBeforeRead = false;
+  const originalFsync = fs.fsyncSync;
+  let fsyncs = 0;
+  fs.fsyncSync = (fd) => {
+    fsyncs += 1;
+    return originalFsync(fd);
+  };
+  try {
+    const ok = await writeWindowsAntigravityCredential({
+      tokens: { access_token: "ya29.overwrite", refresh_token: "1//overwrite" },
+    }, async (_file, args) => {
+      fsyncedBeforeRead = fsyncs >= 1;
+      script = String(args[args.indexOf("-Command") + 1] || "");
+      return { stdout: "", stderr: "" };
+    });
+    assert.equal(ok, true);
+    assert.equal(fsyncedBeforeRead, true);
+    assert.match(script, /CredWrite/);
+    assert.doesNotMatch(script, /CredDelete\(/);
+  } finally {
+    fs.fsyncSync = originalFsync;
+  }
 });
 
 test("antigravity credential writes retry when the temp payload is locked", async (t) => {
@@ -1761,6 +1879,158 @@ test("antigravity hub switch writes system credential and launches without touch
   assert.deepEqual(locks, [path.join(root, "Antigravity")]);
   const leftoverStored = await engine.readAntigravityAuth(leftover, { copyFirst: false });
   assert.equal(leftoverStored.refresh_token, "1//old-ide");
+});
+
+test("antigravity credential read throws when PowerShell fails instead of looking empty", async () => {
+  const { READ_SCRIPT, readWindowsAntigravityCredential } = require("../engine/antigravity-credential");
+  assert.match(READ_SCRIPT, /GetLastWin32Error/);
+  assert.match(READ_SCRIPT, /1168/);
+  assert.match(READ_SCRIPT, /CredRead failed/);
+  await assert.rejects(
+    () => readWindowsAntigravityCredential(async () => {
+      throw new Error("credential store busy");
+    }),
+    /credential store busy/,
+  );
+  const missing = await readWindowsAntigravityCredential(async () => ({ stdout: "\n", stderr: "" }));
+  assert.equal(missing, null);
+});
+
+test("antigravity hub switch rollback keeps the official credential when the real reader fails", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const leftover = path.join(root, "leftover.vscdb");
+  await engine.writeAntigravityAuth(leftover, {
+    access_token: "ya29.old-ide",
+    refresh_token: "1//old-ide",
+    expiry_timestamp: 10,
+  });
+  const exePath = path.join(root, "Programs", "antigravity", "Antigravity.exe");
+  fs.mkdirSync(path.dirname(exePath), { recursive: true });
+  fs.writeFileSync(exePath, "fake");
+  const created = await engine.upsertAntigravityAccount({
+    email: "hub-read-throw@example.com",
+    access_token: "ya29.hub-read-throw",
+    refresh_token: "1//hub-read-throw",
+    expiry_timestamp: 99,
+  });
+  const credentials = [];
+  const restores = [];
+  let living = [{ name: "Antigravity.exe", pid: 2147483646, executablePath: exePath }];
+  engine.setAntigravityRuntimeForTests({
+    vscdbPath: () => leftover,
+    exePath: () => exePath,
+    userDataDir: () => path.join(root, "Antigravity"),
+    listProcesses: async () => living,
+    gracefulClose: async () => {
+      living = [];
+      return true;
+    },
+    forceClose: async () => true,
+    execFile: async () => {
+      throw new Error("credential store busy");
+    },
+    writeSystemCredential: async (account) => {
+      credentials.push(account.email);
+      return true;
+    },
+    restoreSystemCredential: async (snapshot, runCommand) => {
+      restores.push(snapshot);
+      return require("../engine/antigravity-credential").restoreWindowsAntigravityCredential(snapshot, runCommand);
+    },
+    afterOfficialWrite: async () => {
+      throw new Error("meta write failed");
+    },
+    clearStaleLock: () => {},
+    launch: () => true,
+    sleep: async () => {},
+  });
+  await assert.rejects(
+    () => engine.doAntigravitySwitch(engine.loadAntigravityAcct(created.account.id)),
+    /meta write failed/,
+  );
+  assert.deepEqual(credentials, ["hub-read-throw@example.com"]);
+  assert.equal(restores.length, 1);
+  assert.equal(restores[0].snapshotFailed, true);
+});
+
+test("antigravity credential restore does not delete after a failed snapshot", async () => {
+  const { restoreWindowsAntigravityCredential } = require("../engine/antigravity-credential");
+  let ran = 0;
+  const result = await restoreWindowsAntigravityCredential({ snapshotFailed: true }, async () => {
+    ran += 1;
+    return { stdout: "" };
+  });
+  assert.equal(result, false);
+  assert.equal(ran, 0);
+});
+
+test("antigravity credential restore still deletes a confirmed empty snapshot", async () => {
+  const { restoreWindowsAntigravityCredential } = require("../engine/antigravity-credential");
+  let ran = 0;
+  await restoreWindowsAntigravityCredential(null, async () => {
+    ran += 1;
+    return { stdout: "" };
+  });
+  assert.equal(ran, 1);
+});
+
+test("antigravity hub switch rollback keeps the official credential when snapshot failed", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const leftover = path.join(root, "leftover.vscdb");
+  await engine.writeAntigravityAuth(leftover, {
+    access_token: "ya29.old-ide",
+    refresh_token: "1//old-ide",
+    expiry_timestamp: 10,
+  });
+  const exePath = path.join(root, "Programs", "antigravity", "Antigravity.exe");
+  fs.mkdirSync(path.dirname(exePath), { recursive: true });
+  fs.writeFileSync(exePath, "fake");
+  const created = await engine.upsertAntigravityAccount({
+    email: "hub-snap-fail@example.com",
+    access_token: "ya29.hub-snap-fail",
+    refresh_token: "1//hub-snap-fail",
+    expiry_timestamp: 99,
+  });
+  const credentials = [];
+  const restores = [];
+  let living = [{ name: "Antigravity.exe", pid: 2147483646, executablePath: exePath }];
+  engine.setAntigravityRuntimeForTests({
+    vscdbPath: () => leftover,
+    exePath: () => exePath,
+    userDataDir: () => path.join(root, "Antigravity"),
+    listProcesses: async () => living,
+    gracefulClose: async () => {
+      living = [];
+      return true;
+    },
+    forceClose: async () => true,
+    writeSystemCredential: async (account) => {
+      credentials.push(account.email);
+      return true;
+    },
+    readSystemCredential: async () => {
+      throw new Error("credential store busy");
+    },
+    restoreSystemCredential: async (snapshot) => {
+      restores.push(snapshot);
+      return require("../engine/antigravity-credential").restoreWindowsAntigravityCredential(snapshot, async () => {
+        throw new Error("delete must not run");
+      });
+    },
+    afterOfficialWrite: async () => {
+      throw new Error("meta write failed");
+    },
+    clearStaleLock: () => {},
+    launch: () => true,
+    sleep: async () => {},
+  });
+  await assert.rejects(
+    () => engine.doAntigravitySwitch(engine.loadAntigravityAcct(created.account.id)),
+    /meta write failed/,
+  );
+  assert.deepEqual(credentials, ["hub-snap-fail@example.com"]);
+  assert.equal(restores.length, 1);
+  assert.equal(restores[0].snapshotFailed, true);
 });
 
 test("antigravity still clears a lockfile when existsSync reports it missing", (t) => {

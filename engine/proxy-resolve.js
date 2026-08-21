@@ -131,13 +131,17 @@ function redactProxyUrl(proxyUrl) {
   }
 }
 
-function loadNetworkState() {
+function loadNetworkState(options = {}) {
   try {
     const parsed = readJsonWithRetry(NETWORK_FILE);
     if (!parsed || typeof parsed !== "object") return {};
     return parsed;
   } catch (error) {
-    if (error?.code === "ENOENT" || error?.transientIoError) return {};
+    if (error?.code === "ENOENT") return {};
+    if (error?.transientIoError || (error?.code && !(error instanceof SyntaxError))) {
+      if (options.requireReadable) throw error;
+      return {};
+    }
     try {
       const restored = readJsonWithRetry(`${NETWORK_FILE}.bak`);
       if (!restored || typeof restored !== "object") return {};
@@ -158,7 +162,7 @@ function lastGoodSource(previous, incoming) {
 function persistLastGood(signature) {
   if (!signature?.proxyUrl) return;
   try {
-    const current = loadNetworkState();
+    const current = loadNetworkState({ requireReadable: true });
     writeJsonAtomic(NETWORK_FILE, {
       ...current,
       lastGood: {
@@ -532,5 +536,6 @@ module.exports = {
   applyStartupProxyHint,
   applySignatureToRuntime,
   loadNetworkState,
+  persistLastGood,
   syncProxyEnv,
 };

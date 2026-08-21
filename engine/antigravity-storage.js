@@ -15,6 +15,8 @@ const store = createAccountFileStore({
   currentField: "current_antigravity_account_id",
   indexVersion: "1.0",
   pathRequiresPrefix: true,
+  useIndexBackup: true,
+  quarantineUnreadableIndex: true,
   logIndexRebuild: true,
   rebuildLogLabel: "Antigravity account index",
   saveForeignPrefixError: "Invalid antigravity account id",

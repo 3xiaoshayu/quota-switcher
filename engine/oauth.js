@@ -10,6 +10,7 @@ const {
   unprotectData,
   loadIdx,
   saveIdx,
+  upsertIndex,
   loadAcct,
   saveAcct,
   listAccts,
@@ -171,6 +172,8 @@ function loadPending() {
     return pending;
   } catch (error) {
     if (error?.code === "ENOENT" || error?.transientIoError) return null;
+    // Leftover locks and other filesystem errors are not a dead session.
+    if (!(error instanceof SyntaxError)) return null;
     clearPendingFile();
     logError(`Could not restore the pending OAuth authorization: ${error.message}`);
     setStatus("error", { message: "The pending OAuth authorization could not be restored." });
@@ -341,19 +344,7 @@ function findSameIdentityId(preview, accounts = listAccts({ secrets: false })) {
 }
 
 function persistCodexIndexEntry(account) {
-  const index = loadIdx();
-  const summary = {
-    id: account.id,
-    email: account.email,
-    plan_type: account.plan_type,
-    subscription_active_until: account.subscription_active_until,
-    created_at: account.created_at,
-    last_used: account.last_used,
-  };
-  const position = index.accounts.findIndex((item) => item.id === account.id);
-  if (position >= 0) index.accounts[position] = summary;
-  else index.accounts.push(summary);
-  saveIdx(index);
+  upsertIndex(account);
 }
 
 function collapseDuplicateCodexAccounts() {

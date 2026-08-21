@@ -4,6 +4,7 @@ const { readVscdbItemRowsLocal } = require("../../engine/sqlite-native");
 const { reviveError } = require("./engine-worker");
 
 const RPC_TIMEOUT_MS = 90_000;
+let rpcTimeoutMs = RPC_TIMEOUT_MS;
 const WORKER_DOWN = "engine_worker_down";
 const RESTART_DELAY_MS = 400;
 const MAX_RESTARTS = 3;
@@ -55,6 +56,15 @@ function onWorkerExit() {
   scheduleWorkerRestart();
 }
 
+function abandonStuckWorker(message) {
+  const error = workerDownError(message);
+  alive = false;
+  failAllPending(error);
+  try { if (child && typeof child.kill === "function") child.kill(); } catch {}
+  child = null;
+  scheduleWorkerRestart();
+}
+
 function onWorkerMessage(data) {
   restartCount = 0;
   const payload = data && Object.prototype.hasOwnProperty.call(data, "data") ? data.data : data;
@@ -74,9 +84,8 @@ function rpc(op, payload) {
   nextId += 1;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      pending.delete(id);
-      reject(workerDownError("Engine worker timed out"));
-    }, RPC_TIMEOUT_MS);
+      abandonStuckWorker("Engine worker timed out");
+    }, rpcTimeoutMs);
     pending.set(id, { resolve, reject, timer });
     try {
       child.postMessage({ id, op, payload });
@@ -137,6 +146,27 @@ function isEngineWorkerAlive() {
   return alive;
 }
 
+function setRpcTimeoutMsForTests(ms) {
+  rpcTimeoutMs = ms == null ? RPC_TIMEOUT_MS : Math.max(1, Number(ms) || RPC_TIMEOUT_MS);
+}
+
+function setEngineWorkerForTests(next = null) {
+  if (restartTimer) {
+    clearTimeout(restartTimer);
+    restartTimer = null;
+  }
+  failAllPending(workerDownError("Engine worker test reset"));
+  if (next && next.child) {
+    child = next.child;
+    alive = next.alive !== false;
+    stopping = false;
+    return;
+  }
+  child = null;
+  alive = false;
+  stopping = false;
+}
+
 async function httpJson(url, opts = {}) {
   if (!alive) return httpJsonLocal(url, opts);
   try {
@@ -165,5 +195,8 @@ module.exports = {
   readVscdbItems,
   WORKER_DOWN,
   MAX_RESTARTS,
+  RPC_TIMEOUT_MS,
   shouldScheduleWorkerRestart,
+  setRpcTimeoutMsForTests,
+  setEngineWorkerForTests,
 };

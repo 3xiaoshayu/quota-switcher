@@ -1599,6 +1599,53 @@ test("cursor pending oauth can be discarded without touching Codex", async (t) =
   await login;
 });
 
+test("cursor pending oauth is not cleared on a non-JSON filesystem error", async (t) => {
+  const { engine } = freshEngine(t);
+  const config = require("../engine/config");
+  let releaseSleep = null;
+  engine.setCursorRuntimeForTests({
+    openUrl: async () => {},
+    sleep: () => new Promise((resolve) => { releaseSleep = resolve; }),
+    httpJson: async () => ({ status: 404, body: "" }),
+  });
+  const login = engine.cursorLoginFlow().catch((error) => error);
+  const pendingPath = config.CURSOR_OAUTH_PENDING_PATH;
+  const startedAt = Date.now();
+  while (!fs.existsSync(pendingPath) && Date.now() - startedAt < 2000) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  const envelope = fs.readFileSync(pendingPath, "utf8");
+  engine.cancelCursorOAuth();
+  if (releaseSleep) releaseSleep();
+  await login;
+
+  fs.writeFileSync(pendingPath, envelope, "utf8");
+  const originalRead = fs.readFileSync;
+  fs.readFileSync = (target, encoding) => {
+    if (path.resolve(String(target)) === path.resolve(pendingPath)) {
+      const error = new Error("EISDIR: illegal operation on a directory");
+      error.code = "EISDIR";
+      throw error;
+    }
+    return originalRead(target, encoding);
+  };
+  t.after(() => { fs.readFileSync = originalRead; });
+  engine.setCursorRuntimeForTests({
+    openUrl: async () => {},
+    sleep: async () => {},
+    httpJson: async () => ({ status: 404, body: "" }),
+  });
+  assert.equal(engine.restorePendingCursorOAuth(), false);
+  fs.readFileSync = originalRead;
+  assert.equal(fs.readFileSync(pendingPath, "utf8"), envelope);
+  assert.equal(engine.restorePendingCursorOAuth(), true);
+  try {
+    assert.equal(engine.getCursorOAuthStatus().pending, true);
+  } finally {
+    engine.cancelCursorOAuth();
+  }
+});
+
 test("cursor pending oauth still restores from backup after persistent corruption", async (t) => {
   const { engine } = freshEngine(t);
   const config = require("../engine/config");
