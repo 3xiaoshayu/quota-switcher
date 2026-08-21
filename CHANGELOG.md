@@ -7,6 +7,21 @@ release is published.
 
 ## Unreleased
 
+## [2.0.4] - 2026-08-21
+
+- Show Cursor Ultra and Pro+, Codex Business and Edu, and Antigravity Pro on
+  account cards. Cursor organization `enterprise` stays Team; Antigravity
+  `standard-tier` stays Free.
+- Stop clipping the `g` in the Antigravity sidebar label.
+- Keep current accounts, official logins, and in-progress OAuth when Windows
+  reports a leftover lock or a non-JSON read error, instead of promoting a
+  stale backup or deleting a live credential.
+- Do not push older official Codex tokens over a fresher vault. Rebuild a
+  missing index from the most recently used account so background refresh does
+  not pause as a login conflict.
+- The installer is still unsigned. Download only from GitHub Releases and
+  check SHA-256.
+
 ## [2.0.3] - 2026-08-21
 
 - Read the current Antigravity Hub Google OAuth client from the official
