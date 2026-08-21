@@ -103,6 +103,9 @@ type DesktopOAuthResult = {
   mismatch?: boolean;
   updated?: boolean;
   targetAccountId?: string | null;
+  switched?: boolean;
+  switchError?: string | null;
+  authState?: DesktopAuthState | null;
 };
 
 type DesktopTokenRefreshResult = {
@@ -396,10 +399,10 @@ function defaultAuthState(): DesktopAuthState {
 
 function isBusyAuthMessage(message?: string): boolean {
   const text = String(message || '');
-  return /timed out|busy/i.test(text);
+  return /timed out|busy|EPERM|EACCES|EBUSY|EAGAIN|operation not permitted|resource busy|already has an operation in progress/i.test(text);
 }
 
-function unverifiedAuthState(message?: string): DesktopAuthState {
+export function unverifiedAuthState(message?: string): DesktopAuthState {
   if (isBusyAuthMessage(message)) {
     return {
       status: 'unknown',
@@ -422,6 +425,23 @@ function unverifiedAuthState(message?: string): DesktopAuthState {
 
 function defaultOAuthStatus(): DesktopOAuthStatus {
   return { status: 'idle', pending: false, message: null };
+}
+
+export function resolveAuthStateAfterSnapshot(
+  incoming: DesktopAuthState | null | undefined,
+  current: DesktopAuthState | null | undefined,
+): DesktopAuthState {
+  const next = incoming || defaultAuthState();
+  const incomingBusy = next.status === 'unknown' && next.requiresResolution === false;
+  if (
+    incomingBusy
+    && current
+    && current.status !== 'unknown'
+    && current.status !== 'empty'
+  ) {
+    return current;
+  }
+  return next;
 }
 
 function clampSyncIntervalMinutes(value: unknown): number {
@@ -910,8 +930,10 @@ export function canRefreshQuota(account: Pick<AccountQuota, 'status' | 'leftover
   return true;
 }
 
-export function canJoinAutoSwitch(account: Pick<AccountQuota, 'status'>): boolean {
-  return account.status !== 'BANNED' && account.status !== 'SUSPENDED';
+export function canJoinAutoSwitch(account: Pick<AccountQuota, 'status' | 'tokenAccessAvailable'>): boolean {
+  if (account.status === 'BANNED' || account.status === 'SUSPENDED') return false;
+  if (account.tokenAccessAvailable === false) return false;
+  return true;
 }
 
 export function canSwitchAccount(account: Pick<AccountQuota, 'status'>): boolean {
@@ -1538,8 +1560,8 @@ export function isCurrentQuotaSufficient(
     ? Number(account.weeklyQuotaRemaining)
     : null;
   if (hourly == null && weekly == null) return false;
-  if (hourly != null && Number.isFinite(hourly) && hourly <= fiveHourThreshold) return false;
-  if (weekly != null && Number.isFinite(weekly) && weekly <= weeklyThreshold) return false;
+  if (hourly != null && Number.isFinite(hourly) && hourly < fiveHourThreshold) return false;
+  if (weekly != null && Number.isFinite(weekly) && weekly < weeklyThreshold) return false;
   return true;
 }
 
@@ -1574,9 +1596,10 @@ export function autoSwitchStatusBanner(options: {
   }
   const paused = String(options.pausedReason || '').trim();
   if (paused) {
+    const detail = toUserMessage(paused);
     return {
       title: '自动切号已暂停',
-      detail: /[。.!！]$/.test(paused) ? paused : `${paused}。`,
+      detail: /[。.!！]$/.test(detail) ? detail : `${detail}。`,
       tone: 'warn',
     };
   }
@@ -2174,7 +2197,7 @@ export const desktopApi = {
   },
 
   subscribe(events: {
-    onDaemonTick?: () => void;
+    onDaemonTick?: (payload?: { result?: { authState?: DesktopAuthState } }) => void;
     onDaemonError?: (message: string) => void;
     onAutoSwitch?: (result: AutoSwitchRunResult) => void;
     onUpdateStatus?: (status: DesktopUpdateStatus) => void;
@@ -2186,8 +2209,8 @@ export const desktopApi = {
     const api = getBridge();
     if (!api) return () => {};
     const cleanups = [
-      api.onDaemonTick?.(() => events.onDaemonTick?.()),
-      api.onDaemonError?.((payload) => events.onDaemonError?.(payload?.message || 'Daemon error')),
+      api.onDaemonTick?.((payload) => events.onDaemonTick?.(payload as { result?: { authState?: DesktopAuthState } } | undefined)),
+      api.onDaemonError?.((payload) => events.onDaemonError?.(toUserMessage(payload?.message || 'Daemon error'))),
       api.onAutoSwitch?.((payload) => events.onAutoSwitch?.(payload)),
       api.onUpdateStatus?.((payload) => events.onUpdateStatus?.(payload)),
       api.onAuthConflict?.((payload) => events.onAuthConflict?.(payload)),

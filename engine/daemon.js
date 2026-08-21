@@ -2,10 +2,10 @@ const { REFRESH_MINUTES } = require("./config");
 const tokenRefresh = require("./token-refresh");
 const { refreshQuota, probeUsageOnly, needsBanProbe } = require("./quota");
 const { loadAutoSwitchCfg, normalizeSyncIntervalMinutes } = require("./config-manager");
-const { autoSwitchTick } = require("./auto-switch");
+const { autoSwitchTick, resolutionHoldReason } = require("./auto-switch");
 const { loadIdx, listAccts, loadAcct } = require("./storage");
 const { writeAuthJson, writeProjection } = require("./switch");
-const { inspectAuthState, canMirrorOfficialAuth } = require("./auth-state");
+const { inspectAuthState, isInspectBusyError, busyAuthState, canMirrorOfficialAuth } = require("./auth-state");
 const { withAccountLock } = require("./operation-locks");
 const { logWarn } = require("./logger");
 
@@ -63,6 +63,18 @@ async function runDaemonWorker(options = {}) {
       ? await withAccountLock(preIndex.current_account_id, async () => inspectAuthState({ migrateProjection: false }))
       : inspectAuthState({ migrateProjection: false });
   } catch (error) {
+    if (isInspectBusyError(error)) {
+      return {
+        startedAt,
+        completedAt: Date.now(),
+        accountsUpdated,
+        tokenRefreshes,
+        autoSwitchResult,
+        failures,
+        pausedReason: null,
+        authState: busyAuthState(preIndex.current_account_id),
+      };
+    }
     failures.push(failure("auth_inspect", null, error));
     return {
       startedAt,
@@ -75,7 +87,7 @@ async function runDaemonWorker(options = {}) {
       authState,
     };
   }
-  if (authState.requiresResolution) {
+  if (authState.status === "conflict") {
     return {
       startedAt,
       completedAt: Date.now(),
@@ -200,7 +212,15 @@ async function runDaemonWorker(options = {}) {
         failures.push(failure("account_index", current, error));
         return;
       }
-      const latestAuthState = inspectAuthState({ migrateProjection: false });
+      let latestAuthState = null;
+      try {
+        latestAuthState = inspectAuthState({ migrateProjection: false });
+      } catch (error) {
+        if (!isInspectBusyError(error)) {
+          failures.push(failure("auth_inspect", current, error));
+        }
+        return;
+      }
       if (latestIndex.current_account_id === current.id && canMirrorOfficialAuth(latestAuthState)) {
         try {
           if (isCancelled()) return;
@@ -225,10 +245,12 @@ async function runDaemonWorker(options = {}) {
   if (config && config.enabled) {
     try {
       autoSwitchResult = await autoSwitchTick(config, { isCancelled, authState });
+      if (autoSwitchResult?.authState) authState = autoSwitchResult.authState;
       if (isCancelled() || autoSwitchResult?.reason === "cancelled") return stopped();
       if (autoSwitchResult?.reason === "current_quota_refresh_failed") {
         const retrying = /waiting for retry|quota_retry_pending/i.test(String(autoSwitchResult.error || ""));
-        if (!retrying) {
+        const inspectBusy = isInspectBusyError({ message: autoSwitchResult.error || "" });
+        if (!retrying && !inspectBusy) {
           failures.push(failure("auto_switch", null, new Error(autoSwitchResult.error || autoSwitchResult.reason)));
         }
       }
@@ -240,6 +262,12 @@ async function runDaemonWorker(options = {}) {
   if (failures.length > 0) {
     logWarn(`Daemon worker completed with ${failures.length} failure(s)`);
   }
+  let pausedReason = null;
+  if (autoSwitchResult && !autoSwitchResult.switched) {
+    pausedReason = resolutionHoldReason(autoSwitchResult.authState)
+      || (autoSwitchResult.reason === "oauth_pending" ? "oauth_pending" : null)
+      || (autoSwitchResult.reason === "switch_verify_failed" ? "switch_verify_failed" : null);
+  }
   return {
     startedAt,
     completedAt: Date.now(),
@@ -247,7 +275,7 @@ async function runDaemonWorker(options = {}) {
     tokenRefreshes,
     autoSwitchResult,
     failures,
-    pausedReason: null,
+    pausedReason,
     authState,
   };
 }

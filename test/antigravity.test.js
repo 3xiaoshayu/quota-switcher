@@ -540,6 +540,82 @@ test("antigravity switch writes only the oauth token item key", async (t) => {
   assert.equal(engine.currentAntigravityAcct().id, created.account.id);
 });
 
+test("antigravity switch rolls back when the written login does not match the target", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "ag-state.vscdb");
+  const exePath = path.join(root, "Antigravity IDE.exe");
+  fs.writeFileSync(exePath, "fake");
+  await engine.writeAntigravityAuth(dbPath, {
+    access_token: "ya29.keep",
+    refresh_token: "1//keep",
+    expiry_timestamp: 10,
+  });
+  const created = await engine.upsertAntigravityAccount({
+    email: "ag-verify@example.com",
+    access_token: "ya29.ag-verify",
+    refresh_token: "1//ag-verify",
+    expiry_timestamp: 99,
+  });
+  engine.setAntigravityRuntimeForTests({
+    vscdbPath: () => dbPath,
+    exePath: () => exePath,
+    listProcesses: async () => [],
+    launch: () => true,
+    sleep: async () => {},
+  });
+  const agDb = require("../engine/antigravity-db");
+  const originalRead = agDb.readAntigravityAuth;
+  agDb.readAntigravityAuth = async () => ({ access_token: "ya29.wrong" });
+  t.after(() => { agDb.readAntigravityAuth = originalRead; });
+  await assert.rejects(
+    () => engine.doAntigravitySwitch(engine.loadAntigravityAcct(created.account.id)),
+    /核对失败/,
+  );
+  agDb.readAntigravityAuth = originalRead;
+  const stored = await engine.readAntigravityAuth(dbPath);
+  assert.equal(stored.access_token, "ya29.keep");
+  assert.equal(engine.currentAntigravityAcct().id, created.account.id);
+});
+
+test("antigravity switch does not roll back when leftover lock blocks post-write read", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "ag-state.vscdb");
+  const exePath = path.join(root, "Antigravity IDE.exe");
+  fs.writeFileSync(exePath, "fake");
+  await engine.writeAntigravityAuth(dbPath, {
+    access_token: "ya29.keep",
+    refresh_token: "1//keep",
+    expiry_timestamp: 10,
+  });
+  const created = await engine.upsertAntigravityAccount({
+    email: "ag-busy-keep@example.com",
+    access_token: "ya29.ag-busy-keep",
+    refresh_token: "1//ag-busy-keep",
+    expiry_timestamp: 99,
+  });
+  engine.setAntigravityRuntimeForTests({
+    vscdbPath: () => dbPath,
+    exePath: () => exePath,
+    listProcesses: async () => [],
+    launch: () => true,
+    sleep: async () => {},
+  });
+  const agDb = require("../engine/antigravity-db");
+  const originalRead = agDb.readAntigravityAuth;
+  agDb.readAntigravityAuth = async () => {
+    const error = new Error("SQLITE_BUSY: database is locked");
+    error.code = "SQLITE_BUSY";
+    throw error;
+  };
+  t.after(() => { agDb.readAntigravityAuth = originalRead; });
+  const switched = await engine.doAntigravitySwitch(engine.loadAntigravityAcct(created.account.id));
+  agDb.readAntigravityAuth = originalRead;
+  assert.equal(switched.account.id, created.account.id);
+  const stored = await engine.readAntigravityAuth(dbPath);
+  assert.equal(stored.access_token, "ya29.ag-busy-keep");
+  assert.equal(engine.currentAntigravityAcct().id, created.account.id);
+});
+
 test("antigravity switch returns the in-memory account without a final decrypt", async (t) => {
   const { engine, root } = freshEngine(t);
   const dbPath = path.join(root, "ag-state.vscdb");
@@ -1838,6 +1914,7 @@ test("antigravity hub switch writes system credential and launches without touch
   const locks = [];
   const order = [];
   let living = [{ name: "Antigravity.exe", pid: 2147483646, executablePath: exePath }];
+  let storedCred = null;
   engine.setAntigravityRuntimeForTests({
     vscdbPath: () => leftover,
     exePath: () => exePath,
@@ -1852,11 +1929,12 @@ test("antigravity hub switch writes system credential and launches without touch
     writeSystemCredential: async (account) => {
       order.push("write");
       credentials.push(account.email);
+      storedCred = { access_token: account.tokens.access_token };
       return true;
     },
     readSystemCredential: async () => {
-      order.push("snapshot");
-      return null;
+      order.push(storedCred ? "verify" : "snapshot");
+      return storedCred;
     },
     restoreSystemCredential: async () => true,
     clearStaleLock: (dir) => { locks.push(dir); },
@@ -1974,6 +2052,16 @@ test("antigravity credential restore still deletes a confirmed empty snapshot", 
   assert.equal(ran, 1);
 });
 
+test("antigravity credential delete failure is not reported as success", async () => {
+  const { restoreWindowsAntigravityCredential } = require("../engine/antigravity-credential");
+  await assert.rejects(
+    () => restoreWindowsAntigravityCredential(null, async () => {
+      throw new Error("CredDelete failed: 5");
+    }),
+    /CredDelete failed/,
+  );
+});
+
 test("antigravity hub switch rollback keeps the official credential when snapshot failed", async (t) => {
   const { engine, root } = freshEngine(t);
   const leftover = path.join(root, "leftover.vscdb");
@@ -2070,6 +2158,7 @@ test("antigravity hub switch still uses the exe when existsSync reports it missi
   });
   const credentials = [];
   let living = [{ name: "Antigravity.exe", pid: 2147483646, executablePath: exePath }];
+  let storedCred = null;
   engine.setAntigravityRuntimeForTests({
     vscdbPath: () => leftover,
     exePath: () => exePath,
@@ -2082,9 +2171,10 @@ test("antigravity hub switch still uses the exe when existsSync reports it missi
     forceClose: async () => true,
     writeSystemCredential: async (account) => {
       credentials.push(account.email);
+      storedCred = { access_token: account.tokens.access_token };
       return true;
     },
-    readSystemCredential: async () => null,
+    readSystemCredential: async () => storedCred,
     restoreSystemCredential: async () => true,
     clearStaleLock: () => {},
     launch: () => true,
@@ -2100,6 +2190,107 @@ test("antigravity hub switch still uses the exe when existsSync reports it missi
   assert.deepEqual(credentials, ["hub-lie@example.com"]);
   const leftoverStored = await engine.readAntigravityAuth(leftover, { copyFirst: false });
   assert.equal(leftoverStored.refresh_token, "1//old-ide");
+});
+
+test("antigravity hub switch rolls back when the written credential does not match", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const leftover = path.join(root, "leftover.vscdb");
+  const exePath = path.join(root, "Programs", "antigravity", "Antigravity.exe");
+  fs.mkdirSync(path.dirname(exePath), { recursive: true });
+  fs.writeFileSync(exePath, "fake");
+  await engine.writeAntigravityAuth(leftover, {
+    access_token: "ya29.keep-hub",
+    refresh_token: "1//keep-hub",
+    expiry_timestamp: 10,
+  });
+  const created = await engine.upsertAntigravityAccount({
+    email: "hub-verify@example.com",
+    access_token: "ya29.hub-verify",
+    refresh_token: "1//hub-verify",
+    expiry_timestamp: 99,
+  });
+  let living = [{ name: "Antigravity.exe", pid: 2147483646, executablePath: exePath }];
+  engine.setAntigravityRuntimeForTests({
+    vscdbPath: () => leftover,
+    exePath: () => exePath,
+    userDataDir: () => path.join(root, "Antigravity"),
+    listProcesses: async () => living,
+    gracefulClose: async () => {
+      living = [];
+      return true;
+    },
+    forceClose: async () => true,
+    writeSystemCredential: async () => true,
+    readSystemCredential: async () => ({ access_token: "ya29.wrong-hub" }),
+    restoreSystemCredential: async () => true,
+    clearStaleLock: () => {},
+    launch: () => true,
+    sleep: async () => {},
+  });
+  await assert.rejects(
+    () => engine.doAntigravitySwitch(engine.loadAntigravityAcct(created.account.id)),
+    /系统凭据写入后核对失败/,
+  );
+  const leftoverStored = await engine.readAntigravityAuth(leftover, { copyFirst: false });
+  assert.equal(leftoverStored.access_token, "ya29.keep-hub");
+});
+
+test("antigravity hub switch does not roll back when leftover lock blocks credential read", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const leftover = path.join(root, "leftover.vscdb");
+  const exePath = path.join(root, "Programs", "antigravity", "Antigravity.exe");
+  fs.mkdirSync(path.dirname(exePath), { recursive: true });
+  fs.writeFileSync(exePath, "fake");
+  await engine.writeAntigravityAuth(leftover, {
+    access_token: "ya29.keep-hub-busy",
+    refresh_token: "1//keep-hub-busy",
+    expiry_timestamp: 10,
+  });
+  const created = await engine.upsertAntigravityAccount({
+    email: "hub-busy@example.com",
+    access_token: "ya29.hub-busy",
+    refresh_token: "1//hub-busy",
+    expiry_timestamp: 99,
+  });
+  let living = [{ name: "Antigravity.exe", pid: 2147483646, executablePath: exePath }];
+  let storedCred = null;
+  let restored = 0;
+  let credentialReads = 0;
+  engine.setAntigravityRuntimeForTests({
+    vscdbPath: () => leftover,
+    exePath: () => exePath,
+    userDataDir: () => path.join(root, "Antigravity"),
+    listProcesses: async () => living,
+    gracefulClose: async () => {
+      living = [];
+      return true;
+    },
+    forceClose: async () => true,
+    writeSystemCredential: async (account) => {
+      storedCred = { access_token: account.tokens.access_token };
+      return true;
+    },
+    readSystemCredential: async () => {
+      credentialReads += 1;
+      if (credentialReads === 1) return { access_token: "ya29.old-hub" };
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    },
+    restoreSystemCredential: async () => {
+      restored += 1;
+      return true;
+    },
+    clearStaleLock: () => {},
+    launch: () => true,
+    sleep: async () => {},
+  });
+  const switched = await engine.doAntigravitySwitch(engine.loadAntigravityAcct(created.account.id));
+  assert.equal(switched.account.id, created.account.id);
+  assert.ok(credentialReads >= 2);
+  assert.equal(storedCred.access_token, "ya29.hub-busy");
+  assert.equal(restored, 0);
+  assert.equal(engine.currentAntigravityAcct().id, created.account.id);
 });
 
 test("antigravity local import prefers system credential over leftover vscdb", async (t) => {
@@ -2181,6 +2372,39 @@ test("antigravity collapse folds same-email files and keeps current", async (t) 
   assert.equal(remaining.length, 1);
   assert.equal(remaining[0].id, first.account.id);
   assert.equal(engine.currentAntigravityAcct().id, first.account.id);
+});
+
+test("antigravity upsert after a corrupt index still auto-sets the saved account current", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await engine.upsertAntigravityAccount({
+    email: "ag-corrupt-a@example.com",
+    access_token: "ya29.ag-corrupt-a",
+    refresh_token: "1//ag-corrupt-a",
+    expiry_timestamp: 20,
+  });
+  const second = await engine.upsertAntigravityAccount({
+    email: "ag-corrupt-b@example.com",
+    access_token: "ya29.ag-corrupt-b",
+    refresh_token: "1//ag-corrupt-b",
+    expiry_timestamp: 30,
+  });
+  engine.setCurrentAntigravityAccountId(null);
+  first.account.last_used = 200;
+  engine.saveAntigravityAcct(first.account);
+  second.account.last_used = 50;
+  engine.saveAntigravityAcct(second.account);
+  const config = require("../engine/config");
+  try { fs.unlinkSync(`${config.ANTIGRAVITY_IDX_PATH}.bak`); } catch {}
+  fs.writeFileSync(config.ANTIGRAVITY_IDX_PATH, "{ corrupted", "utf8");
+  const again = await engine.upsertAntigravityAccount({
+    email: "ag-corrupt-b@example.com",
+    access_token: "ya29.ag-corrupt-b",
+    refresh_token: "1//ag-corrupt-b",
+    expiry_timestamp: 40,
+  });
+  assert.equal(again.account.id, second.account.id);
+  assert.equal(engine.currentAntigravityAcct().id, second.account.id);
+  assert.equal(engine.loadAntigravityIdx().current_antigravity_account_id, second.account.id);
 });
 
 test("antigravity collapse does not decrypt unique accounts", async (t) => {

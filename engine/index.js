@@ -4,14 +4,14 @@ const { httpJson, buildCodexHeaders, extractErrorCode, setHttpJsonTransport } = 
 const { setSecretCodec, protectData, unprotectData, ensureDir, normalizeAccountId, accountFilePath, loadIdx, saveIdx, withIndexLock, loadAcct, saveAcct, deleteAcct, listAccts, currentAcct, getStorageDiagnostics, rebuildIndex, flushPendingAccountRewrites, resetPendingAccountRewritesForTests } = require("./storage");
 const { writeAuthJson, writeProjection, clearApiBaseUrl, killCodex, startCodex, doSwitch, launchOfficialCodex, setSwitchRuntimeForTests } = require("./switch");
 const { oauthLoginFlow, restorePendingOAuth, cancelOAuth, completeOAuthManually, getOAuthStatus, setOpenUrlHandler, setOAuthAccountSavedHandler, upsert, sameAccountIdentity, collapseDuplicateCodexAccounts } = require("./oauth");
-const { inspectAuthState, canMirrorOfficialAuth, adoptOfficialAuth, reapplyManagedAuth, authFingerprint, identityMatchesAccount } = require("./auth-state");
+const { inspectAuthState, isInspectBusyError, busyAuthState, canMirrorOfficialAuth, adoptOfficialAuth, reapplyManagedAuth, authFingerprint, identityMatchesAccount } = require("./auth-state");
 const { initLogger, logInfo, logWarn, logError, getLogDir, sanitizeMessage } = require("./logger");
 const { refreshOneTok, needsRefresh, refreshAll } = require("./token-refresh");
 const { fetchQuota, fetchQuotaWithTokenRepair, isQuotaAuthError, refreshQuota, probeUsageOnly, canProbeUsageWithoutRefresh, needsBanProbe, extractQuotaMetrics, normalizeQuota } = require("./quota");
 const { classifyProbe, isAccountBanned } = require("./account-probe");
 const { loadAutoSwitchCfg, saveAutoSwitchCfg, remapSelectedAccountIds, DEFAULT_AUTO_SWITCH_CFG } = require("./config-manager");
 const { withAccountLock, withAccountLocks, withPathLock, mapLimit } = require("./operation-locks");
-const { metricCrossedThreshold, accountMustLeave, buildSwitchCandidate, pickBestCandidate, resolveMonitoredIds, autoSwitchTick } = require("./auto-switch");
+const { metricCrossedThreshold, accountMustLeave, buildSwitchCandidate, pickBestCandidate, resolveMonitoredIds, autoSwitchTick, noteOfficialSwitch, recentlySwitched, resolutionHoldReason } = require("./auto-switch");
 const { runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes } = require("./daemon");
 const { getCodexInstallationStatus, getCodexInstallationStatusAsync, assertOfficialCodexInstalled, assertOfficialCodexInstalledAsync } = require("./codex-installation");
 const { listCursorAccts, loadCursorAcct, saveCursorAcct, currentCursorAcct, deleteCursorAcct, loadCursorIdx, setCurrentCursorAccountId } = require("./cursor-storage");
@@ -48,7 +48,7 @@ module.exports = {
   // oauth
   oauthLoginFlow, restorePendingOAuth, cancelOAuth, completeOAuthManually, getOAuthStatus, setOpenUrlHandler, setOAuthAccountSavedHandler, upsert, sameAccountIdentity, collapseDuplicateCodexAccounts,
   // auth state
-  inspectAuthState, canMirrorOfficialAuth, adoptOfficialAuth, reapplyManagedAuth, authFingerprint, identityMatchesAccount,
+  inspectAuthState, isInspectBusyError, busyAuthState, canMirrorOfficialAuth, adoptOfficialAuth, reapplyManagedAuth, authFingerprint, identityMatchesAccount,
   // logger
   initLogger, logInfo, logWarn, logError, getLogDir, sanitizeMessage,
   // token-refresh
@@ -61,7 +61,7 @@ module.exports = {
   // operation-locks
   withAccountLock, withAccountLocks, withPathLock, mapLimit,
   // auto-switch
-  metricCrossedThreshold, accountMustLeave, buildSwitchCandidate, pickBestCandidate, resolveMonitoredIds, autoSwitchTick,
+  metricCrossedThreshold, accountMustLeave, buildSwitchCandidate, pickBestCandidate, resolveMonitoredIds, autoSwitchTick, noteOfficialSwitch, recentlySwitched, resolutionHoldReason,
   // daemon
   runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes,
   // codex installation

@@ -84,6 +84,7 @@ export interface DesktopOAuthStatus {
     targetAccountId?: string | null;
     switched?: boolean;
     switchError?: string | null;
+    authState?: DesktopAuthState | null;
   } | null;
 }
 
@@ -129,8 +130,9 @@ export interface AutoSwitchRunResult {
   switched?: boolean;
   reason?: string;
   error?: string | null;
-  from?: { email?: string | null } | null;
-  to?: { email?: string | null } | null;
+  from?: { id?: string; email?: string | null } | null;
+  to?: { id?: string; email?: string | null } | null;
+  authState?: DesktopAuthState | null;
 }
 
 export interface DesktopAppInfo {

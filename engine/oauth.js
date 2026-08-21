@@ -39,6 +39,7 @@ function publicAccountResult(result) {
     updated: !!result.updated,
     switched: !!result.switched,
     switchError: result.switchError || null,
+    authState: result.authState || null,
   };
 }
 
@@ -84,8 +85,20 @@ function shouldSwitchAfterOAuth(result) {
   return true;
 }
 
+function attachInspectedAuthState(result) {
+  const { inspectAuthState, isInspectBusyError, busyAuthState } = require("./auth-state");
+  try {
+    result.authState = inspectAuthState({ migrateProjection: false });
+  } catch (error) {
+    result.authState = isInspectBusyError(error)
+      ? busyAuthState(result.authState?.currentAccountId || result.account?.id || null)
+      : (result.authState || null);
+  }
+  return result;
+}
+
 async function switchCodexAfterOAuth(result) {
-  if (!shouldSwitchAfterOAuth(result)) return result;
+  if (!shouldSwitchAfterOAuth(result)) return attachInspectedAuthState(result);
   const { withAccountLocks } = require("./operation-locks");
   const { doSwitch } = require("./switch");
   const currentId = loadIdx().current_account_id || null;
@@ -98,9 +111,11 @@ async function switchCodexAfterOAuth(result) {
     });
     result.switched = !switched?.already;
     result.alreadyCurrent = !!switched?.already;
+    result.authState = switched?.authState || null;
   } catch (error) {
     result.switched = false;
     result.switchError = error.message || String(error);
+    attachInspectedAuthState(result);
     logWarn(`OAuth account saved but Codex switch failed: ${result.switchError}`);
   }
   return result;
@@ -340,7 +355,7 @@ function findSameIdentityId(preview, accounts = listAccts({ secrets: false })) {
     const self = accounts.find((account) => account.id === preview.id) || loadAcct(preview.id);
     if (self) matches.push(self);
   }
-  return pickIdentityKeeper(matches, loadIdx().current_account_id)?.id || preview.id;
+  return pickIdentityKeeper(matches, loadIdx({ inventCurrent: false }).current_account_id)?.id || preview.id;
 }
 
 function persistCodexIndexEntry(account) {
@@ -352,9 +367,9 @@ function collapseDuplicateCodexAccounts() {
     listAccounts: listAccts,
     loadAccount: loadAcct,
     sameIdentity: sameAccountIdentity,
-    currentId: loadIdx().current_account_id || null,
+    currentId: loadIdx({ inventCurrent: false }).current_account_id || null,
     persist: (keeper, extras) => {
-      const index = loadIdx();
+      const index = loadIdx({ inventCurrent: false });
       if (extras.some((item) => item.id === index.current_account_id)) {
         index.current_account_id = keeper.id;
         saveIdx(index);

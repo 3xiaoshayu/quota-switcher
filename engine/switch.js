@@ -4,7 +4,31 @@ const { tsIso, ts } = require("./crypto-utils");
 const { CODEX_DIR, CODEX_AUMID, IDX_PATH } = require("./config");
 const { loadIdx, saveIdx, saveAcct, ensureDir, accountFilePath } = require("./storage");
 const { writeJsonAtomic, writeTextAtomic, captureFile, readFileWithRetry, restoreCapturedFile } = require("./atomic-file");
-const { writeManagedProjection, inspectAuthState } = require("./auth-state");
+const { writeManagedProjection, isInspectBusyError, busyAuthState } = require("./auth-state");
+
+function inspectSwitchAuth(accountId, options) {
+  try {
+    return require("./auth-state").inspectAuthState(options);
+  } catch (error) {
+    if (isInspectBusyError(error)) return busyAuthState(accountId);
+    throw error;
+  }
+}
+
+function acceptWrittenSwitchAuth(verified, account) {
+  if (verified.status === "aligned" && verified.currentAccountId === account.id) return verified;
+  if (verified.status === "unknown" && verified.requiresResolution === false) {
+    return {
+      status: "aligned",
+      requiresResolution: false,
+      currentAccountId: account.id,
+      matchedAccountId: account.id,
+      officialIdentity: verified.officialIdentity || null,
+      message: null,
+    };
+  }
+  return null;
+}
 const { assertOfficialCodexInstalledAsync } = require("./codex-installation");
 const { logInfo, logWarn, logError } = require("./logger");
 
@@ -307,8 +331,11 @@ async function doSwitch(account, options = {}) {
   }
   const currentId = loadIdx().current_account_id;
   if (!options.force && currentId === account.id) {
-    const authState = inspectAuthState({ migrateProjection: true });
-    if (authState.status === "aligned") return { already: true, account };
+    const authState = inspectSwitchAuth(account.id, { migrateProjection: true });
+    if (authState.status === "aligned") return { already: true, account, authState };
+    if (authState.status === "unknown" && authState.requiresResolution === false) {
+      return { already: true, account, authState };
+    }
   }
 
   await runtime.assertInstalled();
@@ -341,12 +368,22 @@ async function doSwitch(account, options = {}) {
 
     account.last_used = ts();
     saveAcct(account);
+    const verified = acceptWrittenSwitchAuth(
+      inspectSwitchAuth(account.id, { migrateProjection: false }),
+      account,
+    );
+    if (!verified) {
+      const error = new Error("Codex 官方登录写入后核对失败，没有切到目标账号");
+      error.code = "codex_switch_verify_failed";
+      throw error;
+    }
     const startStarted = Date.now();
     await startCodex();
     startMs = Date.now() - startStarted;
     logInfo(`Codex switch timings kill=${killMs}ms start=${startMs}ms total=${Date.now() - started}ms`);
     logInfo("Codex account switch transaction completed");
-    return { already: false, account };
+    try { require("./auto-switch").noteOfficialSwitch(); } catch {}
+    return { already: false, account, authState: verified };
   } catch (error) {
     logError(`Codex account switch failed; restoring previous state: ${error.message}`);
     for (const [filePath, content] of snapshot) {

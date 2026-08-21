@@ -52,16 +52,36 @@ function autoSwitchCheckLog(result: AutoSwitchRunResult | void): {
       return { message: '检查完成：额度已低于阈值，但范围内没有可切换的账号。', type: 'warning' };
     case 'no_accounts':
       return { message: '已跳过：没有可用的管理账号。', type: 'warning' };
+    case 'current_not_found':
+      return { message: '已跳过：没有当前账号。', type: 'warning' };
     case 'no_quota_data':
       return { message: '未能获取当前账号额度，无法判断是否切换。', type: 'warning' };
     case 'auth_conflict':
-      return { message: '检查已暂停：官方登录未就绪或与管理器不一致。', type: 'error' };
+      return { message: '检查已暂停：官方登录了另一个账号。', type: 'error' };
+    case 'missing_official_auth':
+      return { message: '检查已暂停：官方 Codex 已退出。', type: 'warning' };
+    case 'unsupported_official_auth':
+      return { message: '检查已暂停：官方登录无法由本管理器接管。', type: 'warning' };
+    case 'unmanaged_official_auth':
+      return { message: '检查已暂停：官方 Codex 已登录，尚未纳入管理。', type: 'warning' };
     case 'current_quota_refresh_failed':
       return { message: `检查失败：${toUserMessage(result.error || '当前账号额度刷新失败')}。`, type: 'error' };
     case 'cancelled':
       return { message: '检查已取消。', type: 'warning' };
     case 'disabled':
       return { message: '检查完成：额度已低于阈值，但全局开关已关闭，未切换账号。', type: 'warning' };
+    case 'recently_switched':
+      return { message: '刚切过号，本次不自动再切。', type: 'info' };
+    case 'oauth_pending':
+      return { message: '已有授权正在进行，本次不自动切号。', type: 'warning' };
+    case 'switch_verify_failed':
+      return { message: '检查完成：官方登录写入后核对失败，没有切到目标账号。', type: 'error' };
+    case 'current_changed':
+      return { message: '检查完成：当前账号已变化，本次未切。', type: 'info' };
+    case 'no_best_candidate':
+      return { message: '检查完成：没有更合适的账号可切。', type: 'info' };
+    case 'candidate_not_found':
+      return { message: '检查完成：目标账号已不存在，本次未切。', type: 'warning' };
     default:
       return {
         message: `检查完成${result.reason ? `：${toUserMessage(result.reason)}` : '。'}`,

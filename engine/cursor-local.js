@@ -182,7 +182,7 @@ function findSameCursorId(preview, accounts = listCursorAccts({ secrets: false }
     const self = accounts.find((account) => account.id === preview.id) || loadCursorAcct(preview.id);
     if (self) matches.push(self);
   }
-  return pickIdentityKeeper(matches, loadCursorIdx().current_cursor_account_id)?.id || preview.id;
+  return pickIdentityKeeper(matches, loadCursorIdx({ inventCurrent: false }).current_cursor_account_id)?.id || preview.id;
 }
 
 function collapseDuplicateCursorAccounts() {
@@ -190,9 +190,9 @@ function collapseDuplicateCursorAccounts() {
     listAccounts: listCursorAccts,
     loadAccount: loadCursorAcct,
     sameIdentity: sameCursorIdentity,
-    currentId: loadCursorIdx().current_cursor_account_id || null,
+    currentId: loadCursorIdx({ inventCurrent: false }).current_cursor_account_id || null,
     persist: (keeper, extras) => {
-      const currentId = loadCursorIdx().current_cursor_account_id;
+      const currentId = loadCursorIdx({ inventCurrent: false }).current_cursor_account_id;
       if (currentId && extras.some((item) => item.id === currentId)) {
         setCurrentCursorAccountId(keeper.id);
       }

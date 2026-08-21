@@ -72,9 +72,9 @@ function blockedRefreshText(account: AccountQuota): string {
 }
 
 function blockedSwitchText(account: AccountQuota): string {
-  return account.status === 'BANNED' && !isManagedProductAccount(account)
-    ? '账号已封号，无法切换'
-    : '该账号需要重新授权后才能切换';
+  if (account.status === 'BANNED' && !isManagedProductAccount(account)) return '账号已封号，无法切换';
+  if (account.tokenAccessAvailable === false) return '该账号没有可用登录令牌，无法切换';
+  return '该账号需要重新授权后才能切换';
 }
 
 function planBadgeText(account: AccountQuota): string {
@@ -371,7 +371,6 @@ export default function FloatLens() {
             return next;
           });
           setViewedId(currentId);
-          return;
         }
         void loadAccounts();
       },

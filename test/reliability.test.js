@@ -869,11 +869,95 @@ test("background quota IPC stops at an authentication conflict", async () => {
 
   const background = await handlers.get("quota:refresh")({}, account.id, false);
   assert.equal(background.success, false);
-  assert.match(background.error, /authentication changed/i);
+  assert.equal(background.error, "auth_conflict");
   assert.equal(refreshCount, 0);
 
   const manual = await handlers.get("quota:refresh")({}, account.id, true);
   assert.equal(manual.success, true);
+  assert.equal(refreshCount, 1);
+});
+
+test("background quota IPC still runs when official auth.json is missing", async () => {
+  const handlers = new Map();
+  let refreshCount = 0;
+  const electron = {
+    ipcMain: {
+      handle(channel, listener) {
+        handlers.set(channel, listener);
+      },
+    },
+    BrowserWindow: { getAllWindows: () => [] },
+    app: {
+      getVersion: () => "0.1.0-beta.9",
+      isPackaged: false,
+    },
+    shell: {
+      async openExternal() {},
+      async openPath() { return ""; },
+    },
+  };
+  const account = { id: "account-missing-auth", email: "missing-auth@example.com" };
+  const engine = {
+    inspectAuthState: () => ({
+      status: "missing_official_auth",
+      requiresResolution: true,
+      message: "Official Codex authentication is missing.",
+    }),
+    withAccountLock: async (_id, task) => task(),
+    loadAcct: () => account,
+    async refreshQuota() {
+      refreshCount += 1;
+      return { hourly_remaining_percentage: 40 };
+    },
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, { electron });
+
+  const background = await handlers.get("quota:refresh")({}, account.id, false);
+  assert.equal(background.success, true);
+  assert.equal(refreshCount, 1);
+});
+
+test("background quota IPC still runs when official auth.json is locked", async () => {
+  const handlers = new Map();
+  let refreshCount = 0;
+  const electron = {
+    ipcMain: {
+      handle(channel, listener) {
+        handlers.set(channel, listener);
+      },
+    },
+    BrowserWindow: { getAllWindows: () => [] },
+    app: {
+      getVersion: () => "2.0.4",
+      isPackaged: false,
+    },
+    shell: {
+      async openExternal() {},
+      async openPath() { return ""; },
+    },
+  };
+  const account = { id: "account-locked-auth", email: "locked-auth@example.com" };
+  const engine = {
+    inspectAuthState() {
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      error.transientIoError = true;
+      throw error;
+    },
+    withAccountLock: async (_id, task) => task(),
+    loadAcct: () => account,
+    async refreshQuota() {
+      refreshCount += 1;
+      return { hourly_remaining_percentage: 40 };
+    },
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, { electron });
+
+  const background = await handlers.get("quota:refresh")({}, account.id, false);
+  assert.equal(background.success, true);
+  assert.notEqual(background.error, "auth_conflict");
   assert.equal(refreshCount, 1);
 });
 
@@ -1291,6 +1375,25 @@ test("account file access rejects unsafe ids and delete rolls back on index fail
   assert.equal(engine.loadIdx().accounts.some(item => item.id === second.id), false);
 });
 
+test("deleting a non-current account still works after a corrupt index", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await addAccount(engine, "delete-corrupt-a@example.com", "acct-delete-corrupt-a", "delete-corrupt-a");
+  const second = await addAccount(engine, "delete-corrupt-b@example.com", "acct-delete-corrupt-b", "delete-corrupt-b");
+  first.last_used = 10;
+  engine.saveAcct(first);
+  second.last_used = 20;
+  engine.saveAcct(second);
+  assert.equal(engine.loadIdx().current_account_id, null);
+  const config = require("../engine/config");
+  try { fs.unlinkSync(`${config.IDX_PATH}.bak`); } catch {}
+  fs.writeFileSync(config.IDX_PATH, "{ corrupted", "utf8");
+  assert.equal(engine.deleteAcct(second.id), true);
+  assert.equal(engine.loadAcct(second.id), null);
+  assert.equal(engine.loadAcct(first.id).email, "delete-corrupt-a@example.com");
+  assert.equal(engine.loadIdx().current_account_id, null);
+  assert.equal(engine.currentAcct(), null);
+});
+
 test("deleting an account retries when the account file is transiently locked", async (t) => {
   const { engine } = freshEngine(t);
   const current = await addAccount(engine, "delete-keep@example.com", "acct-delete-keep", "delete-keep");
@@ -1458,6 +1561,42 @@ test("token refresh still mirrors official auth when the projection matches", as
   });
   assert.equal(result.ok, true);
   assert.equal(JSON.parse(fs.readFileSync(authPath, "utf8")).tokens.access_token, refreshed.access_token);
+});
+
+test("token refresh keeps a successful result when official auth.json is locked", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "refresh-lock@example.com", "acct-refresh-lock", "refresh-lock");
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const originalAuth = engine.writeAuthJson(account);
+  engine.writeProjection(account, originalAuth);
+  const authState = require("../engine/auth-state");
+  const originalInspect = authState.inspectAuthState;
+  authState.inspectAuthState = () => {
+    const error = new Error("EPERM: operation not permitted");
+    error.code = "EPERM";
+    error.transientIoError = true;
+    throw error;
+  };
+  t.after(() => { authState.inspectAuthState = originalInspect; });
+  const refreshed = tokens("refresh-lock@example.com", "acct-refresh-lock", "refresh-lock-new");
+  const result = await engine.refreshOneTok(account, {
+    force: true,
+    httpJson: async () => ({
+      status: 200,
+      headers: {},
+      body: JSON.stringify({
+        id_token: refreshed.id_token,
+        access_token: refreshed.access_token,
+        refresh_token: refreshed.refresh_token,
+      }),
+    }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(engine.loadAcct(account.id).tokens.access_token, refreshed.access_token);
+  const authPath = path.join(require("../engine/config").CODEX_DIR, "auth.json");
+  assert.equal(JSON.parse(fs.readFileSync(authPath, "utf8")).tokens.access_token, originalAuth.tokens.access_token);
 });
 
 test("token refresh does not overwrite an official Codex token rotation", async t => {
@@ -1710,6 +1849,8 @@ test("auto-switch refuses to use stale quota after current refresh failure", asy
   });
   assert.equal(result.switched, false);
   assert.equal(result.reason, "current_quota_refresh_failed");
+  assert.equal(result.authState.status, "aligned");
+  assert.equal(result.authState.currentAccountId, account.id);
 });
 
 test("auto-switch reuses a provided auth state instead of inspecting again", async (t) => {
@@ -1747,6 +1888,409 @@ test("auto-switch reuses a provided auth state instead of inspecting again", asy
   assert.equal(result.switched, false);
   assert.equal(result.reason, "quota_sufficient");
   assert.equal(inspects, 0);
+  assert.equal(result.authState.status, "aligned");
+});
+
+test("auto-switch does not leave when current quota is exactly the threshold", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "exact-th@example.com", "acct-exact-th", "exact-th");
+  const candidate = await addAccount(engine, "exact-th-ready@example.com", "acct-exact-th-ready", "exact-th-ready");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 20,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 30,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  candidate.quota = {
+    hourly_remaining_percentage: 90,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 90,
+    weekly_window_present: true,
+  };
+  candidate.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const switchModule = require("../engine/switch");
+  const originalSwitch = switchModule.doSwitch;
+  let switchedTo = null;
+  switchModule.doSwitch = async (account) => {
+    switchedTo = account.id;
+    return { account, authState: { status: "aligned", currentAccountId: account.id } };
+  };
+  t.after(() => { switchModule.doSwitch = originalSwitch; });
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+  assert.equal(result.switched, false);
+  assert.equal(result.reason, "quota_sufficient");
+  assert.equal(switchedTo, null);
+  assert.equal(engine.loadIdx().current_account_id, current.id);
+});
+
+test("auto-switch still leaves when current quota is below the threshold", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "below-th@example.com", "acct-below-th", "below-th");
+  const candidate = await addAccount(engine, "below-th-ready@example.com", "acct-below-th-ready", "below-th-ready");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 19,
+    hourly_window_present: true,
+    weekly_window_present: false,
+  };
+  current.usage_updated_at = now;
+  candidate.quota = {
+    hourly_remaining_percentage: 90,
+    hourly_window_present: true,
+    weekly_window_present: false,
+  };
+  candidate.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const switchModule = require("../engine/switch");
+  const originalSwitch = switchModule.doSwitch;
+  let switchedTo = null;
+  switchModule.doSwitch = async (account) => {
+    switchedTo = account.id;
+    return { account, authState: { status: "aligned", currentAccountId: account.id } };
+  };
+  t.after(() => { switchModule.doSwitch = originalSwitch; });
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+  assert.equal(result.switched, true);
+  assert.equal(switchedTo, candidate.id);
+});
+
+test("auto-switch rechecks official auth before writing a switch", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "stale-auth-current@example.com", "acct-stale-auth-current", "stale-auth-current");
+  const candidate = await addAccount(engine, "stale-auth-ready@example.com", "acct-stale-auth-ready", "stale-auth-ready");
+  const outsider = await addAccount(engine, "stale-auth-out@example.com", "acct-stale-auth-out", "stale-auth-out");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 0,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  candidate.quota = {
+    hourly_remaining_percentage: 80,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 80,
+    weekly_window_present: true,
+  };
+  candidate.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const outsiderAuth = engine.writeAuthJson(outsider);
+  engine.writeProjection(outsider, outsiderAuth);
+  const switchModule = require("../engine/switch");
+  const originalSwitch = switchModule.doSwitch;
+  let switchedTo = null;
+  switchModule.doSwitch = async (account) => {
+    switchedTo = account.id;
+    return { account };
+  };
+  t.after(() => { switchModule.doSwitch = originalSwitch; });
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  }, {
+    authState: { status: "aligned", requiresResolution: false, currentAccountId: current.id },
+  });
+  assert.equal(result.switched, false);
+  assert.equal(result.reason, "auth_conflict");
+  assert.equal(switchedTo, null);
+  assert.equal(result.authState.status, "conflict");
+  const official = JSON.parse(fs.readFileSync(path.join(require("../engine/config").CODEX_DIR, "auth.json"), "utf8"));
+  assert.equal(official.tokens.access_token, outsider.tokens.access_token);
+});
+
+test("auto-switch recheck treats a vanished official login as missing, not a write", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "recheck-missing-cur@example.com", "acct-recheck-missing-cur", "recheck-missing-cur");
+  const candidate = await addAccount(engine, "recheck-missing-ready@example.com", "acct-recheck-missing-ready", "recheck-missing-ready");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 0,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  candidate.quota = {
+    hourly_remaining_percentage: 80,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 80,
+    weekly_window_present: true,
+  };
+  candidate.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const switchModule = require("../engine/switch");
+  const originalSwitch = switchModule.doSwitch;
+  let switchedTo = null;
+  switchModule.doSwitch = async (account) => {
+    switchedTo = account.id;
+    return { account };
+  };
+  t.after(() => { switchModule.doSwitch = originalSwitch; });
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  }, {
+    authState: { status: "aligned", requiresResolution: false, currentAccountId: current.id },
+  });
+  assert.equal(result.switched, false);
+  assert.equal(result.reason, "missing_official_auth");
+  assert.equal(result.authState.status, "missing_official_auth");
+  assert.equal(switchedTo, null);
+});
+
+test("auto-switch does not write when the current account changes before the lock", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "changed-cur@example.com", "acct-changed-cur", "changed-cur");
+  const candidate = await addAccount(engine, "changed-ready@example.com", "acct-changed-ready", "changed-ready");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 0,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  candidate.quota = {
+    hourly_remaining_percentage: 80,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 80,
+    weekly_window_present: true,
+  };
+  candidate.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const storage = require("../engine/storage");
+  const originalLoadIdx = storage.loadIdx;
+  let loads = 0;
+  storage.loadIdx = () => {
+    loads += 1;
+    const latest = originalLoadIdx();
+    if (loads > 1) return { ...latest, current_account_id: candidate.id };
+    return latest;
+  };
+  t.after(() => { storage.loadIdx = originalLoadIdx; });
+  const switchModule = require("../engine/switch");
+  const originalSwitch = switchModule.doSwitch;
+  let switchedTo = null;
+  switchModule.doSwitch = async (account) => {
+    switchedTo = account.id;
+    return { account };
+  };
+  t.after(() => { switchModule.doSwitch = originalSwitch; });
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  }, {
+    authState: { status: "aligned", requiresResolution: false, currentAccountId: current.id, message: "stale-pre-lock" },
+  });
+  assert.equal(result.switched, false);
+  assert.equal(result.reason, "current_changed");
+  assert.equal(switchedTo, null);
+  assert.equal(result.authState.status, "aligned");
+  assert.equal(result.authState.currentAccountId, current.id);
+  assert.notEqual(result.authState.message, "stale-pre-lock");
+});
+
+test("auto-switch current-changed does not invent a conflict when auth.json is locked", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "changed-lock@example.com", "acct-changed-lock", "changed-lock");
+  const candidate = await addAccount(engine, "changed-lock-ready@example.com", "acct-changed-lock-ready", "changed-lock-ready");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_window_present: false,
+  };
+  current.usage_updated_at = now;
+  candidate.quota = {
+    hourly_remaining_percentage: 80,
+    hourly_window_present: true,
+    weekly_window_present: false,
+  };
+  candidate.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const storage = require("../engine/storage");
+  const originalLoadIdx = storage.loadIdx;
+  let loads = 0;
+  storage.loadIdx = () => {
+    loads += 1;
+    const latest = originalLoadIdx();
+    if (loads > 1) return { ...latest, current_account_id: candidate.id };
+    return latest;
+  };
+  const authState = require("../engine/auth-state");
+  const originalInspect = authState.inspectAuthState;
+  authState.inspectAuthState = () => {
+    const error = new Error("EPERM: operation not permitted");
+    error.code = "EPERM";
+    error.transientIoError = true;
+    throw error;
+  };
+  t.after(() => {
+    storage.loadIdx = originalLoadIdx;
+    authState.inspectAuthState = originalInspect;
+  });
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  }, {
+    authState: { status: "aligned", requiresResolution: false, currentAccountId: current.id },
+  });
+  assert.equal(result.switched, false);
+  assert.equal(result.reason, "current_changed");
+  assert.equal(result.authState.status, "unknown");
+  assert.equal(result.authState.requiresResolution, false);
+  assert.notEqual(result.authState.status, "conflict");
+});
+
+test("auto-switch names a missing official login separately from a conflict", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "missing-official-cur@example.com", "acct-missing-official-cur", "missing-official-cur");
+  const candidate = await addAccount(engine, "missing-official-ready@example.com", "acct-missing-official-ready", "missing-official-ready");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 0,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  candidate.quota = {
+    hourly_remaining_percentage: 80,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 80,
+    weekly_window_present: true,
+  };
+  candidate.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const switchModule = require("../engine/switch");
+  const originalSwitch = switchModule.doSwitch;
+  let switchedTo = null;
+  switchModule.doSwitch = async (account) => {
+    switchedTo = account.id;
+    return { account };
+  };
+  t.after(() => { switchModule.doSwitch = originalSwitch; });
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+  assert.equal(result.switched, false);
+  assert.equal(result.reason, "missing_official_auth");
+  assert.equal(result.authState.status, "missing_official_auth");
+  assert.equal(switchedTo, null);
+});
+
+test("auto-switch names an unmanaged official login separately from a conflict", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "unmanaged-cur@example.com", "acct-unmanaged-cur", "unmanaged-cur");
+  const candidate = await addAccount(engine, "unmanaged-ready@example.com", "acct-unmanaged-ready", "unmanaged-ready");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 0,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  candidate.quota = {
+    hourly_remaining_percentage: 80,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 80,
+    weekly_window_present: true,
+  };
+  candidate.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const switchModule = require("../engine/switch");
+  const originalSwitch = switchModule.doSwitch;
+  let switchedTo = null;
+  switchModule.doSwitch = async (account) => {
+    switchedTo = account.id;
+    return { account };
+  };
+  t.after(() => { switchModule.doSwitch = originalSwitch; });
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  }, {
+    authState: { status: "unmanaged_official_auth", requiresResolution: true },
+  });
+  assert.equal(result.switched, false);
+  assert.equal(result.reason, "unmanaged_official_auth");
+  assert.equal(switchedTo, null);
 });
 
 test("auto-switch keeps cached quota when refresh is only waiting to retry", async t => {
@@ -1859,6 +2403,8 @@ test("auto-switch cancellation prevents switching after a daemon stop", async t 
   assert.equal(result.reason, "cancelled");
   assert.equal(switched, false);
   assert.equal(engine.loadIdx().current_account_id, current.id);
+  assert.equal(result.authState.status, "aligned");
+  assert.equal(result.authState.currentAccountId, current.id);
 });
 
 test("auto-switch revalidates failed candidates and excludes accounts requiring reauthorization", async t => {
@@ -2080,6 +2626,212 @@ test("auto-switch treats a reauth current account as must-leave", async t => {
   assert.ok(!refreshedIds.includes(current.id));
 });
 
+test("auto-switch does not immediately undo a just-completed official switch", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "recent-switch-cur@example.com", "acct-recent-switch-cur", "recent-switch-cur");
+  const candidate = await addAccount(engine, "recent-switch-ready@example.com", "acct-recent-switch-ready", "recent-switch-ready");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 0,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  candidate.quota = {
+    hourly_remaining_percentage: 80,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 80,
+    weekly_window_present: true,
+  };
+  candidate.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const switchModule = require("../engine/switch");
+  const originalSwitch = switchModule.doSwitch;
+  let switchedTo = null;
+  switchModule.doSwitch = async (account) => {
+    switchedTo = account.id;
+    return { account };
+  };
+  t.after(() => { switchModule.doSwitch = originalSwitch; });
+  engine.noteOfficialSwitch();
+  const blocked = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+  assert.equal(blocked.switched, false);
+  assert.equal(blocked.reason, "recently_switched");
+  assert.equal(switchedTo, null);
+  assert.equal(blocked.authState.status, "aligned");
+  assert.equal(blocked.authState.currentAccountId, current.id);
+});
+
+test("auto-switch does not write while Codex OAuth is pending", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "oauth-pend-cur@example.com", "acct-oauth-pend-cur", "oauth-pend-cur");
+  const candidate = await addAccount(engine, "oauth-pend-ready@example.com", "acct-oauth-pend-ready", "oauth-pend-ready");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 0,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  candidate.quota = {
+    hourly_remaining_percentage: 80,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 80,
+    weekly_window_present: true,
+  };
+  candidate.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const oauth = require("../engine/oauth");
+  const originalStatus = oauth.getOAuthStatus;
+  oauth.getOAuthStatus = () => ({ pending: true });
+  t.after(() => { oauth.getOAuthStatus = originalStatus; });
+  const switchModule = require("../engine/switch");
+  const originalSwitch = switchModule.doSwitch;
+  let switchedTo = null;
+  switchModule.doSwitch = async (account) => {
+    switchedTo = account.id;
+    return { account };
+  };
+  t.after(() => { switchModule.doSwitch = originalSwitch; });
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+  assert.equal(result.switched, false);
+  assert.equal(result.reason, "oauth_pending");
+  assert.equal(switchedTo, null);
+});
+
+test("auto-switch recheck does not write if OAuth starts after the first look", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "oauth-race-cur@example.com", "acct-oauth-race-cur", "oauth-race-cur");
+  const candidate = await addAccount(engine, "oauth-race-ready@example.com", "acct-oauth-race-ready", "oauth-race-ready");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 0,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  candidate.quota = {
+    hourly_remaining_percentage: 80,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 80,
+    weekly_window_present: true,
+  };
+  candidate.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const oauth = require("../engine/oauth");
+  const originalStatus = oauth.getOAuthStatus;
+  let looks = 0;
+  oauth.getOAuthStatus = () => {
+    looks += 1;
+    return { pending: looks > 1 };
+  };
+  t.after(() => { oauth.getOAuthStatus = originalStatus; });
+  const switchModule = require("../engine/switch");
+  const originalSwitch = switchModule.doSwitch;
+  let switchedTo = null;
+  switchModule.doSwitch = async (account) => {
+    switchedTo = account.id;
+    return { account };
+  };
+  t.after(() => { switchModule.doSwitch = originalSwitch; });
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  }, {
+    authState: { status: "aligned", requiresResolution: false, currentAccountId: current.id },
+  });
+  assert.equal(result.switched, false);
+  assert.equal(result.reason, "oauth_pending");
+  assert.equal(switchedTo, null);
+  assert.ok(looks >= 2);
+  assert.equal(result.authState.status, "aligned");
+  assert.equal(result.authState.currentAccountId, current.id);
+});
+
+test("auto-switch reports a verify failure instead of throwing", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "verify-fail-cur@example.com", "acct-verify-fail-cur", "verify-fail-cur");
+  const candidate = await addAccount(engine, "verify-fail-ready@example.com", "acct-verify-fail-ready", "verify-fail-ready");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 0,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  candidate.quota = {
+    hourly_remaining_percentage: 80,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 80,
+    weekly_window_present: true,
+  };
+  candidate.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const switchModule = require("../engine/switch");
+  const originalSwitch = switchModule.doSwitch;
+  switchModule.doSwitch = async () => {
+    const error = new Error("Codex 官方登录写入后核对失败，没有切到目标账号");
+    error.code = "codex_switch_verify_failed";
+    throw error;
+  };
+  t.after(() => { switchModule.doSwitch = originalSwitch; });
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+  assert.equal(result.switched, false);
+  assert.equal(result.reason, "switch_verify_failed");
+  assert.equal(engine.loadIdx().current_account_id, current.id);
+  assert.equal(result.authState.status, "aligned");
+  assert.equal(result.authState.currentAccountId, current.id);
+});
+
 test("auto-switch treats a usage-limited current account as must-leave", async t => {
   const { engine } = freshEngine(t);
   const current = await addAccount(engine, "limited-current-switch@example.com", "acct-limited-current-switch", "limited-current-switch");
@@ -2125,7 +2877,7 @@ test("auto-switch treats a usage-limited current account as must-leave", async t
   };
   switchModule.doSwitch = async account => {
     switchedTo = account.id;
-    return { account };
+    return { account, authState: { status: "aligned", currentAccountId: account.id } };
   };
   t.after(() => {
     quotaModule.refreshQuota = originalRefresh;
@@ -2142,6 +2894,8 @@ test("auto-switch treats a usage-limited current account as must-leave", async t
 
   assert.equal(result.switched, true);
   assert.equal(switchedTo, candidate.id);
+  assert.equal(result.authState.status, "aligned");
+  assert.equal(result.authState.currentAccountId, candidate.id);
   assert.ok(!refreshedIds.includes(current.id));
 });
 
@@ -2196,6 +2950,246 @@ test("auto-switch excludes usage-limited candidates even when cached quota is hi
   switchModule.doSwitch = async account => {
     switchedTo = account.id;
     return { account };
+  };
+  t.after(() => {
+    quotaModule.refreshQuota = originalRefresh;
+    switchModule.doSwitch = originalSwitch;
+  });
+
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+
+  assert.equal(result.switched, true);
+  assert.equal(switchedTo, ready.id);
+});
+
+test("auto-switch skips candidates that have no access token", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "empty-tok-cur@example.com", "acct-empty-tok-cur", "empty-tok-cur");
+  const empty = await addAccount(engine, "empty-tok-cand@example.com", "acct-empty-tok-cand", "empty-tok-cand");
+  const ready = await addAccount(engine, "empty-tok-ready@example.com", "acct-empty-tok-ready", "empty-tok-ready");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 0,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  empty.tokens.access_token = "";
+  empty.quota = {
+    hourly_remaining_percentage: 99,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 99,
+    weekly_window_present: true,
+  };
+  empty.usage_updated_at = now;
+  ready.quota = {
+    hourly_remaining_percentage: 70,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 70,
+    weekly_window_present: true,
+  };
+  ready.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(empty);
+  engine.saveAcct(ready);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  assert.equal(engine.listAccts({ secrets: false }).find((item) => item.id === empty.id).has_access, false);
+
+  const quotaModule = require("../engine/quota");
+  const switchModule = require("../engine/switch");
+  const originalRefresh = quotaModule.refreshQuota;
+  const originalSwitch = switchModule.doSwitch;
+  let switchedTo = null;
+  quotaModule.refreshQuota = async account => account.quota;
+  switchModule.doSwitch = async account => {
+    switchedTo = account.id;
+    return { account, authState: { status: "aligned", currentAccountId: account.id } };
+  };
+  t.after(() => {
+    quotaModule.refreshQuota = originalRefresh;
+    switchModule.doSwitch = originalSwitch;
+  });
+
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+
+  assert.equal(result.switched, true);
+  assert.equal(switchedTo, ready.id);
+  assert.equal(result.authState.status, "aligned");
+});
+
+test("auto-switch does not throw when the only candidate has no access token", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "empty-only-cur@example.com", "acct-empty-only-cur", "empty-only-cur");
+  const empty = await addAccount(engine, "empty-only-cand@example.com", "acct-empty-only-cand", "empty-only-cand");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 0,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  empty.tokens.access_token = "";
+  empty.quota = {
+    hourly_remaining_percentage: 99,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 99,
+    weekly_window_present: true,
+  };
+  empty.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(empty);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+
+  const quotaModule = require("../engine/quota");
+  const switchModule = require("../engine/switch");
+  const originalRefresh = quotaModule.refreshQuota;
+  const originalSwitch = switchModule.doSwitch;
+  let switchedTo = null;
+  quotaModule.refreshQuota = async account => account.quota;
+  switchModule.doSwitch = async account => {
+    switchedTo = account.id;
+    return { account };
+  };
+  t.after(() => {
+    quotaModule.refreshQuota = originalRefresh;
+    switchModule.doSwitch = originalSwitch;
+  });
+
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+
+  assert.equal(result.switched, false);
+  assert.equal(result.reason, "no_candidates");
+  assert.equal(switchedTo, null);
+});
+
+test("auto-switch leaves a current account that has no access token", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "empty-cur-leave@example.com", "acct-empty-cur-leave", "empty-cur-leave");
+  const ready = await addAccount(engine, "empty-cur-ready@example.com", "acct-empty-cur-ready", "empty-cur-ready");
+  const now = engine.ts();
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  current.tokens.access_token = "";
+  current.quota = {
+    hourly_remaining_percentage: 90,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 90,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  ready.quota = {
+    hourly_remaining_percentage: 80,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 80,
+    weekly_window_present: true,
+  };
+  ready.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(ready);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  assert.equal(engine.listAccts({ secrets: false }).find((item) => item.id === current.id).has_access, false);
+
+  const quotaModule = require("../engine/quota");
+  const switchModule = require("../engine/switch");
+  const originalRefresh = quotaModule.refreshQuota;
+  const originalSwitch = switchModule.doSwitch;
+  let switchedTo = null;
+  quotaModule.refreshQuota = async account => account.quota;
+  switchModule.doSwitch = async account => {
+    switchedTo = account.id;
+    return { account, authState: { status: "aligned", currentAccountId: account.id } };
+  };
+  t.after(() => {
+    quotaModule.refreshQuota = originalRefresh;
+    switchModule.doSwitch = originalSwitch;
+  });
+
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+
+  assert.equal(result.switched, true);
+  assert.equal(switchedTo, ready.id);
+});
+
+test("auto-switch still accepts listed candidates that omit has_access", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "omit-access-cur@example.com", "acct-omit-access-cur", "omit-access-cur");
+  const ready = await addAccount(engine, "omit-access-ready@example.com", "acct-omit-access-ready", "omit-access-ready");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 0,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  ready.quota = {
+    hourly_remaining_percentage: 80,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 80,
+    weekly_window_present: true,
+  };
+  ready.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(ready);
+  const filePath = engine.accountFilePath(ready.id);
+  const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  delete raw.has_access;
+  if (raw.token_exp == null) raw.token_exp = Math.floor(Date.now() / 1000) + 3600;
+  fs.writeFileSync(filePath, JSON.stringify(raw));
+  const listed = engine.listAccts({ secrets: false }).find((item) => item.id === ready.id);
+  assert.equal(listed.has_access, undefined);
+  assert.equal(listed.tokens, null);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+
+  const quotaModule = require("../engine/quota");
+  const switchModule = require("../engine/switch");
+  const originalRefresh = quotaModule.refreshQuota;
+  const originalSwitch = switchModule.doSwitch;
+  let switchedTo = null;
+  quotaModule.refreshQuota = async account => account.quota;
+  switchModule.doSwitch = async account => {
+    switchedTo = account.id;
+    return { account, authState: { status: "aligned", currentAccountId: account.id } };
   };
   t.after(() => {
     quotaModule.refreshQuota = originalRefresh;
@@ -2296,6 +3290,42 @@ test("auto-switch reports but does not switch when the global switch is off", as
   assert.equal(result.reason, "disabled");
   assert.equal(switchedTo, null);
   assert.equal(engine.loadIdx().current_account_id, current.id);
+  assert.equal(result.authState.status, "aligned");
+  assert.equal(result.authState.currentAccountId, current.id);
+});
+
+test("daemon still refreshes spare tokens when official auth.json is missing", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "daemon-missing-cur@example.com", "acct-daemon-missing-cur", "daemon-missing-cur");
+  const spare = await addAccount(engine, "daemon-missing-spare@example.com", "acct-daemon-missing-spare", "daemon-missing-spare");
+  spare.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+  engine.saveAcct(spare);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const tokenModule = require("../engine/token-refresh");
+  const originalRefresh = tokenModule.refreshOneTok;
+  const refreshed = [];
+  tokenModule.refreshOneTok = async (account, options = {}) => {
+    refreshed.push(account.id);
+    return originalRefresh(account, {
+      ...options,
+      httpJson: async () => ({
+        status: 200,
+        body: JSON.stringify({
+          access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
+          refresh_token: account.tokens.refresh_token,
+          id_token: account.tokens.id_token,
+        }),
+      }),
+    });
+  };
+  t.after(() => { tokenModule.refreshOneTok = originalRefresh; });
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.authState.status, "missing_official_auth");
+  assert.equal(result.pausedReason, null);
+  assert.equal(refreshed.includes(spare.id), true);
+  assert.ok(result.tokenRefreshes.some((item) => item.accountId === spare.id && item.ok === true));
 });
 
 test("daemon pauses before network work when official authentication conflicts", async t => {
@@ -2374,9 +3404,57 @@ test("the daemon does not pause as an auth conflict when official auth.json stay
   t.after(() => { fs.readFileSync = originalRead; });
   const result = await engine.runDaemonWorker();
   assert.equal(result.pausedReason, null);
-  assert.equal(result.failures.some((item) => item.stage === "auth_inspect"), true);
+  assert.equal(result.failures.some((item) => item.stage === "auth_inspect"), false);
+  assert.equal(result.authState.status, "unknown");
+  assert.equal(result.authState.requiresResolution, false);
+  assert.equal(result.autoSwitchResult, null);
   assert.equal(result.accountsUpdated, 0);
   assert.deepEqual(result.tokenRefreshes, []);
+});
+
+test("the daemon skips official mirror when a later auth.json lock is leftover", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "daemon-auth-lock-later@example.com", "acct-daemon-auth-lock-later", "daemon-auth-lock-later");
+  account.quota = {
+    hourly_remaining_percentage: 80,
+    hourly_window_present: true,
+    weekly_window_present: false,
+  };
+  account.usage_updated_at = engine.ts();
+  engine.saveAcct(account);
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(account);
+  engine.writeProjection(account, auth);
+  const config = require("../engine/config");
+  const authPath = path.join(config.CODEX_DIR, "auth.json");
+  const originalRead = fs.readFileSync;
+  const quotaModule = require("../engine/quota");
+  const originalRefresh = quotaModule.refreshQuota;
+  quotaModule.refreshQuota = async (target, options) => {
+    try {
+      return await originalRefresh(target, options);
+    } finally {
+      fs.readFileSync = (file, encoding) => {
+        if (path.resolve(String(file)) === path.resolve(authPath)) {
+          const error = new Error("EPERM: operation not permitted");
+          error.code = "EPERM";
+          throw error;
+        }
+        return originalRead(file, encoding);
+      };
+    }
+  };
+  t.after(() => {
+    quotaModule.refreshQuota = originalRefresh;
+    fs.readFileSync = originalRead;
+  });
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.pausedReason, null);
+  assert.notEqual(result.pausedReason, "auth_conflict");
+  assert.equal(result.failures.some((item) => item.stage === "auth_inspect"), false);
+  assert.equal(result.authState.status, "aligned");
 });
 
 test("the daemon does not pause as an auth conflict when official auth.json hits a non-JSON filesystem error", async t => {
@@ -2404,6 +3482,62 @@ test("the daemon does not pause as an auth conflict when official auth.json hits
   assert.equal(result.failures.some((item) => item.stage === "auth_inspect" && item.code === "EISDIR"), true);
   fs.readFileSync = originalRead;
   assert.ok(JSON.parse(fs.readFileSync(authPath, "utf8")).tokens.access_token);
+});
+
+test("daemon announces a newly missing official login once", async t => {
+  const { engine } = freshEngine(t);
+  const sent = [];
+  engine.runDaemonWorker = async () => ({
+    completedAt: Date.now(),
+    pausedReason: null,
+    failures: [],
+    autoSwitchResult: null,
+    authState: { status: "missing_official_auth", requiresResolution: true },
+  });
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  const daemon = registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle() {} },
+      BrowserWindow: {
+        getAllWindows: () => [{
+          isDestroyed: () => false,
+          webContents: {
+            isDestroyed: () => false,
+            send(channel, payload) { sent.push({ channel, status: payload?.status }); },
+          },
+        }],
+      },
+      app: { getVersion: () => "2.0.4", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  await daemon.runDaemon();
+  await daemon.runDaemon();
+  const authEvents = sent.filter((item) => item.channel === "auth:conflict");
+  assert.equal(authEvents.length, 1);
+  assert.equal(authEvents[0].status, "missing_official_auth");
+
+  engine.runDaemonWorker = async () => ({
+    completedAt: Date.now(),
+    pausedReason: "auth_conflict",
+    failures: [],
+    autoSwitchResult: null,
+    authState: { status: "conflict", requiresResolution: true },
+  });
+  await daemon.runDaemon();
+  await daemon.runDaemon();
+  const afterConflict = sent.filter((item) => item.channel === "auth:conflict");
+  assert.equal(afterConflict.length, 2);
+  assert.equal(afterConflict[1].status, "conflict");
+
+  engine.getTickIntervalMs = () => 60 * 60 * 1000;
+  engine.getTickIntervalMinutes = () => 60;
+  daemon.startDaemon();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  daemon.stopDaemon();
+  const afterRestart = sent.filter((item) => item.channel === "auth:conflict");
+  assert.equal(afterRestart.length, 3);
+  assert.equal(afterRestart[2].status, "conflict");
 });
 
 test("daemon restart during in-flight work schedules an immediate replacement run", async t => {
@@ -2473,6 +3607,82 @@ test("daemon restart during in-flight work schedules an immediate replacement ru
   assert.equal(runCount, 2);
   assert.equal(handlers.has("daemon:start"), true);
   assert.equal(handlers.has("daemon:stop"), true);
+});
+
+test("starting the daemon clears a leftover stopped pause reason", async () => {
+  const handlers = new Map();
+  const engine = {
+    getTickIntervalMs: () => 60 * 60 * 1000,
+    getTickIntervalMinutes: () => 60,
+    runDaemonWorker() {
+      return new Promise(() => {});
+    },
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  const daemon = registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: {
+        handle(channel, listener) {
+          handlers.set(channel, listener);
+        },
+      },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.4", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  daemon.startDaemon();
+  daemon.stopDaemon();
+  const stopped = await handlers.get("daemon:status")({});
+  assert.equal(stopped.data.pausedReason, "stopped");
+  daemon.startDaemon();
+  const started = await handlers.get("daemon:status")({});
+  assert.equal(started.data.running, true);
+  assert.equal(started.data.pausedReason, null);
+  daemon.stopDaemon();
+});
+
+test("a cancelled daemon worker does not write stopped back over a restarted run", async () => {
+  const handlers = new Map();
+  const releases = [];
+  const engine = {
+    getTickIntervalMs: () => 60 * 60 * 1000,
+    getTickIntervalMinutes: () => 60,
+    runDaemonWorker(options) {
+      return new Promise((resolve) => {
+        releases.push(() => resolve({
+          completedAt: Date.now(),
+          pausedReason: options.isCancelled() ? "stopped" : null,
+          failures: [],
+          autoSwitchResult: null,
+        }));
+      });
+    },
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  const daemon = registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: {
+        handle(channel, listener) {
+          handlers.set(channel, listener);
+        },
+      },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.4", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  daemon.startDaemon();
+  daemon.stopDaemon();
+  daemon.startDaemon();
+  assert.equal(releases.length, 1);
+  releases.shift()();
+  await new Promise((resolve) => setImmediate(resolve));
+  const status = await handlers.get("daemon:status")({});
+  assert.equal(status.data.running, true);
+  assert.equal(status.data.pausedReason, null);
+  daemon.stopDaemon();
+  releases.shift()?.();
 });
 
 test("config saves reload only a changed daemon interval without triggering work", async t => {
@@ -2617,6 +3827,458 @@ test("manual auto-switch checks update daemon status metadata", async () => {
   const afterFailure = await handlers.get("daemon:status")({});
   assert.equal(afterFailure.data.lastError, "network unavailable");
   assert.equal(afterFailure.data.lastSuccessAt, afterSkip.data.lastSuccessAt);
+
+  nextResult = {
+    switched: false,
+    reason: "missing_official_auth",
+    authState: { status: "missing_official_auth", requiresResolution: true },
+  };
+  const missingResult = await handlers.get("autoswitch:tick")({});
+  assert.equal(missingResult.success, true);
+  const afterMissing = await handlers.get("daemon:status")({});
+  assert.equal(afterMissing.data.lastError, null);
+  assert.equal(afterMissing.data.lastAuthStatus, "missing_official_auth");
+  assert.equal(afterMissing.data.lastSuccessAt, afterSkip.data.lastSuccessAt);
+  assert.equal(afterMissing.data.pausedReason, "missing_official_auth");
+
+  nextResult = { switched: false, reason: "quota_sufficient", authState: { status: "aligned", requiresResolution: false } };
+  const recovered = await handlers.get("autoswitch:tick")({});
+  assert.equal(recovered.success, true);
+  const afterRecovered = await handlers.get("daemon:status")({});
+  assert.equal(afterRecovered.data.pausedReason, null);
+  assert.equal(afterRecovered.data.lastAuthStatus, "aligned");
+});
+
+test("manual auto-switch check broadcasts the new current account to other windows", async () => {
+  const handlers = new Map();
+  const sent = [];
+  const electron = {
+    ipcMain: {
+      handle(channel, listener) {
+        handlers.set(channel, listener);
+      },
+    },
+    BrowserWindow: {
+      getAllWindows: () => [{
+        isDestroyed: () => false,
+        webContents: {
+          isDestroyed: () => false,
+          send(channel, payload) { sent.push({ channel, payload }); },
+        },
+      }],
+    },
+    app: {
+      getVersion: () => "2.0.4",
+      isPackaged: false,
+    },
+    shell: {
+      async openExternal() {},
+      async openPath() { return ""; },
+    },
+  };
+  let nextResult = {
+    switched: false,
+    reason: "quota_sufficient",
+    to: { id: "codex_keep", email: "keep@example.com" },
+  };
+  const engine = {
+    getTickIntervalMs: () => 10 * 60000,
+    getTickIntervalMinutes: () => 10,
+    loadAutoSwitchCfg: () => ({
+      enabled: false,
+      primary_threshold: 20,
+      secondary_threshold: 30,
+      account_scope_mode: "selected",
+      selected_account_ids: [],
+      sync_interval_minutes: 10,
+    }),
+    async autoSwitchTick() {
+      return nextResult;
+    },
+  };
+
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, { electron });
+
+  const skipped = await handlers.get("autoswitch:tick")({});
+  assert.equal(skipped.success, true);
+  assert.equal(sent.some((item) => item.channel === "account:updated"), false);
+  assert.equal(sent.some((item) => item.channel === "autoswitch:executed"), false);
+
+  nextResult = {
+    switched: true,
+    reason: "switched",
+    from: { id: "codex_keep", email: "keep@example.com" },
+    to: { id: "codex_next", email: "next@example.com" },
+    authState: { status: "aligned", currentAccountId: "codex_next", requiresResolution: false },
+  };
+  sent.length = 0;
+  const switched = await handlers.get("autoswitch:tick")({});
+  assert.equal(switched.success, true);
+  assert.equal(switched.data.to.id, "codex_next");
+  const accountEvents = sent.filter((item) => item.channel === "account:updated");
+  assert.equal(accountEvents.length, 1);
+  assert.equal(accountEvents[0].payload.product, "codex");
+  assert.equal(accountEvents[0].payload.current, true);
+  assert.equal(accountEvents[0].payload.account.id, "codex_next");
+  assert.equal(sent.some((item) => item.channel === "autoswitch:executed"), false);
+});
+
+test("daemon auto-switch broadcasts the new current account to other windows", async () => {
+  const sent = [];
+  const engine = {
+    getTickIntervalMs: () => 10 * 60000,
+    getTickIntervalMinutes: () => 10,
+    loadAutoSwitchCfg: () => ({ enabled: true, sync_interval_minutes: 10 }),
+    async runDaemonWorker() {
+      return {
+        completedAt: Date.now(),
+        pausedReason: null,
+        failures: [],
+        autoSwitchResult: {
+          switched: true,
+          from: { id: "codex_keep", email: "keep@example.com" },
+          to: { id: "codex_next", email: "next@example.com" },
+        },
+        authState: { status: "aligned", currentAccountId: "codex_next", requiresResolution: false },
+      };
+    },
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  const daemon = registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle() {} },
+      BrowserWindow: {
+        getAllWindows: () => [{
+          isDestroyed: () => false,
+          webContents: {
+            isDestroyed: () => false,
+            send(channel, payload) { sent.push({ channel, payload }); },
+          },
+        }],
+      },
+      app: { getVersion: () => "2.0.4", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  await daemon.runDaemon();
+  const executed = sent.filter((item) => item.channel === "autoswitch:executed");
+  assert.equal(executed.length, 1);
+  assert.equal(executed[0].payload.to.id, "codex_next");
+  const accountEvents = sent.filter((item) => item.channel === "account:updated");
+  assert.equal(accountEvents.length, 1);
+  assert.equal(accountEvents[0].payload.product, "codex");
+  assert.equal(accountEvents[0].payload.current, true);
+  assert.equal(accountEvents[0].payload.account.id, "codex_next");
+});
+
+test("adopt official IPC returns the post-adopt auth state", async () => {
+  const handlers = new Map();
+  const electron = {
+    ipcMain: {
+      handle(channel, listener) {
+        handlers.set(channel, listener);
+      },
+    },
+    BrowserWindow: { getAllWindows: () => [] },
+    app: {
+      getVersion: () => "0.1.0-beta.9",
+      isPackaged: false,
+    },
+    shell: {
+      async openExternal() {},
+      async openPath() { return ""; },
+    },
+  };
+  const engine = {
+    getTickIntervalMs: () => 10 * 60000,
+    getTickIntervalMinutes: () => 10,
+    loadAutoSwitchCfg: () => ({ enabled: false, sync_interval_minutes: 10 }),
+    async adoptOfficialAuth() {
+      return { account: { id: "codex_adopt", email: "adopt@example.com" }, updated: true };
+    },
+    inspectAuthState() {
+      return { status: "aligned", currentAccountId: "codex_adopt", requiresResolution: false };
+    },
+    async reapplyManagedAuth() {
+      return {
+        already: false,
+        account: { id: "codex_keep", email: "keep@example.com" },
+        authState: { status: "aligned", currentAccountId: "codex_keep", requiresResolution: false },
+      };
+    },
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, { electron });
+  const adopted = await handlers.get("account:adoptOfficial")({});
+  assert.equal(adopted.success, true);
+  assert.equal(adopted.data.email, "adopt@example.com");
+  assert.equal(adopted.data.authState.status, "aligned");
+  assert.equal(adopted.data.authState.currentAccountId, "codex_adopt");
+  const reapplied = await handlers.get("account:reapplyManaged")({}, "codex_keep");
+  assert.equal(reapplied.success, true);
+  assert.equal(reapplied.data.authState.status, "aligned");
+  assert.equal(reapplied.data.authState.currentAccountId, "codex_keep");
+});
+
+test("adopt official IPC does not keep a conflict when auth.json is locked", async () => {
+  const handlers = new Map();
+  const sent = [];
+  const electron = {
+    ipcMain: {
+      handle(channel, listener) {
+        handlers.set(channel, listener);
+      },
+    },
+    BrowserWindow: {
+      getAllWindows: () => [{
+        isDestroyed: () => false,
+        webContents: {
+          isDestroyed: () => false,
+          send(channel, payload) { sent.push({ channel, payload }); },
+        },
+      }],
+    },
+    app: {
+      getVersion: () => "2.0.4",
+      isPackaged: false,
+    },
+    shell: {
+      async openExternal() {},
+      async openPath() { return ""; },
+    },
+  };
+  const engine = {
+    getTickIntervalMs: () => 10 * 60000,
+    getTickIntervalMinutes: () => 10,
+    loadAutoSwitchCfg: () => ({ enabled: false, sync_interval_minutes: 10 }),
+    async adoptOfficialAuth() {
+      return { account: { id: "codex_adopt", email: "adopt@example.com" }, updated: true };
+    },
+    inspectAuthState() {
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      error.transientIoError = true;
+      throw error;
+    },
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, { electron });
+  const adopted = await handlers.get("account:adoptOfficial")({});
+  assert.equal(adopted.success, true);
+  assert.equal(adopted.data.authState.status, "aligned");
+  assert.equal(adopted.data.authState.requiresResolution, false);
+  assert.equal(adopted.data.authState.currentAccountId, "codex_adopt");
+  assert.notEqual(adopted.data.authState.status, "conflict");
+  const accountEvents = sent.filter((item) => item.channel === "account:updated");
+  assert.equal(accountEvents.length, 1);
+  assert.equal(accountEvents[0].payload.current, true);
+  assert.equal(accountEvents[0].payload.account.id, "codex_adopt");
+});
+
+test("reapply managed IPC broadcasts the current account after a successful rewrite", async () => {
+  const handlers = new Map();
+  const sent = [];
+  const electron = {
+    ipcMain: {
+      handle(channel, listener) {
+        handlers.set(channel, listener);
+      },
+    },
+    BrowserWindow: {
+      getAllWindows: () => [{
+        isDestroyed: () => false,
+        webContents: {
+          isDestroyed: () => false,
+          send(channel, payload) { sent.push({ channel, payload }); },
+        },
+      }],
+    },
+    app: {
+      getVersion: () => "2.0.4",
+      isPackaged: false,
+    },
+    shell: {
+      async openExternal() {},
+      async openPath() { return ""; },
+    },
+  };
+  const engine = {
+    getTickIntervalMs: () => 10 * 60000,
+    getTickIntervalMinutes: () => 10,
+    loadAutoSwitchCfg: () => ({ enabled: false, sync_interval_minutes: 10 }),
+    async reapplyManagedAuth() {
+      return {
+        already: false,
+        account: { id: "codex_keep", email: "keep@example.com" },
+        authState: { status: "aligned", currentAccountId: "codex_keep", requiresResolution: false },
+      };
+    },
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, { electron });
+  const reapplied = await handlers.get("account:reapplyManaged")({}, "codex_keep");
+  assert.equal(reapplied.success, true);
+  assert.equal(reapplied.data.authState.status, "aligned");
+  const accountEvents = sent.filter((item) => item.channel === "account:updated");
+  assert.equal(accountEvents.length, 1);
+  assert.equal(accountEvents[0].payload.current, true);
+  assert.equal(accountEvents[0].payload.account.id, "codex_keep");
+});
+
+test("OAuth account-saved does not mark a reauthorized other card as current", async () => {
+  const sent = [];
+  let savedHandler = null;
+  const engine = {
+    getTickIntervalMs: () => 10 * 60000,
+    getTickIntervalMinutes: () => 10,
+    loadAutoSwitchCfg: () => ({ enabled: false, sync_interval_minutes: 10 }),
+    setOAuthAccountSavedHandler(handler) {
+      savedHandler = handler;
+    },
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle() {} },
+      BrowserWindow: {
+        getAllWindows: () => [{
+          isDestroyed: () => false,
+          webContents: {
+            isDestroyed: () => false,
+            send(channel, payload) { sent.push({ channel, payload }); },
+          },
+        }],
+      },
+      app: { getVersion: () => "2.0.4", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  assert.equal(typeof savedHandler, "function");
+  savedHandler({
+    account: { id: "codex_other", email: "other@example.com" },
+    switched: false,
+    alreadyCurrent: false,
+    switchError: null,
+  });
+  const otherEvents = sent.filter((item) => item.channel === "account:updated");
+  assert.equal(otherEvents.length, 1);
+  assert.equal(otherEvents[0].payload.current, false);
+  sent.length = 0;
+  savedHandler({
+    account: { id: "codex_new", email: "new@example.com" },
+    switched: true,
+    alreadyCurrent: false,
+    switchError: null,
+  });
+  const switchedEvents = sent.filter((item) => item.channel === "account:updated");
+  assert.equal(switchedEvents[0].payload.current, true);
+  sent.length = 0;
+  savedHandler({
+    account: { id: "codex_same", email: "same@example.com" },
+    switched: false,
+    alreadyCurrent: true,
+    switchError: null,
+  });
+  const sameEvents = sent.filter((item) => item.channel === "account:updated");
+  assert.equal(sameEvents[0].payload.current, true);
+});
+
+test("Codex OAuth IPC returns official auth after add, reauth, and manual complete", async () => {
+  const handlers = new Map();
+  const electron = {
+    ipcMain: {
+      handle(channel, listener) {
+        handlers.set(channel, listener);
+      },
+    },
+    BrowserWindow: { getAllWindows: () => [] },
+    app: {
+      getVersion: () => "0.1.0-beta.9",
+      isPackaged: false,
+    },
+    shell: {
+      async openExternal() {},
+      async openPath() { return ""; },
+    },
+  };
+  const authState = { status: "aligned", currentAccountId: "codex_oauth", requiresResolution: false };
+  const engine = {
+    getTickIntervalMs: () => 10 * 60000,
+    getTickIntervalMinutes: () => 10,
+    loadAutoSwitchCfg: () => ({ enabled: false, sync_interval_minutes: 10 }),
+    listAccts: () => [{ id: "codex_oauth", email: "oauth@example.com" }],
+    async oauthLoginFlow(options = {}) {
+      return {
+        account: { id: "codex_oauth", email: "oauth@example.com" },
+        mismatch: false,
+        targetAccountId: options.targetAccountId || null,
+        switched: !options.targetAccountId,
+        switchError: null,
+        authState,
+      };
+    },
+    async completeOAuthManually() {
+      return {
+        account: { id: "codex_oauth", email: "oauth@example.com" },
+        mismatch: false,
+        switched: true,
+        switchError: null,
+        authState,
+      };
+    },
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, { electron });
+  const added = await handlers.get("account:add")({});
+  assert.equal(added.success, true);
+  assert.equal(added.data.authState.status, "aligned");
+  assert.equal(added.data.switched, true);
+  const reauthed = await handlers.get("account:reauthorize")({}, "codex_oauth");
+  assert.equal(reauthed.success, true);
+  assert.equal(reauthed.data.targetAccountId, "codex_oauth");
+  assert.equal(reauthed.data.authState.currentAccountId, "codex_oauth");
+  const completed = await handlers.get("oauth:completeManual")({}, "https://example.com/?code=1");
+  assert.equal(completed.success, true);
+  assert.equal(completed.data.authState.status, "aligned");
+  assert.equal(completed.data.switched, true);
+});
+
+test("adopt official IPC still returns the account if auth inspect fails", async () => {
+  const handlers = new Map();
+  const electron = {
+    ipcMain: {
+      handle(channel, listener) {
+        handlers.set(channel, listener);
+      },
+    },
+    BrowserWindow: { getAllWindows: () => [] },
+    app: {
+      getVersion: () => "0.1.0-beta.9",
+      isPackaged: false,
+    },
+    shell: {
+      async openExternal() {},
+      async openPath() { return ""; },
+    },
+  };
+  const engine = {
+    getTickIntervalMs: () => 10 * 60000,
+    getTickIntervalMinutes: () => 10,
+    loadAutoSwitchCfg: () => ({ enabled: false, sync_interval_minutes: 10 }),
+    async adoptOfficialAuth() {
+      return { account: { id: "codex_adopt2", email: "adopt2@example.com" }, updated: false };
+    },
+    inspectAuthState() {
+      throw new Error("inspect failed");
+    },
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, { electron });
+  const adopted = await handlers.get("account:adoptOfficial")({});
+  assert.equal(adopted.success, true);
+  assert.equal(adopted.data.email, "adopt2@example.com");
+  assert.equal(adopted.data.authState, null);
 });
 
 test("switch transaction commits on success and restores state when launch fails", async t => {
@@ -2638,9 +4300,11 @@ test("switch transaction commits on success and restores state when launch fails
     launch: () => { running = true; },
     sleep() {},
   });
-  await engine.doSwitch(second);
+  const switched = await engine.doSwitch(second);
   assert.equal(engine.loadIdx().current_account_id, second.id);
   assert.equal(engine.inspectAuthState().status, "aligned");
+  assert.equal(switched.authState.status, "aligned");
+  assert.equal(switched.authState.currentAccountId, second.id);
 
   first.requires_reauth = true;
   await assert.rejects(engine.doSwitch(first), /requires reauthorization/i);
@@ -2662,6 +4326,111 @@ test("switch transaction commits on success and restores state when launch fails
   await assert.rejects(engine.doSwitch(first), /launch failed/);
   assert.equal(engine.loadIdx().current_account_id, second.id);
   assert.equal(engine.inspectAuthState().status, "aligned");
+});
+
+test("Codex switch rolls back when official auth does not match the target after write", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "verify-keep@example.com", "acct-verify-keep", "verify-keep");
+  const target = await addAccount(engine, "verify-target@example.com", "acct-verify-target", "verify-target");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  let running = true;
+  engine.setSwitchRuntimeForTests({
+    assertInstalled() {},
+    listProcesses: () => running ? [{ name: "Codex.exe", pid: 99 }] : [],
+    gracefulClose: () => { running = false; return true; },
+    forceClose: () => { running = false; return true; },
+    launch: () => { running = true; },
+    sleep() {},
+  });
+  const authState = require("../engine/auth-state");
+  const originalInspect = authState.inspectAuthState;
+  authState.inspectAuthState = () => ({
+    status: "conflict",
+    currentAccountId: target.id,
+    requiresResolution: true,
+  });
+  t.after(() => { authState.inspectAuthState = originalInspect; });
+  await assert.rejects(engine.doSwitch(target), /核对失败/);
+  authState.inspectAuthState = originalInspect;
+  assert.equal(engine.loadIdx().current_account_id, current.id);
+  assert.equal(engine.inspectAuthState().status, "aligned");
+  assert.equal(engine.inspectAuthState().currentAccountId, current.id);
+});
+
+test("Codex switch skip stays put when leftover lock blocks already-current inspect", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "busy-skip-cur@example.com", "acct-busy-skip-cur", "busy-skip-cur");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  let launchCount = 0;
+  engine.setSwitchRuntimeForTests({
+    assertInstalled() {},
+    listProcesses: () => [],
+    gracefulClose: () => true,
+    forceClose: () => true,
+    launch: () => { launchCount += 1; },
+    sleep() {},
+  });
+  const authState = require("../engine/auth-state");
+  const originalInspect = authState.inspectAuthState;
+  authState.inspectAuthState = () => {
+    const error = new Error("EPERM: operation not permitted");
+    error.code = "EPERM";
+    throw error;
+  };
+  t.after(() => { authState.inspectAuthState = originalInspect; });
+  const skipped = await engine.doSwitch(engine.loadAcct(current.id));
+  authState.inspectAuthState = originalInspect;
+  assert.equal(skipped.already, true);
+  assert.equal(skipped.authState.status, "unknown");
+  assert.equal(skipped.authState.requiresResolution, false);
+  assert.equal(launchCount, 0);
+  assert.equal(engine.loadIdx().current_account_id, current.id);
+  assert.equal(engine.inspectAuthState().status, "aligned");
+  assert.equal(engine.inspectAuthState().currentAccountId, current.id);
+});
+
+test("Codex switch does not roll back when leftover lock blocks post-write inspect", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "busy-keep-cur@example.com", "acct-busy-keep-cur", "busy-keep-cur");
+  const target = await addAccount(engine, "busy-keep-target@example.com", "acct-busy-keep-target", "busy-keep-target");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  let running = true;
+  engine.setSwitchRuntimeForTests({
+    assertInstalled() {},
+    listProcesses: () => running ? [{ name: "Codex.exe", pid: 99 }] : [],
+    gracefulClose: () => { running = false; return true; },
+    forceClose: () => { running = false; return true; },
+    launch: () => { running = true; },
+    sleep() {},
+  });
+  const authState = require("../engine/auth-state");
+  const originalInspect = authState.inspectAuthState;
+  authState.inspectAuthState = () => {
+    const error = new Error("EPERM: operation not permitted");
+    error.code = "EPERM";
+    throw error;
+  };
+  t.after(() => { authState.inspectAuthState = originalInspect; });
+  const result = await engine.doSwitch(target);
+  authState.inspectAuthState = originalInspect;
+  assert.equal(result.already, false);
+  assert.equal(result.authState.status, "aligned");
+  assert.equal(result.authState.currentAccountId, target.id);
+  assert.equal(engine.loadIdx().current_account_id, target.id);
+  assert.equal(engine.inspectAuthState().status, "aligned");
+  assert.equal(engine.inspectAuthState().currentAccountId, target.id);
 });
 
 test("Codex switch still clears api_base_url when existsSync reports config.toml missing", (t) => {
@@ -2909,6 +4678,8 @@ test("aligned current account skips rewrite unless switch is forced", async t =>
   assert.equal(launchCount, 2);
   assert.equal(engine.loadIdx().current_account_id, current.id);
   assert.equal(engine.inspectAuthState().status, "aligned");
+  assert.equal(reapplied.authState.status, "aligned");
+  assert.equal(reapplied.authState.currentAccountId, current.id);
 });
 
 test("process enumeration failure blocks credential switching", async t => {
@@ -3392,6 +5163,85 @@ test("Codex OAuth add switches the new account into official Codex", async t => 
   assert.notEqual(engine.currentAcct().id, previous.id);
   assert.equal(result.switched, true);
   assert.equal(result.switchError || null, null);
+  assert.equal(result.authState.status, "aligned");
+  assert.equal(result.authState.currentAccountId, result.account.id);
+  assert.equal(engine.getOAuthStatus().result.authState.status, "aligned");
+});
+
+test("Codex OAuth add still reports official auth when the follow-up switch fails", async t => {
+  const { engine, codec } = freshEngine(t);
+  const previous = await addAccount(engine, "keep-oauth@example.com", "acct-keep-oauth", "keep-oauth");
+  await engine.doSwitch(previous);
+  const switchModule = require("../engine/switch");
+  const originalSwitch = switchModule.doSwitch;
+  switchModule.doSwitch = async () => {
+    throw new Error("launch failed");
+  };
+  t.after(() => { switchModule.doSwitch = originalSwitch; });
+  const pendingPromise = engine.oauthLoginFlow({
+    openBrowser: false,
+    exchangeCode: async () => tokens("new-oauth@example.com", "acct-new-oauth", "new-oauth"),
+  });
+  const pendingPath = require("../engine/oauth").PENDING_PATH;
+  const startedAt = Date.now();
+  while (!fs.existsSync(pendingPath) && Date.now() - startedAt < 2000) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  const envelope = JSON.parse(fs.readFileSync(pendingPath, "utf8"));
+  const decoded = JSON.parse(codec.decrypt(envelope.protected_payload));
+  const callbackUrl = `${decoded.redirectUri}?code=oauth-code&state=${decoded.state}`;
+  const result = await engine.completeOAuthManually(callbackUrl);
+  await pendingPromise;
+  assert.equal(result.switched, false);
+  assert.match(result.switchError, /launch failed/);
+  assert.equal(engine.currentAcct().id, previous.id);
+  assert.equal(result.authState.status, "aligned");
+  assert.equal(result.authState.currentAccountId, previous.id);
+  assert.equal(engine.getOAuthStatus().result.authState.status, "aligned");
+  assert.equal(engine.getOAuthStatus().result.authState.currentAccountId, previous.id);
+});
+
+test("Codex OAuth switch failure does not invent a conflict when auth.json is locked", async t => {
+  const { engine, codec } = freshEngine(t);
+  const previous = await addAccount(engine, "keep-oauth-lock@example.com", "acct-keep-oauth-lock", "keep-oauth-lock");
+  await engine.doSwitch(previous);
+  const switchModule = require("../engine/switch");
+  const originalSwitch = switchModule.doSwitch;
+  switchModule.doSwitch = async () => {
+    throw new Error("launch failed");
+  };
+  const authState = require("../engine/auth-state");
+  const originalInspect = authState.inspectAuthState;
+  authState.inspectAuthState = () => {
+    const error = new Error("EPERM: operation not permitted");
+    error.code = "EPERM";
+    error.transientIoError = true;
+    throw error;
+  };
+  t.after(() => {
+    switchModule.doSwitch = originalSwitch;
+    authState.inspectAuthState = originalInspect;
+  });
+  const pendingPromise = engine.oauthLoginFlow({
+    openBrowser: false,
+    exchangeCode: async () => tokens("new-oauth-lock@example.com", "acct-new-oauth-lock", "new-oauth-lock"),
+  });
+  const pendingPath = require("../engine/oauth").PENDING_PATH;
+  const startedAt = Date.now();
+  while (!fs.existsSync(pendingPath) && Date.now() - startedAt < 2000) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  const envelope = JSON.parse(fs.readFileSync(pendingPath, "utf8"));
+  const decoded = JSON.parse(codec.decrypt(envelope.protected_payload));
+  const callbackUrl = `${decoded.redirectUri}?code=oauth-code&state=${decoded.state}`;
+  const result = await engine.completeOAuthManually(callbackUrl);
+  await pendingPromise;
+  assert.equal(result.switched, false);
+  assert.match(result.switchError, /launch failed/);
+  assert.equal(engine.currentAcct().id, previous.id);
+  assert.equal(result.authState.status, "unknown");
+  assert.equal(result.authState.requiresResolution, false);
+  assert.notEqual(result.authState.status, "conflict");
 });
 
 test("Codex OAuth reauth of the same account does not switch away", async t => {
@@ -3420,6 +5270,9 @@ test("Codex OAuth reauth of the same account does not switch away", async t => {
   assert.equal(result.mismatch, false);
   assert.equal(engine.currentAcct().id, current.id);
   assert.equal(!!result.switched, false);
+  assert.equal(result.authState.status, "aligned");
+  assert.equal(result.authState.currentAccountId, current.id);
+  assert.equal(engine.getOAuthStatus().result.authState.status, "aligned");
 });
 
 test("persistent logger removes credentials and personal email from messages", t => {
@@ -4532,6 +6385,54 @@ test("upserting the first Codex account does not mark it current", async (t) => 
   assert.notEqual(result.authState?.status, "missing_official_auth");
 });
 
+test("re-upserting after a corrupt Codex index does not invent current", async (t) => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "idx-corrupt-upsert@example.com", "acct-idx-corrupt-upsert", "idx-corrupt-upsert");
+  assert.equal(engine.loadIdx().current_account_id, null);
+  const config = require("../engine/config");
+  try { fs.unlinkSync(`${config.IDX_PATH}.bak`); } catch {}
+  fs.writeFileSync(config.IDX_PATH, "{ corrupted", "utf8");
+  const again = await addAccount(engine, "idx-corrupt-upsert@example.com", "acct-idx-corrupt-upsert", "idx-corrupt-upsert");
+  assert.equal(again.id, account.id);
+  assert.equal(engine.loadIdx().current_account_id, null);
+  assert.equal(engine.currentAcct(), null);
+  assert.ok(engine.loadIdx().accounts.some((item) => item.id === account.id));
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.pausedReason, null);
+  assert.notEqual(result.authState?.status, "missing_official_auth");
+});
+
+test("re-upserting after a corrupt Cursor index does not invent current", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertCursorAccount({
+    email: "idx-corrupt-cursor@example.com",
+    auth_id: "user_idx_corrupt_cursor",
+    access_token: jwt({
+      email: "idx-corrupt-cursor@example.com",
+      sub: "user_idx_corrupt_cursor",
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }),
+    refresh_token: "refresh-idx-corrupt-cursor",
+  });
+  assert.equal(engine.currentCursorAcct(), null);
+  const config = require("../engine/config");
+  try { fs.unlinkSync(`${config.CURSOR_IDX_PATH}.bak`); } catch {}
+  fs.writeFileSync(config.CURSOR_IDX_PATH, "{ corrupted", "utf8");
+  const again = await engine.upsertCursorAccount({
+    email: "idx-corrupt-cursor@example.com",
+    auth_id: "user_idx_corrupt_cursor",
+    access_token: jwt({
+      email: "idx-corrupt-cursor@example.com",
+      sub: "user_idx_corrupt_cursor",
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }),
+    refresh_token: "refresh-idx-corrupt-cursor",
+  });
+  assert.equal(again.account.id, created.account.id);
+  assert.equal(engine.currentCursorAcct(), null);
+  assert.equal(engine.loadCursorIdx().current_cursor_account_id, null);
+});
+
 test("a missing Codex index rebuilds the current account from last_used", async (t) => {
   const { engine } = freshEngine(t);
   const first = await addAccount(engine, "idx-rebuild-a@example.com", "acct-idx-rebuild-a", "idx-rebuild-a");
@@ -4901,7 +6802,153 @@ test("auto-switch does not treat a locked auth.json as a login conflict", async 
   assert.equal(result.switched, false);
   assert.notEqual(result.reason, "auth_conflict");
   assert.equal(result.reason, "current_quota_refresh_failed");
-  assert.match(String(result.error || ""), /EPERM/);
+  assert.equal(result.error, "Read authentication state timed out");
+  assert.equal(result.authState, null);
+});
+
+test("auto-switch does not throw when the pre-switch auth recheck hits a leftover lock", async (t) => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "recheck-lock@example.com", "acct-recheck-lock", "recheck-lock");
+  const candidate = await addAccount(engine, "recheck-ready@example.com", "acct-recheck-ready", "recheck-ready");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_window_present: false,
+  };
+  current.usage_updated_at = now;
+  candidate.quota = {
+    hourly_remaining_percentage: 90,
+    hourly_window_present: true,
+    weekly_window_present: false,
+  };
+  candidate.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const aligned = engine.inspectAuthState({ migrateProjection: false });
+  const authState = require("../engine/auth-state");
+  const originalInspect = authState.inspectAuthState;
+  authState.inspectAuthState = () => {
+    const error = new Error("EPERM: operation not permitted");
+    error.code = "EPERM";
+    error.transientIoError = true;
+    throw error;
+  };
+  t.after(() => { authState.inspectAuthState = originalInspect; });
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  }, { authState: aligned });
+  assert.equal(result.switched, false);
+  assert.notEqual(result.reason, "auth_conflict");
+  assert.equal(result.reason, "current_quota_refresh_failed");
+  assert.equal(result.error, "Read authentication state timed out");
+  assert.equal(engine.loadIdx().current_account_id, current.id);
+});
+
+test("the daemon does not treat a leftover lock during auto-switch as a worker failure", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "daemon-recheck-lock@example.com", "acct-daemon-recheck-lock", "daemon-recheck-lock");
+  const candidate = await addAccount(engine, "daemon-recheck-ready@example.com", "acct-daemon-recheck-ready", "daemon-recheck-ready");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_window_present: false,
+  };
+  current.usage_updated_at = now;
+  candidate.quota = {
+    hourly_remaining_percentage: 90,
+    hourly_window_present: true,
+    weekly_window_present: false,
+  };
+  candidate.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  engine.saveAutoSwitchCfg({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+    sync_interval_minutes: 60,
+  });
+  const quotaModule = require("../engine/quota");
+  const switchModule = require("../engine/switch");
+  const originalRefresh = quotaModule.refreshQuota;
+  const originalSwitch = switchModule.doSwitch;
+  let switchedTo = null;
+  quotaModule.refreshQuota = async account => account.quota;
+  switchModule.doSwitch = async account => {
+    switchedTo = account.id;
+    return { account };
+  };
+  const authState = require("../engine/auth-state");
+  const originalInspect = authState.inspectAuthState;
+  let looks = 0;
+  authState.inspectAuthState = () => {
+    looks += 1;
+    const error = new Error("EPERM: operation not permitted");
+    error.code = "EPERM";
+    throw error;
+  };
+  t.after(() => {
+    quotaModule.refreshQuota = originalRefresh;
+    switchModule.doSwitch = originalSwitch;
+    authState.inspectAuthState = originalInspect;
+  });
+  const worker = await engine.runDaemonWorker();
+  assert.ok(looks >= 1);
+  assert.equal(worker.autoSwitchResult?.reason, "current_quota_refresh_failed");
+  assert.equal(worker.autoSwitchResult?.error, "Read authentication state timed out");
+  assert.equal(switchedTo, null);
+  assert.ok(!worker.failures.some((item) => item.stage === "auto_switch"));
+  assert.ok(!worker.failures.some((item) => item.stage === "auth_inspect"));
+  assert.equal(engine.loadIdx().current_account_id, current.id);
+});
+
+test("the daemon still records a real current quota refresh failure", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "daemon-quota-fail@example.com", "acct-daemon-quota-fail", "daemon-quota-fail");
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_window_present: false,
+  };
+  engine.saveAcct(current);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  engine.saveAutoSwitchCfg({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+    sync_interval_minutes: 60,
+  });
+  const quotaModule = require("../engine/quota");
+  const originalRefresh = quotaModule.refreshQuota;
+  quotaModule.refreshQuota = async () => { throw new Error("network unavailable"); };
+  t.after(() => { quotaModule.refreshQuota = originalRefresh; });
+  const worker = await engine.runDaemonWorker();
+  assert.equal(worker.autoSwitchResult?.reason, "current_quota_refresh_failed");
+  assert.ok(worker.failures.some((item) => item.stage === "auto_switch" && /network unavailable/.test(item.message)));
 });
 
 test("auto-switch config still keeps the primary file when the first JSON parse is torn", (t) => {
@@ -5443,6 +7490,153 @@ test("daemon ban probe keeps the in-memory account after leftover usage errors",
   assert.equal(persisted.requires_reauth, true);
 });
 
+test("the daemon reports official auth after an auto-switch, not the pre-switch inspect", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "daemon-pre@example.com", "acct-daemon-pre", "daemon-pre");
+  const candidate = await addAccount(engine, "daemon-post@example.com", "acct-daemon-post", "daemon-post");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 0,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  candidate.quota = {
+    hourly_remaining_percentage: 90,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 90,
+    weekly_window_present: true,
+  };
+  candidate.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  engine.saveAutoSwitchCfg({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+    sync_interval_minutes: 60,
+  });
+  const quotaModule = require("../engine/quota");
+  const originalRefresh = quotaModule.refreshQuota;
+  quotaModule.refreshQuota = async account => account.quota;
+  t.after(() => { quotaModule.refreshQuota = originalRefresh; });
+  const before = engine.inspectAuthState({ migrateProjection: false });
+  assert.equal(before.currentAccountId, current.id);
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.autoSwitchResult?.switched, true);
+  assert.equal(result.autoSwitchResult?.to?.id, candidate.id);
+  assert.equal(result.authState.status, "aligned");
+  assert.equal(result.authState.currentAccountId, candidate.id);
+  assert.equal(engine.currentAcct().id, candidate.id);
+});
+
+test("the daemon marks auto-switch as paused when official Codex login is missing", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "daemon-missing@example.com", "acct-daemon-missing", "daemon-missing");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  engine.saveAutoSwitchCfg({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+    sync_interval_minutes: 60,
+  });
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.authState.status, "missing_official_auth");
+  assert.equal(result.autoSwitchResult?.reason, "missing_official_auth");
+  assert.equal(result.pausedReason, "missing_official_auth");
+});
+
+test("the daemon marks auto-switch as paused while Codex OAuth is pending", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "daemon-oauth-cur@example.com", "acct-daemon-oauth-cur", "daemon-oauth-cur");
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  engine.saveAutoSwitchCfg({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+    sync_interval_minutes: 60,
+  });
+  const oauth = require("../engine/oauth");
+  const originalStatus = oauth.getOAuthStatus;
+  oauth.getOAuthStatus = () => ({ pending: true });
+  t.after(() => { oauth.getOAuthStatus = originalStatus; });
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.autoSwitchResult?.reason, "oauth_pending");
+  assert.equal(result.pausedReason, "oauth_pending");
+});
+
+test("the daemon marks auto-switch as paused when the switch verify fails", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "daemon-verify-cur@example.com", "acct-daemon-verify-cur", "daemon-verify-cur");
+  const candidate = await addAccount(engine, "daemon-verify-ready@example.com", "acct-daemon-verify-ready", "daemon-verify-ready");
+  const now = engine.ts();
+  current.quota = {
+    hourly_remaining_percentage: 0,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 0,
+    weekly_window_present: true,
+  };
+  current.usage_updated_at = now;
+  candidate.quota = {
+    hourly_remaining_percentage: 90,
+    hourly_window_present: true,
+    weekly_remaining_percentage: 90,
+    weekly_window_present: true,
+  };
+  candidate.usage_updated_at = now;
+  engine.saveAcct(current);
+  engine.saveAcct(candidate);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  engine.saveAutoSwitchCfg({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+    sync_interval_minutes: 60,
+  });
+  const quotaModule = require("../engine/quota");
+  const switchModule = require("../engine/switch");
+  const originalRefresh = quotaModule.refreshQuota;
+  const originalSwitch = switchModule.doSwitch;
+  quotaModule.refreshQuota = async account => account.quota;
+  switchModule.doSwitch = async () => {
+    const error = new Error("official write did not stick");
+    error.code = "codex_switch_verify_failed";
+    throw error;
+  };
+  t.after(() => {
+    quotaModule.refreshQuota = originalRefresh;
+    switchModule.doSwitch = originalSwitch;
+  });
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.autoSwitchResult?.reason, "switch_verify_failed");
+  assert.equal(result.pausedReason, "switch_verify_failed");
+  assert.equal(engine.currentAcct().id, current.id);
+});
+
 test("auto-switch trusts fresh cached quota instead of refreshing the current account again", async t => {
   const { engine } = freshEngine(t);
   const current = await addAccount(engine, "fresh-current@example.com", "acct-fresh-current", "fresh-current");
@@ -5574,10 +7768,10 @@ test("auto-switch does not decrypt a fresh-quota candidate until the actual swit
   });
   assert.equal(result.switched, true);
   assert.equal(switchedTo, candidate.id);
-  // inspectAuthState (current) plus the switch-lock loads of current and the
-  // winner. Decrypting the listed candidate just to read cached quota would
-  // make this 4.
-  assert.equal(decrypts.count, 3);
+  // Start inspect (current), switch-lock loads of current and the winner,
+  // plus one more current inspect immediately before doSwitch. Decrypting
+  // the listed candidate just to read cached quota would make this 5.
+  assert.equal(decrypts.count, 4);
 });
 
 test("auto-switch config recovery ignores stale backups on ENOENT and survives double corruption", t => {
@@ -5667,6 +7861,27 @@ test("codex same email merges when one side has no account id", async (t) => {
   assert.equal(result.account.id, first.id);
   assert.equal(result.updated, true);
   assert.equal(engine.listAccts().length, 1);
+});
+
+test("codex collapse after a corrupt index does not invent current", async (t) => {
+  const { engine } = freshEngine(t);
+  const first = await addAccount(engine, "fold-corrupt@example.com", "acct-fold-corrupt", "fold-corrupt");
+  const extra = {
+    ...first,
+    id: engine.buildId("fold-corrupt@example.com", "acct-fold-corrupt", "org-extra"),
+    created_at: first.created_at + 10,
+  };
+  engine.saveAcct(extra);
+  assert.equal(engine.loadIdx().current_account_id, null);
+  const config = require("../engine/config");
+  try { fs.unlinkSync(`${config.IDX_PATH}.bak`); } catch {}
+  fs.writeFileSync(config.IDX_PATH, "{ corrupted", "utf8");
+  engine.collapseDuplicateCodexAccounts();
+  const remaining = engine.listAccts();
+  assert.equal(remaining.length, 1);
+  assert.equal(remaining[0].id, first.id);
+  assert.equal(engine.loadIdx().current_account_id, null);
+  assert.equal(engine.currentAcct(), null);
 });
 
 test("codex collapse folds same-identity files and keeps current", async (t) => {
@@ -6017,6 +8232,48 @@ test("desktop snapshot IPC returns public accounts without secrets", async (t) =
   assert.equal(snapshot.data.accounts[0].tokens, undefined);
   assert.equal(Array.isArray(snapshot.data.cursorAccounts), true);
   assert.equal(Array.isArray(snapshot.data.antigravityAccounts), true);
+});
+
+test("a locked official auth.json does not fail auth inspect as a conflict", async () => {
+  const handlers = new Map();
+  const engine = {
+    getTickIntervalMs: () => 10 * 60000,
+    getTickIntervalMinutes: () => 10,
+    loadAutoSwitchCfg: () => ({ enabled: false, sync_interval_minutes: 10 }),
+    loadIdx: () => ({ current_account_id: "codex_keep" }),
+    listAccts: () => [],
+    listCursorAccts: () => [],
+    listAntigravityAccts: () => [],
+    getOAuthStatus: () => null,
+    getCursorOAuthStatus: () => null,
+    getAntigravityOAuthStatus: () => null,
+    async withAccountLock(_id, task) {
+      return task();
+    },
+    inspectAuthState() {
+      const error = new Error("EPERM: operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    },
+  };
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.4", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const auth = await handlers.get("account:authState")({});
+  assert.equal(auth.success, true);
+  assert.equal(auth.data.status, "unknown");
+  assert.equal(auth.data.requiresResolution, false);
+  const snapshot = await handlers.get("desktop:snapshot")({}, { skipOfficialSync: true });
+  assert.equal(snapshot.success, true);
+  assert.equal(snapshot.data.authState.status, "unknown");
+  assert.equal(snapshot.data.authState.requiresResolution, false);
+  assert.equal(snapshot.data.authError, null);
 });
 
 test("desktop snapshot reuses listed current accounts without extra decrypts", async (t) => {

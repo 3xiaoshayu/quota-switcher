@@ -451,6 +451,28 @@ test("dashboard product changes sync the float product and auto-open once", () =
   assert.match(source, /actions\.refreshQuota\(kind, account\.id, false\)/);
   assert.doesNotMatch(source, /didOpenQuotaSync/);
   assert.match(source, /queueQuotaAutoSync/);
+  assert.match(source, /authStateRef\.current\.status === 'conflict'/);
+  assert.match(source, /desktopApi\.refreshQuota\(account\.id, false\)[\s\S]{0,240}toUserMessage\(error instanceof Error \? error\.message : String\(error\)\)/);
+  assert.doesNotMatch(source, /const authBlocked = authStateRef\.current\.requiresResolution/);
+  assert.match(source, /actions\.switchAccount\(kind, id, isCurrent\)[\s\S]{0,720}if \(snapshot\) queueQuotaAutoSync\(snapshot\.accounts\)/);
+  assert.match(source, /addLogEntry\(message, 'error', kind\);\s*try \{ await loadDashboardState\(false\); \} catch \{\}/);
+  assert.match(source, /if \(result\?\.authState\) \{\s*setAuthState\(result\.authState\);/);
+  assert.match(source, /onAutoSwitch: \(result\) => \{\s*if \(result\?\.authState\) \{\s*setAuthState\(result\.authState\);/);
+  assert.match(source, /if \(result\?\.switched\) \{\s*setSessionSwitchCount\(count => count \+ 1\);\s*if \(result\.to\?\.id\) applyCurrentAccountBadge\('codex', result\.to\.id\);/);
+  assert.match(source, /runAutoSwitchTick\(\);[\s\S]{0,360}if \(result\.to\?\.id\) applyCurrentAccountBadge\('codex', result\.to\.id\);/);
+  assert.match(source, /onDaemonTick: \(payload\) => \{\s*if \(payload\?\.result\?\.authState\) \{\s*setAuthState\(payload\.result\.authState\);/);
+  assert.match(source, /onAuthConflict: \(state\) => \{\s*setAuthState\(state\);\s*authStateRef\.current = state;\s*const raw = state\.status && state\.status !== 'aligned'/);
+  assert.match(source, /desktopApi\.adoptOfficialAccount\(\)[\s\S]{0,240}if \(account\?\.authState\) \{\s*setAuthState\(account\.authState\);/);
+  assert.match(source, /desktopApi\.reapplyManagedAccount\([\s\S]{0,240}if \(result\?\.authState\) \{\s*setAuthState\(result\.authState\);/);
+  assert.match(source, /管理账号已重新应用到官方 Codex[\s\S]{0,160}queueQuotaAutoSync\(snapshot\.accounts\)/);
+  assert.match(source, /handleResolveAuthConflict[\s\S]{0,2400}toUserMessage\(error instanceof Error \? error\.message : String\(error\)\)/);
+  assert.match(source, /const result = await desktopApi\.runAutoSwitchTick\(\);\s*if \(result\?\.authState\) \{\s*setAuthState\(result\.authState\);/);
+  assert.match(source, /resolveAuthStateAfterSnapshot\(snapshot\.authState, authStateRef\.current\)/);
+  assert.match(source, /actions\.addAccount\(kind\)[\s\S]{0,240}if \(kind === 'codex' && added\?\.authState\)/);
+  assert.match(source, /completeOAuthManually\(callbackUrl\)[\s\S]{0,200}if \(completed\?\.authState\)/);
+  assert.match(source, /actions\.reauthorize\(kind, id\)[\s\S]{0,280}if \(kind === 'codex' && result\?\.authState\)/);
+  assert.match(source, /if \(result\?\.authState\) \{\s*setAuthState\(result\.authState\);\s*authStateRef\.current = result\.authState;\s*\}\s*if \(result\?\.mismatch\)/);
+  assert.match(source, /result\?\.mismatch\) \{\s*if \(kind === 'codex' && result\?\.accountId && result\?\.switched !== false\) \{\s*applyCurrentAccountBadge\('codex', result\.accountId\);/);
   assert.match(source, /actions\.refreshAllQuotas\(kind\)/);
   assert.doesNotMatch(source, /\(\['codex', 'cursor', 'antigravity'\] as ProductKind\[\]\)/);
   assert.match(source, /\.\.\.\(snapshot\.cursorAccounts \|\| \[\]\)/);
@@ -602,6 +624,7 @@ test("float lens antigravity load skips official sync and restores product cache
   assert.match(source, /onAccountUpdated: \(payload\) => \{/);
   assert.match(source, /payload\?\.current && payload\.account\?\.id/);
   assert.match(source, /withCurrentFlag\(prev, currentId\)/);
+  assert.doesNotMatch(source, /setViewedId\(currentId\);\s*return;/);
   assert.match(source, /setLoading\(false\);\s*\} else \{\s*setAccounts\(\[\]\)/);
 });
 

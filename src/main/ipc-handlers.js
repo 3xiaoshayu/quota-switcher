@@ -2,6 +2,7 @@ const path = require("node:path");
 const { logError, sanitizeMessage } = require("../../engine/logger");
 const { describeCaughtError } = require("../../engine/sqlite-native");
 const { APP_DISPLAY_NAME, APP_GITHUB_URL } = require("../../engine/app-brand");
+const { isInspectBusyError, busyAuthState } = require("../../engine/auth-state");
 let engine = null;
 
 const SWITCH_CHANNELS = new Set(["cursor:switch", "antigravity:switch"]);
@@ -218,6 +219,19 @@ function publicAutoSwitchResult(eng, result) {
     };
 }
 
+function publicOAuthIpcResult(eng, result, extra = {}) {
+    return {
+        account: publicAccount(eng, result?.account),
+        mismatch: !!result?.mismatch,
+        updated: !!result?.updated,
+        targetAccountId: result?.targetAccountId || extra.targetAccountId || null,
+        switched: !!result?.switched,
+        switchError: result?.switchError || null,
+        authState: result?.authState || null,
+        ...extra,
+    };
+}
+
 async function withFreshAccount(eng, id, task) {
     return eng.withAccountLock(id, async () => {
         const account = loadAcctById(eng, id);
@@ -282,7 +296,9 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     if (typeof eng.setOAuthAccountSavedHandler === "function") {
         eng.setOAuthAccountSavedHandler((result) => {
             const published = publicAccount(eng, result.account);
-            emitAccountUpdated("codex", published, { current: !result.switchError });
+            emitAccountUpdated("codex", published, {
+                current: !!result.switched || !!result.alreadyCurrent,
+            });
         });
     }
 
@@ -870,31 +886,53 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                 ? await inspectAuthStateWithBusyTimeout(eng, index.current_account_id)
                 : eng.inspectAuthState({ migrateProjection: false });
             return ok(state);
-        } catch (error) { return fail(error.message); }
+        } catch (error) {
+            if (isInspectBusyError(error)) return ok(busyAuthState());
+            return fail(error.message);
+        }
     });
     handle("account:adoptOfficial", async () => {
         try {
             const result = await eng.adoptOfficialAuth();
             const account = result?.account || result;
-            return ok({ ...publicAccount(eng, account), updated: !!result?.updated });
+            let authState = null;
+            try {
+                authState = typeof eng.inspectAuthState === "function"
+                    ? eng.inspectAuthState({ migrateProjection: false })
+                    : null;
+            } catch (error) {
+                // Adopt already pointed the manager at the official login.
+                // A leftover lock must not leave the conflict banner up.
+                authState = isInspectBusyError(error)
+                    ? {
+                        status: "aligned",
+                        requiresResolution: false,
+                        currentAccountId: account?.id || null,
+                        matchedAccountId: account?.id || null,
+                        officialIdentity: null,
+                        message: null,
+                    }
+                    : null;
+            }
+            const published = publicAccount(eng, account);
+            emitAccountUpdated("codex", published, { current: true });
+            return ok({ ...published, updated: !!result?.updated, authState });
         }
         catch (error) { return fail(error.message); }
     });
     handle("account:reapplyManaged", async (event, id) => {
         try {
             const result = await eng.reapplyManagedAuth(id || null);
-            return ok({ ...result, account: publicAccount(eng, result.account) });
+            const published = publicAccount(eng, result.account);
+            emitAccountUpdated("codex", published, { current: true });
+            return ok({ ...result, account: published });
         } catch (error) { return fail(error.message); }
     });
 
     handle("account:add", async () => {
         try {
             const result = await eng.oauthLoginFlow();
-            return ok({
-                account: publicAccount(eng, result.account),
-                mismatch: !!result.mismatch,
-                targetAccountId: result.targetAccountId || null,
-            });
+            return ok(publicOAuthIpcResult(eng, result));
         } catch (error) { return fail(error.message); }
     });
     handle("account:reauthorize", async (event, id) => {
@@ -902,11 +940,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             const target = listedAccountRef(eng.listAccts({ secrets: false }), id, { allowEmail: true });
             if (!target) return fail("Account does not exist");
             const result = await eng.oauthLoginFlow({ targetAccountId: target.id });
-            return ok({
-                account: publicAccount(eng, result.account),
-                mismatch: !!result.mismatch,
-                targetAccountId: target.id,
-            });
+            return ok(publicOAuthIpcResult(eng, result, { targetAccountId: target.id }));
         } catch (error) { return fail(error.message); }
     });
     handle("oauth:status", () => ok(eng.getOAuthStatus()));
@@ -917,11 +951,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     handle("oauth:completeManual", async (event, callbackUrl) => {
         try {
             const result = await eng.completeOAuthManually(callbackUrl);
-            return ok({
-                account: publicAccount(eng, result.account),
-                mismatch: !!result.mismatch,
-                targetAccountId: result.targetAccountId || null,
-            });
+            return ok(publicOAuthIpcResult(eng, result));
         }
         catch (error) { return fail(error.message); }
     });
@@ -960,9 +990,13 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     handle("quota:refresh", async (event, id, force = true) => {
         try {
             if (force === false) {
-                const authState = await inspectAuthStateForBackground(eng);
-                if (authState.requiresResolution) {
-                    return fail(authState.message || "Automatic quota sync is paused until authentication is resolved");
+                try {
+                    const authState = await inspectAuthStateForBackground(eng);
+                    if (authState.status === "conflict") {
+                        return fail("auth_conflict");
+                    }
+                } catch (error) {
+                    if (!isInspectBusyError(error)) throw error;
                 }
             }
             return await withFreshAccount(eng, id, async account => {
@@ -1080,6 +1114,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         lastSuccessAt: null,
         lastError: null,
         pausedReason: null,
+        lastAuthStatus: null,
     };
     const daemonIntervalMinutes = () => typeof eng.getTickIntervalMinutes === "function"
         ? eng.getTickIntervalMinutes()
@@ -1100,9 +1135,6 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         try {
             const result = await eng.runDaemonWorker({ isCancelled });
             if (runGeneration !== daemonGeneration) {
-                daemonRuntimeState.lastRunAt = result.completedAt || Date.now();
-                daemonRuntimeState.pausedReason = result.pausedReason || "stopped";
-                daemonRuntimeState.lastError = null;
                 return;
             }
             daemonRuntimeState.lastRunAt = result.completedAt || Date.now();
@@ -1123,10 +1155,15 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             });
             if (safeResult.autoSwitchResult?.switched) {
                 broadcast("autoswitch:executed", safeResult.autoSwitchResult);
+                if (safeResult.autoSwitchResult.to) {
+                    emitAccountUpdated("codex", safeResult.autoSwitchResult.to, { current: true });
+                }
             }
-            if (safeResult.pausedReason === "auth_conflict") {
+            const authStatus = safeResult.authState?.status || null;
+            if (safeResult.authState?.requiresResolution && authStatus !== daemonRuntimeState.lastAuthStatus) {
                 broadcast("auth:conflict", safeResult.authState);
             }
+            daemonRuntimeState.lastAuthStatus = authStatus;
             if (safeResult.failures?.length) {
                 broadcast("daemon:error", {
                     message: safeResult.failures.map(item => item.message).join("; "),
@@ -1159,6 +1196,9 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
     };
     const startDaemon = () => {
         if (daemonTimer) return ok("Already running");
+        daemonRuntimeState.lastAuthStatus = null;
+        daemonRuntimeState.pausedReason = null;
+        daemonRuntimeState.lastError = null;
         bumpDaemonGeneration();
         startDaemonTimer();
         void runDaemon();
@@ -1198,11 +1238,33 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             const completedSuccessfully = !!result?.switched ||
                 result?.reason === "quota_sufficient" ||
                 result?.reason === "no_candidates";
+            const authHoldReasons = new Set([
+                "auth_conflict",
+                "missing_official_auth",
+                "unsupported_official_auth",
+                "unmanaged_official_auth",
+                "oauth_pending",
+                "switch_verify_failed",
+            ]);
             daemonRuntimeState.lastRunAt = completedAt;
             daemonRuntimeState.lastError = failedReason
                 ? result.error || result.reason
                 : null;
             if (completedSuccessfully) daemonRuntimeState.lastSuccessAt = completedAt;
+            if (result?.switched || result?.reason === "quota_sufficient") {
+                daemonRuntimeState.pausedReason = null;
+            } else if (authHoldReasons.has(result?.reason)) {
+                daemonRuntimeState.pausedReason = result.reason;
+            }
+            if (result?.authState?.status) {
+                if (result.authState.requiresResolution && result.authState.status !== daemonRuntimeState.lastAuthStatus) {
+                    broadcast("auth:conflict", result.authState);
+                }
+                daemonRuntimeState.lastAuthStatus = result.authState.status;
+            }
+            if (result?.switched && result.to) {
+                emitAccountUpdated("codex", result.to, { current: true });
+            }
             return ok(result);
         } catch (error) {
             daemonRuntimeState.lastRunAt = Date.now();
@@ -1229,7 +1291,11 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         try {
             authState = await inspectAuthStateForBackground(eng);
         } catch (error) {
-            authError = error?.message || String(error);
+            if (isInspectBusyError(error)) {
+                authState = busyAuthState();
+            } else {
+                authError = error?.message || String(error);
+            }
         }
         const [codexStatus, cursorStatus, antigravityStatus] = await Promise.all([
             withTimeout(async () => {

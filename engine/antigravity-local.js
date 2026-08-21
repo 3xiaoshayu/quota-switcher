@@ -36,7 +36,7 @@ function findSameAntigravityId(preview, accounts = listAntigravityAccts({ secret
     const self = accounts.find((account) => account.id === preview.id) || loadAntigravityAcct(preview.id);
     if (self) matches.push(self);
   }
-  return pickIdentityKeeper(matches, loadAntigravityIdx().current_antigravity_account_id)?.id || preview.id;
+  return pickIdentityKeeper(matches, loadAntigravityIdx({ inventCurrent: false }).current_antigravity_account_id)?.id || preview.id;
 }
 
 function collapseDuplicateAntigravityAccounts() {
@@ -44,9 +44,9 @@ function collapseDuplicateAntigravityAccounts() {
     listAccounts: listAntigravityAccts,
     loadAccount: loadAntigravityAcct,
     sameIdentity: sameAntigravityIdentity,
-    currentId: loadAntigravityIdx().current_antigravity_account_id || null,
+    currentId: loadAntigravityIdx({ inventCurrent: false }).current_antigravity_account_id || null,
     persist: (keeper, extras) => {
-      const currentId = loadAntigravityIdx().current_antigravity_account_id;
+      const currentId = loadAntigravityIdx({ inventCurrent: false }).current_antigravity_account_id;
       if (currentId && extras.some((item) => item.id === currentId)) {
         setCurrentAntigravityAccountId(keeper.id);
       }
@@ -117,7 +117,7 @@ async function upsertAntigravityAccount(tokens, options = {}) {
       return folded ? (loadAntigravityAcct(saveId) || merged) : merged;
     });
 
-    if (!mismatch && !loadAntigravityIdx().current_antigravity_account_id) {
+    if (!mismatch && !loadAntigravityIdx({ inventCurrent: false }).current_antigravity_account_id) {
       setCurrentAntigravityAccountId(account.id);
     }
 

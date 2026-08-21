@@ -38,8 +38,9 @@ import {
   formatTokenCheckMessage,
   QUOTA_AUTO_SYNC_MIN_GAP_MS,
   withCurrentFlag,
+  resolveAuthStateAfterSnapshot,
 } from './api/desktop';
-import { logTypeLabel, toUserMessage } from './api/user-messages';
+import { logTypeLabel, toAntigravityUserMessage, toCursorUserMessage, toUserMessage } from './api/user-messages';
 import {
   accountsFromSnapshot,
   isManagedProduct,
@@ -409,8 +410,9 @@ function DashboardApp() {
     setAppInfo(snapshot.appInfo);
     setCodexStatus(snapshot.codexStatus);
     setUpdateStatus(snapshot.updateStatus);
-    setAuthState(snapshot.authState);
-    authStateRef.current = snapshot.authState;
+    const nextAuth = resolveAuthStateAfterSnapshot(snapshot.authState, authStateRef.current);
+    setAuthState(nextAuth);
+    authStateRef.current = nextAuth;
     const incomingOAuth = snapshot.oauthStatus;
     const localOAuth = oauthStatusRef.current;
     const nextOAuth = localOAuth?.pending && !incomingOAuth.pending && incomingOAuth.status === 'idle'
@@ -512,7 +514,7 @@ function DashboardApp() {
   const queueQuotaAutoSync = useCallback((candidateAccounts: AccountQuota[]) => {
     if (!desktopBridgeAvailable || quotaAutoSyncPromise.current) return;
     if (Date.now() - lastQuotaAutoSyncAt.current < QUOTA_AUTO_SYNC_MIN_GAP_MS) return;
-    const authBlocked = authStateRef.current.requiresResolution;
+    const authBlocked = authStateRef.current.status === 'conflict';
     const staleAccounts = candidateAccounts.filter((account) => {
       if (accountOperationIds.current.has(account.id)) return false;
       if (authBlocked && !isManagedProductAccount(account)) return false;
@@ -531,7 +533,7 @@ function DashboardApp() {
           if (isManagedProduct(kind)) await actions.refreshQuota(kind, account.id, false);
           else await desktopApi.refreshQuota(account.id, false);
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = toUserMessage(error instanceof Error ? error.message : String(error));
           addLogEntry(`${account.email}: ${message}`, 'info', kind);
         }
       }
@@ -618,18 +620,28 @@ function DashboardApp() {
     };
 
     const unsubscribe = desktopApi.subscribe({
-      onDaemonTick: () => {
+      onDaemonTick: (payload) => {
+        if (payload?.result?.authState) {
+          setAuthState(payload.result.authState);
+          authStateRef.current = payload.result.authState;
+        }
         loadDashboardState(false).then((snapshot) => {
           if (!disposed && snapshot) queueQuotaAutoSync(snapshot.accounts);
         });
       },
       onDaemonError: (message) => {
-        addToast(message, 'error', 'codex');
-        addLogEntry(message, 'error', 'codex');
+        const text = toUserMessage(message);
+        addToast(text, 'error', 'codex');
+        addLogEntry(text, 'error', 'codex');
       },
       onAutoSwitch: (result) => {
+        if (result?.authState) {
+          setAuthState(result.authState);
+          authStateRef.current = result.authState;
+        }
         if (result?.switched) {
           setSessionSwitchCount(count => count + 1);
+          if (result.to?.id) applyCurrentAccountBadge('codex', result.to.id);
           addToast(`已自动切换至 ${result.to?.email || '新账号'}`, 'warning', 'codex');
         }
         loadDashboardState(false);
@@ -641,7 +653,10 @@ function DashboardApp() {
       onAuthConflict: (state) => {
         setAuthState(state);
         authStateRef.current = state;
-        addToast(state.message || '官方 Codex 登录状态已变更。', 'warning', 'codex');
+        const raw = state.status && state.status !== 'aligned'
+          ? state.status
+          : (state.message || '官方 Codex 登录状态已变更。');
+        addToast(toUserMessage(raw), 'warning', 'codex');
       },
       onQuotaUpdated: () => schedulePatchReload(),
       onAccountUpdated: (payload) => {
@@ -683,13 +698,20 @@ function DashboardApp() {
       return;
     }
     if (status.status === 'error' || status.status === 'expired') {
-      const message = status.message || '授权未完成。';
+      const message = toUserMessage(status.message || '授权未完成。');
       addToast(message, 'warning', kind);
       addLogEntry(message, 'warning', kind);
       return;
     }
     if (status.status !== 'completed') return;
+    if (result?.authState) {
+      setAuthState(result.authState);
+      authStateRef.current = result.authState;
+    }
     if (result?.mismatch) {
+      if (kind === 'codex' && result?.accountId && result?.switched !== false) {
+        applyCurrentAccountBadge('codex', result.accountId);
+      }
       const message = oauthFinishedCopy({
         product: kind,
         email: result.email,
@@ -887,7 +909,7 @@ function DashboardApp() {
         }
       } catch (error) {
         if (productRef.current === kind) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = toUserMessage(error instanceof Error ? error.message : String(error));
           addToast(message, 'error', kind);
           addLogEntry(message, 'error', kind);
         }
@@ -1066,7 +1088,7 @@ function DashboardApp() {
         addLogEntry(`${account?.email || id}：${detail}`, 'error', kind);
         return;
       }
-      const message = error instanceof Error ? error.message : String(error);
+      const message = toUserMessage(error instanceof Error ? error.message : String(error));
       addToast(message, 'error', kind);
       addLogEntry(message, 'error', kind);
     }
@@ -1087,7 +1109,7 @@ function DashboardApp() {
         }
         addLogEntry(`Daemon 已${nextAction === 'stop' ? '停止' : '启动'}。`, nextAction === 'stop' ? 'warning' : 'success', 'codex');
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = toUserMessage(error instanceof Error ? error.message : String(error));
         addToast(message, 'error', 'codex');
         addLogEntry(message, 'error', 'codex');
       }
@@ -1141,7 +1163,11 @@ function DashboardApp() {
       addToast('正在打开授权页面，请在浏览器里完成登录。', 'info', kind);
       addLogEntry('正在为新账号打开授权。', 'info', kind);
       try {
-        await actions.addAccount(kind);
+        const added = await actions.addAccount(kind) as { authState?: DesktopAuthState };
+        if (kind === 'codex' && added?.authState) {
+          setAuthState(added.authState);
+          authStateRef.current = added.authState;
+        }
         const snapshot = await loadDashboardState(false);
         if (snapshot && !isManagedProduct(kind)) queueQuotaAutoSync(snapshot.accounts);
         if (productRef.current !== kind) return;
@@ -1154,7 +1180,7 @@ function DashboardApp() {
         if (finished && !finished.pending) {
           reportOAuthFinished(finished, kind);
         } else {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = toUserMessage(error instanceof Error ? error.message : String(error));
           addToast(message, 'error', kind);
           addLogEntry(message, 'error', kind);
         }
@@ -1180,7 +1206,11 @@ function DashboardApp() {
     addToast('正在打开授权页面，请在浏览器里完成登录。', 'info', kind);
     addLogEntry('正在打开重新授权。', 'info', kind);
     try {
-      const result = await actions.reauthorize(kind, id);
+      const result = await actions.reauthorize(kind, id) as { account?: { id?: string; email?: string }; mismatch?: boolean; targetAccountId?: string | null; authState?: DesktopAuthState };
+      if (kind === 'codex' && result?.authState) {
+        setAuthState(result.authState);
+        authStateRef.current = result.authState;
+      }
       const snapshot = await loadDashboardState(false);
       if (snapshot && !isManagedProduct(kind)) queueQuotaAutoSync(snapshot.accounts);
       if (productRef.current !== kind) return;
@@ -1200,6 +1230,7 @@ function DashboardApp() {
           email: result.account?.email,
           mismatch: result.mismatch,
           targetAccountId: result.targetAccountId || id,
+          authState: result.authState || null,
         },
         targetAccountId: id,
       }, 'codex');
@@ -1213,7 +1244,7 @@ function DashboardApp() {
       if (finished && !finished.pending) {
         reportOAuthFinished(finished, kind);
       } else {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = toUserMessage(error instanceof Error ? error.message : String(error));
         addToast(message, 'error', kind);
         addLogEntry(message, 'error', kind);
       }
@@ -1233,7 +1264,11 @@ function DashboardApp() {
 
   const handleCompleteOAuthManually = async (callbackUrl: string) => {
     try {
-      await desktopApi.completeOAuthManually(callbackUrl);
+      const completed = await desktopApi.completeOAuthManually(callbackUrl);
+      if (completed?.authState) {
+        setAuthState(completed.authState);
+        authStateRef.current = completed.authState;
+      }
     } finally {
       const status = await desktopApi.getOAuthStatus();
       setOAuthStatus(status);
@@ -1246,15 +1281,24 @@ function DashboardApp() {
     setIsResolvingAuth(true);
     try {
       if (action === 'adopt') {
-        const account = await desktopApi.adoptOfficialAccount();
+        const account = await desktopApi.adoptOfficialAccount() as { email?: string; authState?: DesktopAuthState };
+        if (account?.authState) {
+          setAuthState(account.authState);
+          authStateRef.current = account.authState;
+        }
         addToast(`已采用官方 Codex 账号：${account.email}`, 'success', 'codex');
       } else {
-        await desktopApi.reapplyManagedAccount(authState.currentAccountId || null);
+        const result = await desktopApi.reapplyManagedAccount(authState.currentAccountId || null) as { authState?: DesktopAuthState };
+        if (result?.authState) {
+          setAuthState(result.authState);
+          authStateRef.current = result.authState;
+        }
         addToast('管理账号已重新应用到官方 Codex。', 'success', 'codex');
       }
-      await loadDashboardState(false);
+      const snapshot = await loadDashboardState(false);
+      if (snapshot) queueQuotaAutoSync(snapshot.accounts);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = toUserMessage(error instanceof Error ? error.message : String(error));
       addToast(message, 'error', 'codex');
       addLogEntry(message, 'error', 'codex');
     } finally {
@@ -1291,7 +1335,7 @@ function DashboardApp() {
       setDeleteTarget(null);
     } catch (error) {
       if (productRef.current === kind) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = toUserMessage(error instanceof Error ? error.message : String(error));
         addToast(message, 'error', kind);
         addLogEntry(message, 'error', kind);
       }
@@ -1317,11 +1361,15 @@ function DashboardApp() {
         kind,
       );
       try {
-        const result = await runAccountOperation(id, () => actions.switchAccount(kind, id, isCurrent)) as { launched?: boolean; launchError?: string | null } | undefined;
+        const result = await runAccountOperation(id, () => actions.switchAccount(kind, id, isCurrent)) as { launched?: boolean; launchError?: string | null; authState?: DesktopAuthState } | undefined;
+        if (result?.authState) {
+          setAuthState(result.authState);
+          authStateRef.current = result.authState;
+        }
         setSessionSwitchCount(count => count + 1);
         applyCurrentAccountBadge(kind, id);
         const snapshot = await loadDashboardState(false, { skipOfficialSync: true });
-        if (snapshot && !isManagedProduct(kind)) queueQuotaAutoSync(snapshot.accounts);
+        if (snapshot) queueQuotaAutoSync(snapshot.accounts);
         if (productRef.current !== kind) return;
         if (isManagedProduct(kind) && result?.launchError) {
           addToast(result.launchError, 'warning', kind);
@@ -1336,9 +1384,10 @@ function DashboardApp() {
         }
       } catch (error) {
         if (productRef.current !== kind) return;
-        const message = error instanceof Error ? error.message : String(error);
+        const message = toUserMessage(error instanceof Error ? error.message : String(error));
         addToast(message, 'error', kind);
         addLogEntry(message, 'error', kind);
+        try { await loadDashboardState(false); } catch {}
       }
       return;
     }
@@ -1382,7 +1431,11 @@ function DashboardApp() {
     const selected = accounts.find(a => a.id === id);
     if (selected && !canJoinAutoSwitch(selected)) {
       addToast(
-        selected.status === 'BANNED' ? '账号已封号，无法加入自动切号' : '该账号需要重新授权后才能加入自动切号',
+        selected.status === 'BANNED'
+          ? '账号已封号，无法加入自动切号'
+          : selected.tokenAccessAvailable === false
+            ? '该账号没有可用登录令牌，无法加入自动切号'
+            : '该账号需要重新授权后才能加入自动切号',
         'info',
         'codex',
       );
@@ -1457,7 +1510,7 @@ function DashboardApp() {
       }
       return true;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = toUserMessage(error instanceof Error ? error.message : String(error));
       addToast(message, 'error', 'codex');
       addLogEntry(message, 'error', 'codex');
       if (revision === configSaveRevision.current) {
@@ -1517,11 +1570,11 @@ function DashboardApp() {
     const [codex, cursor, antigravity] = await Promise.all([
       desktopApi.refreshAllTokens(false),
       desktopApi.refreshAllCursorTokens(false).catch((error) => {
-        cursorError = error instanceof Error ? error.message : String(error);
+        cursorError = toCursorUserMessage(error instanceof Error ? error.message : String(error));
         return { results: [] };
       }),
       desktopApi.refreshAllAntigravityTokens(false).catch((error) => {
-        antigravityError = error instanceof Error ? error.message : String(error);
+        antigravityError = toAntigravityUserMessage(error instanceof Error ? error.message : String(error));
         return { results: [] };
       }),
     ]);
@@ -1666,10 +1719,15 @@ function DashboardApp() {
   const handleRunAutoSwitchTick = async () => {
     if (!desktopBridgeAvailable) return;
     const result = await desktopApi.runAutoSwitchTick();
+    if (result?.authState) {
+      setAuthState(result.authState);
+      authStateRef.current = result.authState;
+    }
     const snapshot = await loadDashboardState(false);
     if (snapshot) queueQuotaAutoSync(snapshot.accounts);
     if (result?.switched) {
       setSessionSwitchCount(count => count + 1);
+      if (result.to?.id) applyCurrentAccountBadge('codex', result.to.id);
       addToast(`已切换至 ${result.to?.email || '新账号'}`, 'success', 'codex');
     } else if (result?.reason === 'disabled') {
       addToast('额度已低于阈值，但全局开关已关闭，未切换账号。', 'warning', 'codex');

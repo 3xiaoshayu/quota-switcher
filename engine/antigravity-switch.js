@@ -14,6 +14,7 @@ const { getAntigravityInstallationStatusAsync, assertOfficialAntigravityInstalle
 const { logInfo, logWarn, logError } = require("./logger");
 const { describeCaughtError } = require("./sqlite-native");
 const { pathExists } = require("./atomic-file");
+const { isInspectBusyError } = require("./auth-state");
 
 const GRACEFUL_WAIT_MS = 1500;
 const FORCE_WAIT_MS = 4000;
@@ -95,13 +96,13 @@ function resolveUserDataDir(runtime, launchPath) {
 }
 
 async function snapshotCredentialIfNeeded(runtime, writeCredential) {
-  if (!writeCredential || typeof runtime.readSystemCredential !== "function") return null;
+  if (!writeCredential || typeof runtime.readSystemCredential !== "function") return { snapshot: null, readable: false };
   try {
-    return await runtime.readSystemCredential(runtime.execFile);
+    return { snapshot: await runtime.readSystemCredential(runtime.execFile), readable: true };
   } catch {
     // null used to mean "empty credential" and rollback would delete it.
     // A failed read must not be treated as empty.
-    return { snapshotFailed: true };
+    return { snapshot: { snapshotFailed: true }, readable: false };
   }
 }
 
@@ -146,6 +147,7 @@ async function doAntigravitySwitch(account) {
   const launchOptions = { userDataDir };
   let snapshot = null;
   let credentialSnapshot = null;
+  let credentialReadable = false;
   let launched = false;
   let launchError = null;
   let wrote = false;
@@ -156,7 +158,9 @@ async function doAntigravitySwitch(account) {
     await killAntigravity();
     await clearStaleLockWithRetry(runtime, userDataDir);
     killMs = Date.now() - started;
-    credentialSnapshot = await snapshotCredentialIfNeeded(runtime, writeCredential);
+    const credSnap = await snapshotCredentialIfNeeded(runtime, writeCredential);
+    credentialSnapshot = credSnap.snapshot;
+    credentialReadable = credSnap.readable;
     const writeStarted = Date.now();
     if (writeVscdb) {
       await waitForWalToClear(dbPath, WAL_CLEAR_WAIT_MS, runtime.sleep);
@@ -170,10 +174,36 @@ async function doAntigravitySwitch(account) {
       await runtime.writeSystemCredential(account, runtime.execFile);
       wroteCredential = true;
       wrote = true;
+      if (credentialReadable && typeof runtime.readSystemCredential === "function") {
+        let writtenCred;
+        try {
+          writtenCred = await runtime.readSystemCredential(runtime.execFile);
+        } catch (error) {
+          if (!isInspectBusyError(error)) throw error;
+          writtenCred = injectToken(account);
+        }
+        if ((writtenCred?.access_token || "") !== (account.tokens.access_token || "")) {
+          const error = new Error("Antigravity 系统凭据写入后核对失败，没有切到目标账号");
+          error.code = "antigravity_switch_verify_failed";
+          throw error;
+        }
+      }
     }
     if (writeVscdb) {
       await writeAntigravityAuth(dbPath, injectToken(account));
       wrote = true;
+      let written;
+      try {
+        written = await require("./antigravity-db").readAntigravityAuth(dbPath);
+      } catch (error) {
+        if (!isInspectBusyError(error)) throw error;
+        written = injectToken(account);
+      }
+      if ((written?.access_token || "") !== (account.tokens.access_token || "")) {
+        const error = new Error("Antigravity 登录库写入后核对失败，没有切到目标账号");
+        error.code = "antigravity_switch_verify_failed";
+        throw error;
+      }
     }
     if (typeof runtime.afterOfficialWrite === "function") {
       await runtime.afterOfficialWrite();

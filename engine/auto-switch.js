@@ -2,17 +2,42 @@ const { ts } = require("./crypto-utils");
 const { extractQuotaMetrics } = require("./quota");
 
 function metricCrossedThreshold(metric, primaryTh, secondaryTh) {
-  if (metric.key === "primary_window") return metric.percentage <= primaryTh;
-  if (metric.key === "secondary_window") return metric.percentage <= secondaryTh;
+  if (metric.key === "primary_window") return metric.percentage < primaryTh;
+  if (metric.key === "secondary_window") return metric.percentage < secondaryTh;
   return false;
 }
 
 function accountMustLeave(acct) {
-  return !!acct?.banned || !!acct?.requires_reauth || acct?.probe?.status === "usage_limited";
+  return !!acct?.banned || !!acct?.requires_reauth || acct?.probe?.status === "usage_limited" || acct?.has_access === false;
+}
+
+const RECENT_SWITCH_MS = 45 * 1000;
+let lastOfficialSwitchAt = 0;
+
+function noteOfficialSwitch() {
+  lastOfficialSwitchAt = Date.now();
+}
+
+function recentlySwitched(now = Date.now()) {
+  return lastOfficialSwitchAt > 0 && (now - lastOfficialSwitchAt) < RECENT_SWITCH_MS;
+}
+
+function resolutionHoldReason(authState) {
+  if (!authState?.requiresResolution) return null;
+  if (authState.status === "missing_official_auth") return "missing_official_auth";
+  if (authState.status === "unsupported_official_auth") return "unsupported_official_auth";
+  if (authState.status === "unmanaged_official_auth") return "unmanaged_official_auth";
+  return "auth_conflict";
+}
+
+function accountCannotReceiveSwitch(acct) {
+  if (accountMustLeave(acct) || acct?.has_access === false) return true;
+  if (acct?.tokens && !acct.tokens.access_token) return true;
+  return false;
 }
 
 function buildSwitchCandidate(acct, primaryTh, secondaryTh) {
-  if (accountMustLeave(acct) || acct.quota_error) return null;
+  if (accountCannotReceiveSwitch(acct) || acct.quota_error) return null;
   const metrics = extractQuotaMetrics(acct);
   if (metrics.length === 0) return null;
   const allAbove = metrics.every((m) => {
@@ -56,15 +81,22 @@ async function autoSwitchTick(cfg, options = {}) {
   const { refreshQuota } = require("./quota");
   const { doSwitch } = require("./switch");
   const { withAccountLock, withAccountLocks } = require("./operation-locks");
-  const { inspectAuthState } = require("./auth-state");
+  const { inspectAuthState, isInspectBusyError, busyAuthState } = require("./auth-state");
+  const inspectAuthSafe = (fallback, accountId) => {
+    try {
+      return inspectAuthState({ migrateProjection: false });
+    } catch (error) {
+      if (isInspectBusyError(error)) return busyAuthState(accountId);
+      return fallback || null;
+    }
+  };
   const isCancelled = typeof options.isCancelled === "function" ? options.isCancelled : () => false;
-
-  const cancelled = () => ({ switched: false, reason: "cancelled" });
+  let authState = options.authState || null;
+  const cancelled = () => ({ switched: false, reason: "cancelled", authState });
 
   if (isCancelled()) return cancelled();
   // inspectAuthState can write the current account file (official token
   // rotation sync), so hold the account lock while it runs.
-  let authState = options.authState || null;
   if (!authState) {
     try {
       const preIdx = loadIdx();
@@ -78,29 +110,39 @@ async function autoSwitchTick(cfg, options = {}) {
       return {
         switched: false,
         reason: "current_quota_refresh_failed",
-        error: error.message || String(error),
+        error: isInspectBusyError(error)
+          ? "Read authentication state timed out"
+          : (error.message || String(error)),
+        authState,
       };
     }
   }
-  if (authState.requiresResolution) {
-    return { switched: false, reason: "auth_conflict", authState };
+  const holdReason = resolutionHoldReason(authState);
+  if (holdReason) {
+    return { switched: false, reason: holdReason, authState };
+  }
+  if (require("./oauth").getOAuthStatus()?.pending) {
+    return { switched: false, reason: "oauth_pending", authState };
   }
 
   if (isCancelled()) return cancelled();
   const accts = listAccts({ secrets: false });
-  if (accts.length === 0) return { switched: false, reason: "no_accounts" };
+  if (accts.length === 0) return { switched: false, reason: "no_accounts", authState };
 
   const monitoredIds = resolveMonitoredIds(cfg, accts);
-  if (monitoredIds.length === 0) return { switched: false, reason: "no_monitored" };
+  if (monitoredIds.length === 0) return { switched: false, reason: "no_monitored", authState };
 
   const idx = loadIdx();
   const curId = idx.current_account_id;
-  if (!curId) return { switched: false, reason: "current_not_found" };
+  if (!curId) return { switched: false, reason: "current_not_found", authState };
 
   let cur = accts.find((a) => a.id === curId);
-  if (!cur) return { switched: false, reason: "current_not_found" };
+  if (!cur) return { switched: false, reason: "current_not_found", authState };
+  if (recentlySwitched()) {
+    return { switched: false, reason: "recently_switched", authState };
+  }
   const mustLeave = accountMustLeave(cur);
-  if (!mustLeave && !monitoredIds.includes(curId)) return { switched: false, reason: "current_not_monitored" };
+  if (!mustLeave && !monitoredIds.includes(curId)) return { switched: false, reason: "current_not_monitored", authState };
 
   if (isCancelled()) return cancelled();
   // The daemon refreshes the current account right before this tick runs;
@@ -135,25 +177,26 @@ async function autoSwitchTick(cfg, options = {}) {
           switched: false,
           reason: "current_quota_refresh_failed",
           error: error.message || String(error),
+          authState,
         };
       }
     }
   }
   if (isCancelled()) return cancelled();
-  if (!cur) return { switched: false, reason: "current_not_found" };
+  if (!cur) return { switched: false, reason: "current_not_found", authState };
   const leaveCurrent = accountMustLeave(cur);
   const metrics = extractQuotaMetrics(cur);
   const primaryTh = cfg.primary_threshold, secondaryTh = cfg.secondary_threshold;
   const shouldSwitch = leaveCurrent || metrics.some((m) => metricCrossedThreshold(m, primaryTh, secondaryTh));
-  if (!leaveCurrent && metrics.length === 0) return { switched: false, reason: "no_quota_data" };
-  if (!shouldSwitch) return { switched: false, reason: "quota_sufficient", metrics };
+  if (!leaveCurrent && metrics.length === 0) return { switched: false, reason: "no_quota_data", authState };
+  if (!shouldSwitch) return { switched: false, reason: "quota_sufficient", metrics, authState };
 
   const candidates = [];
   for (const listed of accts) {
     if (isCancelled()) return cancelled();
     if (listed.id === curId) continue;
     if (!monitoredIds.includes(listed.id)) continue;
-    if (accountMustLeave(listed)) continue;
+    if (accountCannotReceiveSwitch(listed)) continue;
     let candidate = listed;
     if (!listed.quota || listed.quota_error || (ts() - (listed.usage_updated_at || 0) > 600)) {
       try {
@@ -170,39 +213,76 @@ async function autoSwitchTick(cfg, options = {}) {
     }
     if (isCancelled()) return cancelled();
     if (!candidate) continue;
-    if (accountMustLeave(candidate) || candidate.quota_error) continue;
+    if (accountCannotReceiveSwitch(candidate) || candidate.quota_error) continue;
     const cand = buildSwitchCandidate(candidate, primaryTh, secondaryTh);
     if (cand) candidates.push(cand);
   }
 
-  if (candidates.length === 0) return { switched: false, reason: "no_candidates", metrics };
+  if (candidates.length === 0) return { switched: false, reason: "no_candidates", metrics, authState };
 
   const best = pickBestCandidate(candidates);
-  if (!best) return { switched: false, reason: "no_best_candidate" };
+  if (!best) return { switched: false, reason: "no_best_candidate", authState };
 
   if (isCancelled()) return cancelled();
   // Manual "check now" still inspects quota, but the global switch is the
   // only permission to actually change the official account.
   if (!cfg.enabled) {
-    return { switched: false, reason: "disabled", metrics };
+    return { switched: false, reason: "disabled", metrics, authState };
   }
 
   return withAccountLocks(["__switch__", curId, best.id], async () => {
     if (isCancelled()) return cancelled();
     const latestIdx = loadIdx();
     if (latestIdx.current_account_id !== curId) {
-      return { switched: false, reason: "current_changed", metrics };
+      return { switched: false, reason: "current_changed", metrics, authState: inspectAuthSafe(authState, curId) };
     }
     const freshBest = loadAcct(best.id);
     const freshCur = loadAcct(curId) || cur;
-    if (!freshBest) return { switched: false, reason: "candidate_not_found", metrics };
+    if (!freshBest || accountCannotReceiveSwitch(freshBest)) {
+      return { switched: false, reason: "candidate_not_found", metrics, authState: inspectAuthSafe(authState, curId) };
+    }
     if (isCancelled()) return cancelled();
-    const result = await doSwitch(freshBest);
-    return { switched: true, from: freshCur, to: result.account, metrics };
+    let latestAuth;
+    try {
+      latestAuth = inspectAuthState({ migrateProjection: false });
+    } catch (error) {
+      if (isInspectBusyError(error)) {
+        return {
+          switched: false,
+          reason: "current_quota_refresh_failed",
+          error: "Read authentication state timed out",
+          metrics,
+          authState: authState || busyAuthState(curId),
+        };
+      }
+      throw error;
+    }
+    if (require("./oauth").getOAuthStatus()?.pending) {
+      return { switched: false, reason: "oauth_pending", authState: latestAuth, metrics };
+    }
+    const latestHold = resolutionHoldReason(latestAuth);
+    if (latestHold) {
+      return { switched: false, reason: latestHold, authState: latestAuth, metrics };
+    }
+    try {
+      const result = await doSwitch(freshBest);
+      return { switched: true, from: freshCur, to: result.account, metrics, authState: result.authState || null };
+    } catch (error) {
+      if (error?.code === "codex_switch_verify_failed") {
+        return {
+          switched: false,
+          reason: "switch_verify_failed",
+          error: error.message,
+          metrics,
+          authState: inspectAuthSafe(latestAuth, curId),
+        };
+      }
+      throw error;
+    }
   });
 }
 
 module.exports = {
   metricCrossedThreshold, accountMustLeave, buildSwitchCandidate, pickBestCandidate,
-  resolveMonitoredIds, autoSwitchTick,
+  resolveMonitoredIds, autoSwitchTick, noteOfficialSwitch, recentlySwitched, resolutionHoldReason,
 };

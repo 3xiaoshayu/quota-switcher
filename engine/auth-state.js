@@ -9,6 +9,23 @@ const AUTH_PATH = path.join(CODEX_DIR, "auth.json");
 const PROJECTION_PATH = path.join(CODEX_DIR, "codex_auth_projection.json");
 let lastConflictWarning = null;
 
+function isInspectBusyError(error) {
+  const message = error?.message || String(error || "");
+  return !!(error?.transientIoError
+    || /Authentication state is busy|timed out|EPERM|EACCES|EBUSY|EAGAIN|SQLITE_BUSY|SQLITE_LOCKED|database is locked|database is busy|operation not permitted|resource busy|already has an operation in progress/i.test(message));
+}
+
+function busyAuthState(currentAccountId = null) {
+  return {
+    status: "unknown",
+    requiresResolution: false,
+    currentAccountId: currentAccountId || null,
+    matchedAccountId: null,
+    officialIdentity: null,
+    message: "Authentication state is busy",
+  };
+}
+
 function returnNonConflict(state) {
   lastConflictWarning = null;
   return {
@@ -375,6 +392,8 @@ module.exports = {
   writeManagedProjection,
   identityMatchesAccount,
   inspectAuthState,
+  isInspectBusyError,
+  busyAuthState,
   canMirrorOfficialAuth,
   adoptOfficialAuth,
   reapplyManagedAuth,

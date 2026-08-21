@@ -439,11 +439,12 @@ function createAccountFileStore(spec) {
     writeJsonAtomic(indexPath, normalizeIndex(index));
   }
 
-  function pickRebuiltCurrentId(accounts, preferredCurrentId, fallbackIndex) {
+  function pickRebuiltCurrentId(accounts, preferredCurrentId, fallbackIndex, options = {}) {
     const ids = new Set(accounts.map((account) => account.id));
     if (preferredCurrentId && ids.has(preferredCurrentId)) return preferredCurrentId;
     const fallbackCurrent = fallbackIndex?.[currentField];
     if (fallbackCurrent && ids.has(fallbackCurrent)) return fallbackCurrent;
+    if (options.inventCurrent === false) return null;
     return accounts[0]?.id || null;
   }
 
@@ -475,7 +476,7 @@ function createAccountFileStore(spec) {
     const index = {
       version: indexVersion,
       accounts: accounts.map(accountSummary),
-      [currentField]: pickRebuiltCurrentId(accounts, preferredCurrentId, options.fallbackIndex),
+      [currentField]: pickRebuiltCurrentId(accounts, preferredCurrentId, options.fallbackIndex, options),
     };
     saveIdx(index);
     if (recordIndexDiagnostics) {
@@ -513,7 +514,7 @@ function createAccountFileStore(spec) {
     return next;
   }
 
-  function loadIdx() {
+  function loadIdx(options = {}) {
     ensureDir(dataDir);
     try {
       let recovered = false;
@@ -534,7 +535,12 @@ function createAccountFileStore(spec) {
         } catch (dirError) {
           if (dirError?.code !== "ENOENT") throw dirError;
         }
-        if (hasAccountFiles) return rebuildIndex("index contained no accounts", index[currentField], { fallbackIndex: index });
+        if (hasAccountFiles) {
+          return rebuildIndex("index contained no accounts", index[currentField], {
+            fallbackIndex: index,
+            inventCurrent: options.inventCurrent,
+          });
+        }
       }
       return index;
     } catch (error) {
@@ -546,7 +552,7 @@ function createAccountFileStore(spec) {
           if (dirError?.code !== "ENOENT") throw dirError;
         }
         return hasAccountFiles
-          ? rebuildIndex("index missing", null, { fallbackIndex: emptyIndex() })
+          ? rebuildIndex("index missing", null, { fallbackIndex: emptyIndex(), inventCurrent: options.inventCurrent })
           : emptyIndex();
       }
       if (error.transientIoError || (error?.code && !(error instanceof SyntaxError))) {
@@ -565,7 +571,7 @@ function createAccountFileStore(spec) {
       } else {
         logWarn(`Account index unreadable: ${error.message}`);
       }
-      return rebuildIndex("index unreadable", null, { fallbackIndex: emptyIndex() });
+      return rebuildIndex("index unreadable", null, { fallbackIndex: emptyIndex(), inventCurrent: options.inventCurrent });
     }
   }
 
@@ -605,7 +611,7 @@ function createAccountFileStore(spec) {
     const snapshot = new Map(targets.map((target) => [target, captureFile(target)]));
 
     try {
-      const index = loadIdx();
+      const index = loadIdx({ inventCurrent: false });
       if (index[currentField] === accountId && options.allowCurrent !== true) {
         throw new Error("Switch to another account before deleting the current account.");
       }
@@ -699,7 +705,7 @@ function createAccountFileStore(spec) {
     } catch (error) {
       if (error?.code === "ENOENT") return emptyIndex();
       if (error.transientIoError || (error?.code && !(error instanceof SyntaxError))) throw error;
-      return loadIdx();
+      return loadIdx({ inventCurrent: false });
     }
   }
 

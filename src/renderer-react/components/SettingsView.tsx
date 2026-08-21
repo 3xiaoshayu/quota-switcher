@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { AccountQuota, SystemSettings, DaemonState, ProductKind } from '../types';
 import { lastCheckCaption, tokenStatusChip } from '../api/desktop';
+import { toUserMessage } from '../api/user-messages';
 import { PRODUCTS, productById, type ProductDefinition } from '../data/products';
 import { APP_DISPLAY_NAME } from '../brand';
 
@@ -287,7 +288,7 @@ export default function SettingsView({
                   <span className="font-medium text-sm text-label">{daemonState.status === 'Running' ? '运行中' : '已停止'}</span>
                 </div>
                 {daemonState.status === 'Running' && daemonState.pausedReason && (
-                  <span className="block text-[10px] text-warn">已暂停：{daemonState.pausedReason}</span>
+                  <span className="block text-[10px] text-warn">已暂停：{toUserMessage(daemonState.pausedReason)}</span>
                 )}
                 {daemonState.status !== 'Running' && settings.globalSwitch && (
                   <span className="block text-[10px] text-warn">自动切号已启用，但 Daemon 已停止</span>

@@ -318,6 +318,16 @@ test("unusable tokens without a reauth flag still warn as reauthorization", asyn
   assert.equal(snapshot.accounts[0].warning, "该账号需要重新授权后才能使用。");
 });
 
+test("accounts without an access token cannot join auto-switch", () => {
+  const { canJoinAutoSwitch, canSwitchAccount, pruneAutoSwitchAccountIds } = loadDesktopExports(bridge());
+  const empty = { id: "empty", status: "ACTIVE", tokenAccessAvailable: false };
+  const ready = { id: "ready", status: "ACTIVE", tokenAccessAvailable: true };
+  assert.equal(canJoinAutoSwitch(empty), false);
+  assert.equal(canSwitchAccount(empty), false);
+  assert.equal(canJoinAutoSwitch(ready), true);
+  assert.deepEqual(pruneAutoSwitchAccountIds(["empty", "ready"], [empty, ready]), ["ready"]);
+});
+
 test("rejected leftover access tokens cannot refresh quotas or join auto-switch", async () => {
   const { canJoinAutoSwitch, canRefreshQuota, needsQuotaAutoSync, pruneAutoSwitchAccountIds } = loadDesktopExports(bridge());
   const desktopApi = loadDesktopApiWithBridge(bridge({
@@ -625,6 +635,11 @@ test("auto-switch banner uses quota thresholds and daemon state, not ACTIVE stat
     status: "WARNING",
   };
   assert.equal(isCurrentQuotaSufficient(low, 20, 30), false);
+  assert.equal(isCurrentQuotaSufficient({
+    ...okQuota,
+    fiveHourQuotaRemaining: 20,
+    weeklyQuotaRemaining: 30,
+  }, 20, 30), true);
   assert.equal(isCurrentQuotaSufficient(okQuota, 20, 30), true);
   assert.equal(isCurrentQuotaSufficient(null, 20, 30), false);
   assert.equal(isCurrentQuotaSufficient({ ...okQuota, status: "BANNED" }, 20, 30), false);
@@ -660,6 +675,36 @@ test("auto-switch banner uses quota thresholds and daemon state, not ACTIVE stat
   assert.equal(paused.title, "自动切号已暂停");
   assert.equal(paused.detail, "官方 Codex 当前没有登录。");
   assert.equal(paused.tone, "warn");
+
+  const pausedConflict = autoSwitchStatusBanner({
+    hasCurrentAccount: true,
+    quotaSufficient: true,
+    globalSwitch: true,
+    daemonRunning: true,
+    pausedReason: "auth_conflict",
+  });
+  assert.equal(pausedConflict.title, "自动切号已暂停");
+  assert.equal(pausedConflict.detail, "官方登录了另一个账号。");
+
+  const pausedOAuth = autoSwitchStatusBanner({
+    hasCurrentAccount: true,
+    quotaSufficient: true,
+    globalSwitch: true,
+    daemonRunning: true,
+    pausedReason: "oauth_pending",
+  });
+  assert.equal(pausedOAuth.title, "自动切号已暂停");
+  assert.equal(pausedOAuth.detail, "已有授权正在进行，本次不自动切号。");
+
+  const pausedVerify = autoSwitchStatusBanner({
+    hasCurrentAccount: true,
+    quotaSufficient: true,
+    globalSwitch: true,
+    daemonRunning: true,
+    pausedReason: "switch_verify_failed",
+  });
+  assert.equal(pausedVerify.title, "自动切号已暂停");
+  assert.equal(pausedVerify.detail, "官方登录写入后核对失败，没有切到目标账号。");
 
   const quotaOk = autoSwitchStatusBanner({
     hasCurrentAccount: true,
@@ -1001,6 +1046,20 @@ test("user-facing messages stay in Chinese", () => {
     "该账号需要重新授权后才能刷新令牌",
   );
   assert.equal(toUserMessage("Official Codex authentication is missing."), "官方 Codex 当前没有登录");
+  assert.equal(toUserMessage("auth_conflict"), "官方登录了另一个账号");
+  assert.equal(toUserMessage("missing_official_auth"), "官方 Codex 已退出");
+  assert.equal(toUserMessage("current_changed"), "当前账号已变化，本次未切");
+  assert.equal(toUserMessage("current_quota_refresh_failed"), "当前账号额度刷新失败，本次未切");
+  assert.equal(toUserMessage("no_quota_data"), "当前账号还没有额度数据，无法判断是否切换");
+  assert.equal(toUserMessage("network unavailable"), "额度暂时没刷到，登录还在。请稍后再试。");
+  assert.equal(
+    toUserMessage("Codex 官方登录写入后核对失败，没有切到目标账号"),
+    "官方登录写入后核对失败，没有切到目标账号",
+  );
+  assert.equal(
+    toUserMessage("Antigravity 系统凭据写入后核对失败，没有切到目标账号"),
+    "官方登录写入后核对失败，没有切到目标账号",
+  );
   assert.equal(toUserMessage("No supported official Codex OAuth login was found"), "本机没有已登录的 Codex");
   assert.equal(
     toUserMessage("Quota authorization could not be repaired: HTTP 401 refresh_token_invalidated"),
@@ -1053,6 +1112,13 @@ test("user-facing messages stay in Chinese", () => {
   assert.equal(toUserMessage("Invalid string length"), "额度暂时没刷到，登录还在。请稍后再试。");
   assert.equal(toUserMessage("响应过大"), "额度暂时没刷到，登录还在。请稍后再试。");
   assert.equal(toUserMessage("Read authentication state timed out"), "正在确认官方登录，稍后会自动刷新");
+  assert.equal(toUserMessage("Daemon error"), "后台检查失败，请稍后重试");
+  assert.equal(toUserMessage("EISDIR: illegal operation on a directory"), "登录文件暂时读不到，请稍后重试");
+  assert.equal(toUserMessage("EPERM: operation not permitted"), "正在确认官方登录，稍后会自动刷新");
+  assert.equal(toUserMessage("The target account is not an Antigravity account"), "该账号不是 Antigravity 账号，无法切换");
+  assert.equal(toUserMessage("The target account is not a Cursor account"), "该账号不是 Cursor 账号，无法切换");
+  assert.equal(toUserMessage("Official Antigravity 2.0 login cannot be written"), "官方 Antigravity 登录写不进去");
+  assert.equal(toUserMessage("Cursor accounts cannot be written to official Codex"), "Cursor 账号不能写进官方 Codex");
   assert.equal(
     toUserMessage("Switch to another account before deleting the current account."),
     "请先切到其他账号，再删除当前账号",
@@ -1824,6 +1890,60 @@ test("antigravity preserved quota_error after upsert stays 这次没查清", () 
   assert.notEqual(cursorEmptyQuotaText(mapped), "暂无此项");
 });
 
+test("busy auth inspect does not replace a just-verified official login", () => {
+  const { resolveAuthStateAfterSnapshot } = loadDesktopExports(bridge());
+  const current = {
+    status: "aligned",
+    requiresResolution: false,
+    currentAccountId: "codex_keep",
+    matchedAccountId: "codex_keep",
+    officialIdentity: { email: "keep@example.com" },
+    message: null,
+  };
+  const busy = {
+    status: "unknown",
+    requiresResolution: false,
+    currentAccountId: null,
+    matchedAccountId: null,
+    officialIdentity: null,
+    message: "正在确认官方登录，稍后会自动刷新",
+  };
+  const kept = resolveAuthStateAfterSnapshot(busy, current);
+  assert.equal(kept.status, "aligned");
+  assert.equal(kept.currentAccountId, "codex_keep");
+  const conflict = resolveAuthStateAfterSnapshot({
+    status: "conflict",
+    requiresResolution: true,
+    currentAccountId: "codex_keep",
+    matchedAccountId: "codex_other",
+    officialIdentity: { email: "other@example.com" },
+    message: null,
+  }, current);
+  assert.equal(conflict.status, "conflict");
+  const firstPaint = resolveAuthStateAfterSnapshot(busy, null);
+  assert.equal(firstPaint.status, "unknown");
+});
+
+test("a locked official auth.json does not invent a login conflict", () => {
+  const { resolveAuthStateAfterSnapshot, unverifiedAuthState } = loadDesktopExports(bridge());
+  const current = {
+    status: "aligned",
+    requiresResolution: false,
+    currentAccountId: "codex_keep",
+    matchedAccountId: "codex_keep",
+    officialIdentity: { email: "keep@example.com" },
+    message: null,
+  };
+  const locked = unverifiedAuthState("EPERM: operation not permitted");
+  assert.equal(locked.status, "unknown");
+  assert.equal(locked.requiresResolution, false);
+  const kept = resolveAuthStateAfterSnapshot(locked, current);
+  assert.equal(kept.status, "aligned");
+  assert.equal(kept.currentAccountId, "codex_keep");
+  const realUnknown = unverifiedAuthState("authentication state could not be verified");
+  assert.equal(realUnknown.requiresResolution, true);
+});
+
 test("withCurrentFlag only moves the current badge", () => {
   const { withCurrentFlag } = loadDesktopExports(bridge());
   const next = withCurrentFlag([
@@ -1833,6 +1953,53 @@ test("withCurrentFlag only moves the current badge", () => {
   assert.equal(next[0].isCurrent, false);
   assert.equal(next[1].isCurrent, true);
   assert.equal(next[1].email, "chr@example.com");
+});
+
+test("desktop subscribe forwards daemon tick payload", () => {
+  let forwarded = null;
+  const api = loadDesktopApiWithBridge({
+    onDaemonTick(cb) {
+      cb({ result: { authState: { status: "aligned" } } });
+      return () => {};
+    },
+  });
+  api.subscribe({
+    onDaemonTick(payload) {
+      forwarded = payload;
+    },
+  });
+  assert.equal(forwarded.result.authState.status, "aligned");
+});
+
+test("desktop subscribe translates daemon error copy", () => {
+  let forwarded = null;
+  const api = loadDesktopApiWithBridge({
+    onDaemonError(cb) {
+      cb({ message: "EISDIR: illegal operation on a directory" });
+      return () => {};
+    },
+  });
+  api.subscribe({
+    onDaemonError(message) {
+      forwarded = message;
+    },
+  });
+  assert.equal(forwarded, "登录文件暂时读不到，请稍后重试");
+});
+
+test("batch token check failures use product-specific Chinese copy", () => {
+  const app = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "App.tsx"), "utf8");
+  assert.match(app, /handleBatchVerifyTokens[\s\S]*toCursorUserMessage\(/);
+  assert.match(app, /handleBatchVerifyTokens[\s\S]*toAntigravityUserMessage\(/);
+});
+
+test("switch and auth failure toasts go through Chinese user messages", () => {
+  const app = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "App.tsx"), "utf8");
+  assert.match(app, /status\.status === 'error' \|\| status\.status === 'expired'[\s\S]*toUserMessage\(status\.message/);
+  assert.match(app, /performAccountSwitch[\s\S]*toUserMessage\(error instanceof Error \? error\.message : String\(error\)\)/);
+  assert.match(app, /handleToggleDaemon[\s\S]*toUserMessage\(error instanceof Error \? error\.message : String\(error\)\)/);
+  assert.match(app, /handleRefreshToken[\s\S]*toUserMessage\(error instanceof Error \? error\.message : String\(error\)\)/);
+  assert.equal([...app.matchAll(/toUserMessage\(error instanceof Error \? error\.message : String\(error\)\)/g)].length >= 8, true);
 });
 
 test("cursor switch UI flips current without waiting on official sync", () => {

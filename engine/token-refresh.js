@@ -83,8 +83,14 @@ function markRequiresReauth(acct, code, detail) {
 function syncCurrentAuthIfNeeded(acct) {
   const idx = loadIdx();
   if (idx.current_account_id !== acct.id) return;
-  const { inspectAuthState, canMirrorOfficialAuth } = require("./auth-state");
-  const authState = inspectAuthState({ migrateProjection: false });
+  const { inspectAuthState, canMirrorOfficialAuth, isInspectBusyError } = require("./auth-state");
+  let authState;
+  try {
+    authState = inspectAuthState({ migrateProjection: false });
+  } catch (error) {
+    if (isInspectBusyError(error)) return;
+    throw error;
+  }
   if (!canMirrorOfficialAuth(authState) || authState.currentAccountId !== acct.id) return;
   const authValue = writeAuthJson(acct);
   writeProjection(acct, authValue);

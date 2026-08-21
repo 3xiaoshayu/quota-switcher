@@ -17,6 +17,13 @@ const RULES: Array<{ test: RegExp; to: string }> = [
   { test: /authentication state could not be verified/i, to: '无法确认官方登录状态，自动同步已暂停' },
   { test: /Official Codex authentication changed/i, to: '官方 Codex 登录状态已变更' },
   { test: /Automatic quota sync is paused/i, to: '请先处理官方登录后再自动同步额度' },
+  { test: /^auth_conflict$/i, to: '官方登录了另一个账号' },
+  { test: /^missing_official_auth$/i, to: '官方 Codex 已退出' },
+  { test: /^unsupported_official_auth$/i, to: '官方登录无法由本管理器接管' },
+  { test: /^unmanaged_official_auth$/i, to: '官方 Codex 已登录，尚未纳入管理' },
+  { test: /^recently_switched$/i, to: '刚切过号，本次不自动再切' },
+  { test: /^oauth_pending$/i, to: '已有授权正在进行，本次不自动切号' },
+  { test: /^switch_verify_failed$/i, to: '官方登录写入后核对失败，没有切到目标账号' },
   { test: /Quota authorization could not be repaired/i, to: '额度授权无法修复，刷新令牌已失效，请重新授权' },
   { test: /refresh_token_invalidated|invalid_refresh_token|invalid_grant/i, to: '刷新令牌已失效，请重新授权' },
   { test: /Token 已过期且刷新失败|令牌已过期且刷新失败/i, to: '令牌已过期且刷新失败，请重新授权' },
@@ -25,6 +32,8 @@ const RULES: Array<{ test: RegExp; to: string }> = [
   { test: /did not exit/i, to: '官方 Codex 未能退出，请稍后重试' },
   { test: /crash recovery window/i, to: '官方 Codex 打开了崩溃恢复窗口，未能正常启动' },
   { test: /did not start within the expected time/i, to: '官方 Codex 未能在预期时间内启动' },
+  { test: /官方登录写入后核对失败|codex_switch_verify_failed/i, to: '官方登录写入后核对失败，没有切到目标账号' },
+  { test: /登录库写入后核对失败|系统凭据写入后核对失败|antigravity_switch_verify_failed/i, to: '官方登录写入后核对失败，没有切到目标账号' },
   { test: /Official Cursor was not found|cursor_app_path_not_found/i, to: '没有找到官方 Cursor，请先安装后再切号' },
   { test: /Official Antigravity IDE was not found|antigravity_app_path_not_found/i, to: '没有找到官方 Antigravity IDE，请先安装后再切号' },
   { test: /Official Cursor did not exit|cursor_process_still_running/i, to: '官方 Cursor 没能退出，请手动关掉后再切' },
@@ -44,6 +53,10 @@ const RULES: Array<{ test: RegExp; to: string }> = [
   { test: /未找到本地 Cursor|not found local Cursor|found":false/i, to: '本机没有已登录的 Cursor' },
   { test: /本机没有已登录的 Antigravity|not found local Antigravity/i, to: '本机没有已登录的 Antigravity IDE' },
   { test: /cannot be switched into official Codex/i, to: 'Cursor 账号不能写进官方 Codex' },
+  { test: /cannot be written to official Codex/i, to: 'Cursor 账号不能写进官方 Codex' },
+  { test: /not an Antigravity account/i, to: '该账号不是 Antigravity 账号，无法切换' },
+  { test: /not a Cursor account/i, to: '该账号不是 Cursor 账号，无法切换' },
+  { test: /Official Antigravity 2\.0 login cannot be written/i, to: '官方 Antigravity 登录写不进去' },
   { test: /Could not enumerate official Codex processes/i, to: '无法读取官方 Codex 进程' },
   { test: /No supported official Codex OAuth login was found/i, to: '本机没有已登录的 Codex' },
   { test: /managed current account is not available/i, to: '管理器当前账号不可用' },
@@ -76,9 +89,17 @@ const RULES: Array<{ test: RegExp; to: string }> = [
   { test: /quota refresh is waiting for retry|quota_retry_pending/i, to: '额度刷新稍后会自动重试' },
   { test: /account_deactivated|account_deleted|workspace_deactivated|deactivated_workspace|deactivated_user/i, to: '账号已封号，无法继续使用。' },
   { test: /^HTTP \d+/i, to: '服务暂时不可用，请稍后刷新额度' },
-  { test: /^auth_conflict$/i, to: '官方登录不一致' },
+  { test: /^current_not_found$/i, to: '没有当前账号' },
+  { test: /^current_changed$/i, to: '当前账号已变化，本次未切' },
+  { test: /^no_best_candidate$/i, to: '没有更合适的账号可切' },
+  { test: /^candidate_not_found$/i, to: '目标账号已不存在，本次未切' },
+  { test: /^current_quota_refresh_failed$/i, to: '当前账号额度刷新失败，本次未切' },
+  { test: /^no_quota_data$/i, to: '当前账号还没有额度数据，无法判断是否切换' },
   { test: /^stopped$/i, to: '已停止' },
   { test: /^disabled$/i, to: '全局开关已关闭，不会切号' },
+  { test: /^Daemon error$/i, to: '后台检查失败，请稍后重试' },
+  { test: /EISDIR|illegal operation on a directory/i, to: '登录文件暂时读不到，请稍后重试' },
+  { test: /EPERM|EACCES|operation not permitted/i, to: '正在确认官方登录，稍后会自动刷新' },
 ]
 
 const NETWORK_FAILURE = '额度暂时没刷到，登录还在。请稍后再试。'
@@ -90,7 +111,7 @@ function hasChinese(text: string): boolean {
 function isQuotaNetworkFailure(text: string): boolean {
   return /网络请求失败/.test(text)
     || /ERR_CONNECTION|ETIMEDOUT|ECONNRESET|ENOTFOUND|net::ERR_/i.test(text)
-    || /Electron network failed|Node network failed/i.test(text)
+    || /Electron network failed|Node network failed|network unavailable/i.test(text)
     || /Invalid string length|response_too_large|响应过大/i.test(text)
 }
 

@@ -256,10 +256,8 @@ async function writeWindowsAntigravityCredential(account, runCommand) {
 }
 
 async function deleteWindowsAntigravityCredential(runCommand) {
-  if (process.platform !== "win32") return true;
-  try {
-    await runPowerShell(DELETE_SCRIPT, runCommand);
-  } catch {}
+  if (process.platform !== "win32" && typeof runCommand !== "function") return true;
+  await runPowerShell(DELETE_SCRIPT, runCommand);
   return true;
 }
 

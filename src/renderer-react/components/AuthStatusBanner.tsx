@@ -25,13 +25,13 @@ function copyForStatus(authState: DesktopAuthState, needsReauthCount: number): {
   if (authState.status === 'missing_official_auth') {
     return {
       title: '官方 Codex 已退出',
-      body: `自动切号已暂停。${reauthHint ? ` ${reauthHint}` : ''}`,
+      body: `额度刷新仍会继续，自动切号已暂停。${reauthHint ? ` ${reauthHint}` : ''}`,
     }
   }
   if (authState.status === 'unsupported_official_auth') {
     return {
       title: '官方登录无法由本管理器接管',
-      body: `自动切号已暂停。${reauthHint ? ` ${reauthHint}` : ''}`,
+      body: `额度刷新仍会继续，自动切号已暂停。${reauthHint ? ` ${reauthHint}` : ''}`,
     }
   }
   if (authState.status === 'unmanaged_official_auth') {
