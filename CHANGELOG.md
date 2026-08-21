@@ -7,6 +7,20 @@ release is published.
 
 ## Unreleased
 
+## [2.0.5] - 2026-08-22
+
+- Keep the official-login banner and toasts honest: leftover file locks are
+  not a conflict, and switch or daemon failures stay in Chinese.
+- After a successful Codex or Antigravity write, do not roll the login back
+  just because the follow-up read is locked. A real mismatch still rolls back.
+- Codex auto-switch only leaves when quota is strictly below the threshold,
+  skips accounts with no access token, and does not treat a leftover lock as a
+  background-check failure.
+- Check-now and the daemon apply the post-switch login state and current
+  badge. First add or import does not invent a current account.
+- The installer is still unsigned. Download only from GitHub Releases and
+  check SHA-256.
+
 ## [2.0.4] - 2026-08-21
 
 - Show Cursor Ultra and Pro+, Codex Business and Edu, and Antigravity Pro on

@@ -1,6 +1,6 @@
 {
   "name": "codex-account-manager",
-  "version": "2.0.4",
+  "version": "2.0.5",
   "private": true,
   "description": "Quota Switcher for Codex, Cursor, and Antigravity accounts on Windows. Quotas and switching stay on this PC.",
   "main": "src/main/main.js",
