@@ -7,6 +7,20 @@ release is published.
 
 ## Unreleased
 
+## [2.0.3] - 2026-08-21
+
+- Read the current Antigravity Hub Google OAuth client from the official
+  language server instead of a withdrawn published client, so browser sign-in
+  no longer fails with `invalid_client`. Token refresh can still retry the
+  older published client once if Hub rejects it.
+- Keep account files, indexes, OAuth pending state, and proxy settings
+  readable through brief Windows locks and torn writes. Restore from backup
+  only when the live file is corrupt, not when it was deleted.
+- Bound quota HTTP to a wall-clock deadline so a slow drip of bytes cannot
+  hang refresh forever.
+- The installer is still unsigned. Download only from GitHub Releases and
+  check SHA-256.
+
 ## [2.0.2] - 2026-08-20
 
 - Keep the dashboard, current-account badge, and quota refresh correct when
