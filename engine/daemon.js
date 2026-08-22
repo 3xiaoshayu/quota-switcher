@@ -1,6 +1,6 @@
 const { REFRESH_MINUTES } = require("./config");
 const tokenRefresh = require("./token-refresh");
-const { refreshQuota, probeUsageOnly, needsBanProbe } = require("./quota");
+const quota = require("./quota");
 const { loadAutoSwitchCfg, normalizeSyncIntervalMinutes } = require("./config-manager");
 const { autoSwitchTick, resolutionHoldReason } = require("./auto-switch");
 const { loadIdx, listAccts, loadAcct } = require("./storage");
@@ -8,6 +8,43 @@ const { writeAuthJson, writeProjection } = require("./switch");
 const { inspectAuthState, isInspectBusyError, busyAuthState, canMirrorOfficialAuth } = require("./auth-state");
 const { withAccountLock } = require("./operation-locks");
 const { logWarn } = require("./logger");
+
+function isTransientQuotaNetworkError(error) {
+  const text = String(error?.message || error || "").toLowerCase();
+  return text.includes("网络请求失败")
+    || text.includes("请求超时")
+    || text.includes("network unavailable")
+    || text.includes("enotfound")
+    || text.includes("eai_again")
+    || text.includes("etimedout")
+    || text.includes("econnreset")
+    || text.includes("econnrefused")
+    || text.includes("enetunreach")
+    || text.includes("ehostunreach")
+    || text.includes("eaddrnotavail")
+    || text.includes("enetdown")
+    || text.includes("ehostdown")
+    || text.includes("epipe")
+    || text.includes("und_err")
+    || text.includes("engine_worker_down")
+    || text.includes("engine worker timed out")
+    || text.includes("engine worker is not running")
+    || text.includes("engine worker exited")
+    || text.includes("proxy_gateway")
+    || text.includes("响应解压失败")
+    || text.includes("response_decode_failed")
+    || /http\s+429/.test(text)
+    || /rate.?limit/.test(text)
+    || text.includes("这次没查清")
+    || text.includes("invalid_usage_json")
+    || text.includes("was not json")
+    || text.includes("响应不是 json")
+    || text.includes("响应无 access_token")
+    || text.includes("unexpected token")
+    || text.includes("unexpected_non_json")
+    || /http\s+5\d\d/.test(text)
+    || text.includes("服务暂时不可用");
+}
 
 function failure(stage, account, error) {
   return {
@@ -124,10 +161,13 @@ async function runDaemonWorker(options = {}) {
         });
         if (result.ok) accountsUpdated++;
         else if (result.reauthRequired) return;
+        else if (isTransientQuotaNetworkError({ message: result.error })) return;
         else failures.push(failure("token_refresh", account, new Error(result.error || "Token refresh failed")));
       });
     } catch (error) {
-      failures.push(failure("token_refresh", listed, error));
+      if (!isTransientQuotaNetworkError(error)) {
+        failures.push(failure("token_refresh", listed, error));
+      }
     }
     if (isCancelled()) return stopped();
   }
@@ -140,9 +180,9 @@ async function runDaemonWorker(options = {}) {
         if (!listed.requires_reauth && !listed.banned) return;
         if (listed.has_access === false) return;
         const account = loadAcct(listed.id);
-        if (!account || !needsBanProbe(account)) return;
+        if (!account || !quota.needsBanProbe(account)) return;
         try {
-          await probeUsageOnly(account, { force: false });
+          await quota.probeUsageOnly(account, { force: false });
           accountsUpdated++;
         } catch (error) {
           if (error?.code === "quota_retry_pending") return;
@@ -154,12 +194,15 @@ async function runDaemonWorker(options = {}) {
             || probeStatus === "usage_limited"
             || probeStatus === "banned"
             || account.banned
+            || isTransientQuotaNetworkError(error)
           ) return;
           failures.push(failure("ban_probe", account, error));
         }
       });
     } catch (error) {
-      failures.push(failure("ban_probe", listed, error));
+      if (!isTransientQuotaNetworkError(error)) {
+        failures.push(failure("ban_probe", listed, error));
+      }
     }
     if (isCancelled()) return stopped();
   }
@@ -195,11 +238,11 @@ async function runDaemonWorker(options = {}) {
 
       try {
         if (isCancelled()) return;
-        await refreshQuota(current, { force: false });
+        await quota.refreshQuota(current, { force: false });
         accountsUpdated++;
       } catch (error) {
         // Waiting out a retry backoff is expected throttling, not a failure.
-        if (error?.code !== "quota_retry_pending") {
+        if (error?.code !== "quota_retry_pending" && !isTransientQuotaNetworkError(error)) {
           failures.push(failure("quota_refresh", current, error));
         }
       }

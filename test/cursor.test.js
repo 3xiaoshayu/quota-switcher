@@ -289,6 +289,249 @@ test("cursor token refreshAll still decrypts expired accounts that have a refres
   assert.equal(decrypts.count, 1);
 });
 
+test("cursor token refresh backs off after a network miss and does not replay until then", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertCursorAccount({
+    email: "token-net@example.com",
+    auth_id: "user_token_net",
+    access_token: jwt({
+      email: "token-net@example.com",
+      sub: "user_token_net",
+      exp: Math.floor(Date.now() / 1000) - 10,
+    }),
+    refresh_token: "refresh-token-net",
+  });
+  let calls = 0;
+  engine.setCursorRuntimeForTests({
+    httpJson: async () => {
+      calls += 1;
+      const error = new Error("getaddrinfo ENOTFOUND cursor.com");
+      error.code = "ENOTFOUND";
+      throw error;
+    },
+  });
+  const first = await engine.refreshCursorToken(engine.loadCursorAcct(created.account.id), { force: true });
+  assert.equal(first.ok, false);
+  assert.equal(first.reauthRequired, undefined);
+  const stored = engine.loadCursorAcct(created.account.id);
+  assert.equal(stored.requires_reauth, false);
+  assert.ok(Number(stored.token_next_retry_at) > Math.floor(Date.now() / 1000));
+  const second = await engine.refreshCursorToken(engine.loadCursorAcct(created.account.id), { force: false });
+  assert.equal(second.ok, false);
+  assert.equal(calls, 1);
+});
+
+test("cursor token refresh honors Retry-After on HTTP 429 and does not replay until then", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertCursorAccount({
+    email: "token-429@example.com",
+    auth_id: "user_token_429",
+    access_token: jwt({
+      email: "token-429@example.com",
+      sub: "user_token_429",
+      exp: Math.floor(Date.now() / 1000) - 10,
+    }),
+    refresh_token: "refresh-token-429",
+  });
+  let calls = 0;
+  engine.setCursorRuntimeForTests({
+    httpJson: async () => {
+      calls += 1;
+      return { status: 429, headers: { "retry-after": "45" }, body: "rate limited" };
+    },
+  });
+  const first = await engine.refreshCursorToken(engine.loadCursorAcct(created.account.id), { force: true });
+  assert.equal(first.ok, false);
+  assert.match(first.error, /429/);
+  const stored = engine.loadCursorAcct(created.account.id);
+  assert.equal(stored.requires_reauth, false);
+  const delay = Number(stored.token_next_retry_at) - Math.floor(Date.now() / 1000);
+  assert.ok(delay >= 45 && delay <= 90, `Retry-After 45s should beat the 15-minute default, got ${delay}s`);
+  const second = await engine.refreshCursorToken(engine.loadCursorAcct(created.account.id), { force: false });
+  assert.equal(second.ok, false);
+  assert.equal(calls, 1);
+});
+
+test("cursor token refresh treats an HTML interstitial as a temporary miss", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertCursorAccount({
+    email: "html-token@example.com",
+    auth_id: "user_html_token",
+    access_token: jwt({
+      email: "html-token@example.com",
+      sub: "user_html_token",
+      exp: Math.floor(Date.now() / 1000) - 10,
+    }),
+    refresh_token: "refresh-html-token",
+  });
+  engine.setCursorRuntimeForTests({
+    httpJson: async () => ({
+      status: 200,
+      headers: { "content-type": "text/html" },
+      body: "<!DOCTYPE html><html><body>captive portal</body></html>",
+    }),
+  });
+  const result = await engine.refreshCursorToken(engine.loadCursorAcct(created.account.id), { force: true });
+  assert.equal(result.ok, false);
+  assert.equal(result.reauthRequired, undefined);
+  assert.match(result.error, /响应不是 JSON/);
+  const latest = engine.loadCursorAcct(created.account.id);
+  assert.equal(latest.requires_reauth, false);
+  assert.ok(Number(latest.token_next_retry_at) > Math.floor(Date.now() / 1000));
+});
+
+test("cursor token refresh backs off after an empty JSON 200 and does not replay until then", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertCursorAccount({
+    email: "empty-token@example.com",
+    auth_id: "user_empty_token",
+    access_token: jwt({
+      email: "empty-token@example.com",
+      sub: "user_empty_token",
+      exp: Math.floor(Date.now() / 1000) - 10,
+    }),
+    refresh_token: "refresh-empty-token",
+  });
+  let calls = 0;
+  engine.setCursorRuntimeForTests({
+    httpJson: async () => {
+      calls += 1;
+      return { status: 200, headers: { "content-type": "application/json" }, body: "{}" };
+    },
+  });
+  const first = await engine.refreshCursorToken(engine.loadCursorAcct(created.account.id), { force: true });
+  assert.equal(first.ok, false);
+  assert.equal(first.reauthRequired, undefined);
+  assert.match(first.error, /响应无 access_token/);
+  const stored = engine.loadCursorAcct(created.account.id);
+  assert.equal(stored.requires_reauth, false);
+  assert.ok(Number(stored.token_next_retry_at) > Math.floor(Date.now() / 1000));
+  const second = await engine.refreshCursorToken(engine.loadCursorAcct(created.account.id), { force: false });
+  assert.equal(second.ok, false);
+  assert.equal(calls, 1);
+});
+
+test("cursor token refresh keeps the old refresh token when the new one is blank", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertCursorAccount({
+    email: "blank-rt@example.com",
+    auth_id: "user_blank_rt",
+    access_token: jwt({
+      email: "blank-rt@example.com",
+      sub: "user_blank_rt",
+      exp: Math.floor(Date.now() / 1000) - 10,
+    }),
+    refresh_token: "refresh-blank-rt",
+  });
+  engine.setCursorRuntimeForTests({
+    httpJson: async () => ({
+      status: 200,
+      body: JSON.stringify({ accessToken: "rotated-access", refreshToken: "   " }),
+    }),
+  });
+  const result = await engine.refreshCursorToken(engine.loadCursorAcct(created.account.id), { force: true });
+  assert.equal(result.ok, true);
+  const stored = engine.loadCursorAcct(created.account.id);
+  assert.equal(stored.tokens.access_token, "rotated-access");
+  assert.equal(stored.tokens.refresh_token, "refresh-blank-rt");
+});
+
+test("cursor token refresh still rotates when a new refresh token is present", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertCursorAccount({
+    email: "rotate-rt@example.com",
+    auth_id: "user_rotate_rt",
+    access_token: jwt({
+      email: "rotate-rt@example.com",
+      sub: "user_rotate_rt",
+      exp: Math.floor(Date.now() / 1000) - 10,
+    }),
+    refresh_token: "refresh-rotate-rt",
+  });
+  engine.setCursorRuntimeForTests({
+    httpJson: async () => ({
+      status: 200,
+      body: JSON.stringify({ accessToken: "rotated-access", refreshToken: "refresh-rotate-rt-next" }),
+    }),
+  });
+  const result = await engine.refreshCursorToken(engine.loadCursorAcct(created.account.id), { force: true });
+  assert.equal(result.ok, true);
+  const stored = engine.loadCursorAcct(created.account.id);
+  assert.equal(stored.tokens.refresh_token, "refresh-rotate-rt-next");
+});
+
+test("cursor token refresh treats a blank accessToken as a temporary miss", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertCursorAccount({
+    email: "blank-token@example.com",
+    auth_id: "user_blank_token",
+    access_token: jwt({
+      email: "blank-token@example.com",
+      sub: "user_blank_token",
+      exp: Math.floor(Date.now() / 1000) - 10,
+    }),
+    refresh_token: "refresh-blank-token",
+  });
+  const previous = engine.loadCursorAcct(created.account.id).tokens.access_token;
+  let calls = 0;
+  engine.setCursorRuntimeForTests({
+    httpJson: async () => {
+      calls += 1;
+      return { status: 200, headers: {}, body: JSON.stringify({ accessToken: "   " }) };
+    },
+  });
+  const first = await engine.refreshCursorToken(engine.loadCursorAcct(created.account.id), { force: true });
+  assert.equal(first.ok, false);
+  assert.match(first.error, /响应无 access_token/);
+  const stored = engine.loadCursorAcct(created.account.id);
+  assert.equal(stored.requires_reauth, false);
+  assert.equal(stored.tokens.access_token, previous);
+  assert.ok(Number(stored.token_next_retry_at) > Math.floor(Date.now() / 1000));
+  const second = await engine.refreshCursorToken(engine.loadCursorAcct(created.account.id), { force: false });
+  assert.equal(second.ok, false);
+  assert.equal(calls, 1);
+});
+
+test("cursor token refreshAll keeps going after a network miss", async (t) => {
+  const { engine } = freshEngine(t);
+  await engine.upsertCursorAccount({
+    email: "batch-net@example.com",
+    auth_id: "user_batch_net",
+    access_token: jwt({
+      email: "batch-net@example.com",
+      sub: "user_batch_net",
+      exp: Math.floor(Date.now() / 1000) - 10,
+    }),
+    refresh_token: "refresh-batch-net",
+  });
+  await engine.upsertCursorAccount({
+    email: "batch-ok@example.com",
+    auth_id: "user_batch_ok",
+    access_token: jwt({
+      email: "batch-ok@example.com",
+      sub: "user_batch_ok",
+      exp: Math.floor(Date.now() / 1000) - 10,
+    }),
+    refresh_token: "refresh-batch-ok",
+  });
+  engine.setCursorRuntimeForTests({
+    httpJson: async (url, opts = {}) => {
+      const body = typeof opts.body === "string" ? opts.body : JSON.stringify(opts.body || {});
+      if (body.includes("refresh-batch-net")) {
+        throw Object.assign(new Error("网络请求失败"), { code: "ENOTFOUND" });
+      }
+      return { status: 200, body: JSON.stringify({ accessToken: "rotated-ok" }) };
+    },
+  });
+  const summary = await engine.refreshAllCursorTokens(false);
+  const missed = summary.results.find((item) => item.email === "batch-net@example.com");
+  const recovered = summary.results.find((item) => item.email === "batch-ok@example.com");
+  assert.equal(missed.ok, false);
+  assert.equal(missed.reauthRequired, false);
+  assert.match(String(missed.error || ""), /网络请求失败/);
+  assert.equal(recovered.ok, true);
+});
+
 function itemText(dbPath, key) {
   const { asText, getItem, withVscdbSync } = require("../engine/sqlite-native");
   return withVscdbSync(dbPath, { readOnly: true }, (db) => {
@@ -1580,6 +1823,214 @@ test("cursor quota refresh without a usage cookie does not mark reauth", async (
   assert.equal(latest.quota_error.code, "cursor_session_missing");
 });
 
+test("cursor quota refresh backs off after a network miss", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertCursorAccount({
+    email: "backoff@example.com",
+    auth_id: "user_backoff",
+    access_token: cursorToken("backoff@example.com", "backoff"),
+    refresh_token: "refresh-backoff",
+  });
+  let usageCalls = 0;
+  engine.setCursorRuntimeForTests({
+    httpJson: async (url) => {
+      if (String(url).includes("usage-summary")) {
+        usageCalls += 1;
+        throw Object.assign(new Error("网络请求失败"), { code: "ENOTFOUND" });
+      }
+      return { status: 200, body: "{}" };
+    },
+  });
+  await assert.rejects(
+    () => engine.refreshCursorQuota(engine.loadCursorAcct(created.account.id), { force: true }),
+    /网络请求失败/,
+  );
+  const failed = engine.loadCursorAcct(created.account.id);
+  assert.equal(failed.quota_error.code, "ENOTFOUND");
+  assert.ok(Number(failed.quota_next_retry_at) > Math.floor(Date.now() / 1000));
+  assert.equal(usageCalls, 1);
+
+  await assert.rejects(
+    () => engine.refreshCursorQuota(engine.loadCursorAcct(created.account.id), { force: false }),
+    (error) => error.code === "quota_retry_pending",
+  );
+  assert.equal(usageCalls, 1);
+
+  engine.setCursorRuntimeForTests({
+    httpJson: async (url) => {
+      if (String(url).includes("usage-summary")) {
+        usageCalls += 1;
+        return {
+          status: 200,
+          body: JSON.stringify({
+            individualUsage: { plan: { totalPercentUsed: 25, autoPercentUsed: 10, apiPercentUsed: 10 } },
+          }),
+        };
+      }
+      return { status: 200, body: "{}" };
+    },
+  });
+  await engine.refreshCursorQuota(engine.loadCursorAcct(created.account.id), { force: true });
+  const recovered = engine.loadCursorAcct(created.account.id);
+  assert.equal(usageCalls, 2);
+  assert.equal(recovered.quota_error, null);
+  assert.equal(recovered.quota_next_retry_at, null);
+  assert.equal(recovered.quota.plan_remaining_percentage, 75);
+});
+
+test("cursor quota 429 honors Retry-After instead of a fixed 15 minutes", async (t) => {
+  const { quotaRetryDelaySeconds, parseRetryAfterSeconds } = require("../engine/quota-retry");
+  assert.equal(parseRetryAfterSeconds("45"), 45);
+  assert.equal(parseRetryAfterSeconds("45.2"), 46);
+  assert.equal(parseRetryAfterSeconds("45.0"), 45);
+  assert.equal(parseRetryAfterSeconds("45s"), 45);
+  assert.equal(parseRetryAfterSeconds("1m"), 60);
+  assert.equal(parseRetryAfterSeconds("1m0s"), 60);
+  assert.equal(parseRetryAfterSeconds("6m0s"), 360);
+  assert.equal(quotaRetryDelaySeconds({}, { message: "HTTP 429" }), 15 * 60);
+  assert.equal(quotaRetryDelaySeconds({}, { message: "HTTP 429", retryAfter: "45" }), 45);
+  assert.equal(quotaRetryDelaySeconds({}, { message: "HTTP 429", retryAfter: "45.2" }), 46);
+  assert.equal(quotaRetryDelaySeconds({}, { message: "HTTP 429", retryAfter: "2" }), 15);
+  assert.equal(quotaRetryDelaySeconds({}, { message: "HTTP 429", retryAfter: "7200" }), 30 * 60);
+  assert.equal(quotaRetryDelaySeconds({}, {
+    message: "HTTP 429",
+    headers: { "x-ratelimit-reset-requests": "45s" },
+  }), 45);
+
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertCursorAccount({
+    email: "retry-after@example.com",
+    auth_id: "user_retry_after",
+    access_token: cursorToken("retry-after@example.com", "retry-after"),
+    refresh_token: "refresh-retry-after",
+  });
+  engine.setCursorRuntimeForTests({
+    httpJson: async (url) => {
+      if (String(url).includes("usage-summary")) {
+        return { status: 429, headers: { "retry-after": "45" }, body: "rate limited" };
+      }
+      return { status: 200, body: "{}" };
+    },
+  });
+  const started = Math.floor(Date.now() / 1000);
+  await assert.rejects(
+    () => engine.refreshCursorQuota(engine.loadCursorAcct(created.account.id), { force: true }),
+    /429/,
+  );
+  const failed = engine.loadCursorAcct(created.account.id);
+  const delay = Number(failed.quota_next_retry_at) - started;
+  assert.ok(delay >= 45 && delay <= 90, `Retry-After 45s should beat the 15-minute default, got ${delay}s`);
+});
+
+test("cursor leftover usage 401 backs off instead of retrying every minute", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertCursorAccount({
+    email: "stale-session@example.com",
+    auth_id: "user_stale_session",
+    access_token: cursorToken("stale-session@example.com", "stale"),
+    refresh_token: "refresh-stale",
+  });
+  let usageCalls = 0;
+  engine.setCursorRuntimeForTests({
+    httpJson: async (url) => {
+      if (String(url).includes("usage-summary")) {
+        usageCalls += 1;
+        return { status: 401, body: JSON.stringify({ detail: "unauthorized" }) };
+      }
+      return { status: 200, body: "{}" };
+    },
+  });
+  await engine.refreshCursorQuota(engine.loadCursorAcct(created.account.id), { force: true });
+  const failed = engine.loadCursorAcct(created.account.id);
+  assert.equal(failed.requires_reauth, true);
+  assert.equal(failed.quota_error.code, "reauthorization_required");
+  assert.ok(Number(failed.quota_next_retry_at) > Math.floor(Date.now() / 1000));
+  assert.equal(usageCalls, 1);
+
+  await assert.rejects(
+    () => engine.refreshCursorQuota(engine.loadCursorAcct(created.account.id), { force: false }),
+    (error) => error.code === "quota_retry_pending",
+  );
+  assert.equal(usageCalls, 1);
+});
+
+test("cursor quota refresh backs off when an expired token cannot be refreshed", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertCursorAccount({
+    email: "expired-token@example.com",
+    auth_id: "user_expired_token",
+    access_token: jwt({
+      email: "expired-token@example.com",
+      sub: "user_expired_token",
+      exp: Math.floor(Date.now() / 1000) - 30,
+    }),
+    refresh_token: "refresh-expired-token",
+  });
+  let usageCalls = 0;
+  let tokenCalls = 0;
+  engine.setCursorRuntimeForTests({
+    httpJson: async (url) => {
+      if (String(url).includes("/oauth/token")) {
+        tokenCalls += 1;
+        throw Object.assign(new Error("网络请求失败"), { code: "ENOTFOUND" });
+      }
+      if (String(url).includes("usage-summary")) usageCalls += 1;
+      throw new Error("usage must not run after a token network miss");
+    },
+  });
+  await assert.rejects(
+    () => engine.refreshCursorQuota(engine.loadCursorAcct(created.account.id), { force: true }),
+    /网络请求失败/,
+  );
+  const failed = engine.loadCursorAcct(created.account.id);
+  assert.equal(failed.requires_reauth, false);
+  assert.equal(failed.quota_error.code, "probe_failed");
+  assert.match(String(failed.quota_error.message || ""), /网络请求失败/);
+  assert.ok(Number(failed.quota_next_retry_at) > Math.floor(Date.now() / 1000));
+  assert.equal(tokenCalls, 1);
+  assert.equal(usageCalls, 0);
+
+  await assert.rejects(
+    () => engine.refreshCursorQuota(engine.loadCursorAcct(created.account.id), { force: false }),
+    (error) => error.code === "quota_retry_pending",
+  );
+  assert.equal(tokenCalls, 1);
+  assert.equal(usageCalls, 0);
+});
+
+test("cursor quota refresh does not treat a token HTTP 500 as reauth", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertCursorAccount({
+    email: "token-500@example.com",
+    auth_id: "user_token_500",
+    access_token: jwt({
+      email: "token-500@example.com",
+      sub: "user_token_500",
+      exp: Math.floor(Date.now() / 1000) - 30,
+    }),
+    refresh_token: "refresh-token-500",
+  });
+  let usageCalls = 0;
+  engine.setCursorRuntimeForTests({
+    httpJson: async (url) => {
+      if (String(url).includes("/oauth/token")) {
+        return { status: 500, body: JSON.stringify({ error: "temporarily_unavailable" }) };
+      }
+      usageCalls += 1;
+      return { status: 401, body: JSON.stringify({ detail: "unauthorized" }) };
+    },
+  });
+  await assert.rejects(
+    () => engine.refreshCursorQuota(engine.loadCursorAcct(created.account.id), { force: true }),
+    /Token refresh failed/,
+  );
+  const failed = engine.loadCursorAcct(created.account.id);
+  assert.equal(failed.requires_reauth, false);
+  assert.equal(failed.quota_error.code, "probe_failed");
+  assert.ok(Number(failed.quota_next_retry_at) > Math.floor(Date.now() / 1000));
+  assert.equal(usageCalls, 0);
+});
+
 test("cursor pending oauth can be discarded without touching Codex", async (t) => {
   const { engine } = freshEngine(t);
   let releaseSleep = null;
@@ -2231,6 +2682,7 @@ test("cursor refreshAll skips persisted reauth accounts without decrypting them"
   });
   const stored = engine.loadCursorAcct(reauth.account.id);
   stored.requires_reauth = true;
+  stored.tokens.expiry_timestamp = Math.floor(Date.now() / 1000) - 60;
   engine.saveCursorAcct(stored);
   const live = await engine.upsertCursorAccount({
     email: "batch-live@example.com",
@@ -2262,5 +2714,86 @@ test("cursor refreshAll skips persisted reauth accounts without decrypting them"
   assert.equal(skipped.skipped, true);
   assert.equal(skipped.reason, "reauthorization_required");
   assert.equal(okRow.quota.membership_type, "pro");
+  assert.equal(decrypts.count, 1);
+});
+
+test("cursor refreshAll still refreshes leftover access on a reauth account", async (t) => {
+  const { engine } = freshEngine(t);
+  const reauth = await engine.upsertCursorAccount({
+    email: "batch-leftover@example.com",
+    auth_id: "user_batch_leftover",
+    access_token: cursorToken("batch-leftover@example.com", "batch-leftover"),
+    refresh_token: "refresh-batch-leftover",
+  });
+  const stored = engine.loadCursorAcct(reauth.account.id);
+  stored.requires_reauth = true;
+  engine.saveCursorAcct(stored);
+  engine.refreshCursorQuota = async (account) => {
+    account.quota = { membership_type: "pro", plan_remaining_percentage: 41 };
+    account.quota_error = null;
+    return account.quota;
+  };
+  const handlers = new Map();
+  delete require.cache[require.resolve("../src/main/ipc-handlers")];
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.5", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const result = await handlers.get("cursor:refreshAllQuotas")({});
+  assert.equal(result.success, true);
+  const row = result.data.find((item) => item.id === reauth.account.id);
+  assert.equal(row.skipped, undefined);
+  assert.equal(row.quota.membership_type, "pro");
+  assert.equal(decrypts.count, 1);
+});
+
+test("cursor refreshAll loads leftover access when the index omitted token_exp", async (t) => {
+  const { engine } = freshEngine(t);
+  const reauth = await engine.upsertCursorAccount({
+    email: "batch-noexp@example.com",
+    auth_id: "user_batch_noexp",
+    access_token: cursorToken("batch-noexp@example.com", "batch-noexp"),
+    refresh_token: "refresh-batch-noexp",
+  });
+  const stored = engine.loadCursorAcct(reauth.account.id);
+  stored.requires_reauth = true;
+  engine.saveCursorAcct(stored);
+  const { loadCursorIdx, saveCursorIdx } = require("../engine/cursor-storage");
+  const idx = loadCursorIdx();
+  const listed = idx.accounts.find((item) => item.id === reauth.account.id);
+  delete listed.token_exp;
+  listed.has_access = true;
+  listed.requires_reauth = true;
+  saveCursorIdx(idx);
+  engine.refreshCursorQuota = async (account) => {
+    account.quota = { membership_type: "pro" };
+    account.quota_error = null;
+    return account.quota;
+  };
+  const handlers = new Map();
+  delete require.cache[require.resolve("../src/main/ipc-handlers")];
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.5", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const result = await handlers.get("cursor:refreshAllQuotas")({});
+  assert.equal(result.success, true);
+  const row = result.data.find((item) => item.id === reauth.account.id);
+  assert.equal(row.skipped, undefined);
+  assert.equal(row.quota.membership_type, "pro");
   assert.equal(decrypts.count, 1);
 });

@@ -1,17 +1,29 @@
 const { ANTIGRAVITY_TOKEN_URL, TOKEN_SKEW_SEC } = require("./config");
 const { ts, isExpiryStale } = require("./crypto-utils");
-const { extractErrorCode } = require("./http-client");
+const { extractErrorCode, isTransientNetworkError, stripXssiPrefix } = require("./http-client");
 const { getAntigravityRuntime } = require("./antigravity-runtime");
 const { listOfficialOauthClients } = require("./antigravity-oauth-client");
 const { listAntigravityAccts, loadAntigravityAcct, saveAntigravityAcct, upsertAntigravityIndex } = require("./antigravity-storage");
 const { withAccountLock, mapLimit } = require("./operation-locks");
 const { logInfo, logWarn } = require("./logger");
+const { clearTokenRetry, scheduleTokenRetry, tokenRetryPending } = require("./quota-retry");
 
 function parseJsonBody(body) {
   try {
-    return JSON.parse(body || "{}");
+    return JSON.parse(stripXssiPrefix(body) || "{}");
   } catch {
     return {};
+  }
+}
+
+function responseLooksLikeNonJson(body) {
+  const raw = stripXssiPrefix(body).trim();
+  if (!raw || raw[0] === "<") return true;
+  try {
+    JSON.parse(raw);
+    return false;
+  } catch {
+    return true;
   }
 }
 
@@ -127,11 +139,42 @@ async function refreshAntigravityToken(account, options = {}) {
   if (!force && account.tokens.access_token && !antigravityAccessExpired(account)) {
     return { ok: true, skipped: true, account };
   }
+  if (tokenRetryPending(account, force)) {
+    return { ok: false, error: account.token_retry_error || "HTTP 429" };
+  }
 
-  const { response, payload } = await exchangeGoogleToken({
-    grant_type: "refresh_token",
-    refresh_token: account.tokens.refresh_token,
-  });
+  let response;
+  let payload;
+  try {
+    ({ response, payload } = await exchangeGoogleToken({
+      grant_type: "refresh_token",
+      refresh_token: account.tokens.refresh_token,
+    }));
+  } catch (error) {
+    if (isTransientNetworkError(error)) {
+      scheduleTokenRetry(account, error);
+      saveAntigravityAcct(account);
+      upsertAntigravityIndex(account);
+      return { ok: false, error: error.message || String(error) };
+    }
+    throw error;
+  }
+  if (response.status >= 500) {
+    scheduleTokenRetry(account, { message: `HTTP ${response.status}`, headers: response.headers });
+    saveAntigravityAcct(account);
+    upsertAntigravityIndex(account);
+    return { ok: false, error: `Token refresh failed: HTTP ${response.status}` };
+  }
+  if (response.status === 429) {
+    scheduleTokenRetry(account, {
+      message: "HTTP 429",
+      retryAfter: response.headers?.["retry-after"] || response.headers?.["Retry-After"],
+      headers: response.headers,
+    });
+    saveAntigravityAcct(account);
+    upsertAntigravityIndex(account);
+    return { ok: false, error: "HTTP 429" };
+  }
   if (response.status === 400 || response.status === 401 || response.status === 403) {
     const invalid = /invalid_grant|invalid_client|unauthorized/i.test(String(payload.error || payload.error_description || response.body || ""));
     if (invalid || response.status === 401 || response.status === 403) {
@@ -144,14 +187,38 @@ async function refreshAntigravityToken(account, options = {}) {
       };
     }
   }
-  if (response.status < 200 || response.status >= 300 || !payload.access_token) {
+  const accessToken = String(payload.access_token || "").trim();
+  if (response.status < 400 && !accessToken && responseLooksLikeNonJson(response.body)) {
+    scheduleTokenRetry(account, { message: "响应不是 JSON" });
+    saveAntigravityAcct(account);
+    upsertAntigravityIndex(account);
+    return { ok: false, error: "响应不是 JSON" };
+  }
+  if (response.status >= 200 && response.status < 300 && !accessToken) {
+    const invalid = /invalid_grant|invalid_client|unauthorized/i.test(String(payload.error || payload.error_description || response.body || ""));
+    if (invalid) {
+      markAntigravityReauth(account, "Google 登录已失效，请重新授权");
+      return {
+        ok: false,
+        skipped: true,
+        reauthRequired: true,
+        error: "Google 登录已失效，请重新授权",
+      };
+    }
+    scheduleTokenRetry(account, { message: "响应无 access_token" });
+    saveAntigravityAcct(account);
+    upsertAntigravityIndex(account);
+    return { ok: false, error: "响应无 access_token" };
+  }
+  if (response.status < 200 || response.status >= 300 || !accessToken) {
     const code = extractErrorCode(response.body) || payload.error || `HTTP ${response.status}`;
     logWarn(`Antigravity token refresh failed: ${code}`);
     return { ok: false, error: `Token refresh failed: ${code}` };
   }
 
-  account.tokens.access_token = payload.access_token;
-  if (payload.refresh_token) account.tokens.refresh_token = payload.refresh_token;
+  account.tokens.access_token = accessToken;
+  const nextRefresh = String(payload.refresh_token || "").trim();
+  if (nextRefresh) account.tokens.refresh_token = nextRefresh;
   const expiresIn = Number(payload.expires_in || 0);
   account.tokens.expiry_timestamp = expiresIn > 0 ? ts() + Math.floor(expiresIn) : account.tokens.expiry_timestamp || 0;
   account.tokens.token_type = payload.token_type || account.tokens.token_type || "Bearer";
@@ -161,6 +228,7 @@ async function refreshAntigravityToken(account, options = {}) {
   account.reauth_reason = null;
   account.banned = false;
   account.quota_error = null;
+  clearTokenRetry(account);
   saveAntigravityAcct(account);
   upsertAntigravityIndex(account);
   logInfo(`Refreshed Antigravity token for ${account.email}`);
@@ -216,10 +284,21 @@ async function refreshAllAntigravityTokens(force = false) {
           reauthRequired: true,
         };
       }
-      const result = await refreshAntigravityToken(account, {
-        force: !!force,
-        observedGeneration: listed.token_generation,
-      });
+      let result;
+      try {
+        result = await refreshAntigravityToken(account, {
+          force: !!force,
+          observedGeneration: listed.token_generation,
+        });
+      } catch (error) {
+        return {
+          email: account.email,
+          ok: false,
+          skipped: false,
+          error: error.message || String(error),
+          reauthRequired: false,
+        };
+      }
       return {
         email: account.email,
         ok: !!result.ok,

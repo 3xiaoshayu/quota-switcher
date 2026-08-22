@@ -7,11 +7,24 @@ const {
   isPoisonedIp,
   collectCandidatesFromHints,
   lastGoodSource,
+  markProxyFailed,
+  isProxyRecentlyFailed,
+  resetFailedProxiesForTests,
   redactProxyUrl,
   socksFallbackUrl,
   syncProxyEnv,
   readWindowsInternetProxy,
 } = require("../engine/proxy-resolve");
+
+test("a proxy that just failed HTTP is remembered so resolve can skip it", () => {
+  resetFailedProxiesForTests();
+  markProxyFailed("http://127.0.0.1:7890");
+  assert.equal(isProxyRecentlyFailed("http://127.0.0.1:7890"), true);
+  assert.equal(isProxyRecentlyFailed("http://127.0.0.1:10808"), false);
+  assert.equal(isProxyRecentlyFailed("http://127.0.0.1:7890", Date.now() + 61_000), false);
+  resetFailedProxiesForTests();
+  assert.equal(isProxyRecentlyFailed("http://127.0.0.1:7890"), false);
+});
 
 test("PAC SOCKS rules use remote DNS", () => {
   assert.equal(normalizeProxyRule("SOCKS5 127.0.0.1:10808"), "socks5h://127.0.0.1:10808");

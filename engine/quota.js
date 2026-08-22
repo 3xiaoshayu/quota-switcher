@@ -1,12 +1,14 @@
 const { ts, isTokenExpired } = require("./crypto-utils");
 const { USAGE_URL } = require("./config");
 const { httpJson, buildCodexHeaders } = require("./http-client");
+const { quotaRetryDelaySeconds } = require("./quota-retry");
 const { loadIdx, saveIdx, saveAcct } = require("./storage");
 const { logWarn } = require("./logger");
 const {
   STATUS_BANNED,
   STATUS_USAGE_LIMITED,
   STATUS_PROBE_FAILED,
+  STATUS_TOKEN_INVALID,
   classifyProbe,
   classifyThrownError,
   classifyMissingToken,
@@ -58,9 +60,20 @@ async function ensureAccessTokenForQuota(acct, refreshTask) {
   const result = await refresh(acct);
   if (!result?.ok) {
     const probe = probeFromRefreshResult(result);
-    const error = new Error("Token 已过期且刷新失败: " + (result?.error || "未知错误"));
-    error.code = probe.error_code || result?.code || "token_refresh_failed";
-    error.probe = probe;
+    const reauth = !!(result?.reauthRequired || result?.revoked || probe.status === STATUS_TOKEN_INVALID);
+    const error = new Error(reauth
+      ? `Token 已过期且刷新失败: ${result?.error || "未知错误"}`
+      : (result?.error || "网络请求失败"));
+    error.code = probe.error_code || result?.code || (reauth ? "token_refresh_failed" : "probe_failed");
+    error.probe = reauth
+      ? probe
+      : {
+        status: STATUS_PROBE_FAILED,
+        error_code: error.code,
+        http_status: probe.http_status || 0,
+        message: error.message,
+        ok: false,
+      };
     throw error;
   }
 }
@@ -82,9 +95,20 @@ async function fetchQuotaWithTokenRepair(acct, dependencies = {}) {
     const refreshResult = await refreshTask(acct, { force: true });
     if (!refreshResult?.ok) {
       const probe = probeFromRefreshResult(refreshResult);
-      const repairError = new Error(`Quota authorization could not be repaired: ${refreshResult?.error || error.message || error}`);
-      repairError.code = probe.error_code || extractCodeFromError(error) || "quota_auth_repair_failed";
-      repairError.probe = probe;
+      const reauth = !!(refreshResult?.reauthRequired || refreshResult?.revoked || probe.status === STATUS_TOKEN_INVALID);
+      const repairError = new Error(reauth
+        ? `Quota authorization could not be repaired: ${refreshResult?.error || error.message || error}`
+        : (refreshResult?.error || error.message || "网络请求失败"));
+      repairError.code = probe.error_code || extractCodeFromError(error) || (reauth ? "quota_auth_repair_failed" : "probe_failed");
+      repairError.probe = reauth
+        ? probe
+        : {
+          status: STATUS_PROBE_FAILED,
+          error_code: repairError.code,
+          http_status: probe.http_status || 0,
+          message: repairError.message,
+          ok: false,
+        };
       repairError.cause = error;
       throw repairError;
     }
@@ -125,6 +149,8 @@ async function fetchQuota(acct) {
     const error = new Error("HTTP " + resp.status + (probe.error_code ? " " + probe.error_code : ""));
     error.code = probe.error_code || String(resp.status);
     error.probe = probe;
+    error.headers = resp.headers || {};
+    error.retryAfter = resp.headers?.["retry-after"] || resp.headers?.["Retry-After"];
     throw error;
   }
   try {
@@ -203,12 +229,6 @@ function parseQuotaPayload(data) {
     plan_type: data.chatgpt_plan_type || data.plan_type || null,
     raw_data: data,
   };
-}
-
-function quotaRetryDelaySeconds(acct, error) {
-  const failures = Math.max(1, Number(acct.quota_refresh_failures || 0));
-  if (/\b429\b|rate.?limit/i.test(String(error?.message || error || ""))) return 15 * 60;
-  return Math.min(30 * 60, 60 * (2 ** Math.min(5, failures - 1)));
 }
 
 function persistPlanType(acct, q) {

@@ -1,9 +1,10 @@
 const { CURSOR_USAGE_URL } = require("./config");
-const { ts, extractCursorWorkosUserId } = require("./crypto-utils");
+const { ts, extractCursorWorkosUserId, isTokenExpired } = require("./crypto-utils");
 const { extractErrorCode } = require("./http-client");
 const { getCursorRuntime } = require("./cursor-runtime");
 const { saveCursorAcct, upsertCursorIndex } = require("./cursor-storage");
 const { refreshCursorToken, markCursorReauth } = require("./cursor-token");
+const { clearQuotaRetry, scheduleQuotaRetry, throwIfQuotaRetryPending } = require("./quota-retry");
 const { logWarn } = require("./logger");
 
 function clampPercent(value) {
@@ -104,15 +105,44 @@ async function fetchCursorUsage(account) {
 
 async function refreshCursorQuota(account, options = {}) {
   const force = options.force !== false;
+  const now = ts();
+  throwIfQuotaRetryPending(account, force, now);
   if (account.tokens?.refresh_token) {
-    const refreshed = await refreshCursorToken(account, { force: false });
-    if (!refreshed.ok && !account.tokens.access_token) {
+    let refreshed;
+    try {
+      refreshed = await refreshCursorToken(account, { force: false });
+    } catch (error) {
+      account.quota_error = {
+        code: error.code || "probe_failed",
+        message: error.message || String(error),
+        timestamp: ts(),
+      };
+      account.banned = false;
+      scheduleQuotaRetry(account, error, now);
+      saveCursorAcct(account);
+      upsertCursorIndex(account);
+      if (force) throw error;
+      return account.quota;
+    }
+    if (refreshed.account) account = refreshed.account;
+    const accessUsable = !!(account.tokens?.access_token && !isTokenExpired(account.tokens.access_token));
+    if (!refreshed.ok && refreshed.reauthRequired && !accessUsable) {
       account.quota_error = { code: "reauthorization_required", message: refreshed.error, timestamp: ts() };
       saveCursorAcct(account);
       upsertCursorIndex(account);
       return account.quota;
     }
-    if (refreshed.account) account = refreshed.account;
+    if (!refreshed.ok && !accessUsable) {
+      const tokenError = new Error(refreshed.error || "Token refresh failed");
+      tokenError.code = "probe_failed";
+      account.quota_error = { code: "probe_failed", message: tokenError.message, timestamp: ts() };
+      account.banned = false;
+      scheduleQuotaRetry(account, tokenError, now);
+      saveCursorAcct(account);
+      upsertCursorIndex(account);
+      if (force) throw tokenError;
+      return account.quota;
+    }
   }
 
   if (!buildCursorUsageCookie(account)) {
@@ -128,11 +158,12 @@ async function refreshCursorQuota(account, options = {}) {
       checked_at: ts(),
     };
     account.banned = false;
+    const sessionError = new Error("这次没查清额度，请稍后重试。");
+    sessionError.code = "cursor_session_missing";
+    scheduleQuotaRetry(account, sessionError, now);
     saveCursorAcct(account);
     upsertCursorIndex(account);
-    const error = new Error("这次没查清额度，请稍后重试。");
-    error.code = "cursor_session_missing";
-    if (force) throw error;
+    if (force) throw sessionError;
     return account.quota;
   }
 
@@ -140,14 +171,23 @@ async function refreshCursorQuota(account, options = {}) {
     const response = await fetchCursorUsage(account);
     if (response.status === 401 || response.status === 403) {
       markCursorReauth(account, "Cursor 会话已过期或未认证，请重新授权");
-      account.quota_error = { code: "reauthorization_required", message: "Cursor 会话已过期或未认证，请重新授权", timestamp: ts() };
+      const authError = new Error("Cursor 会话已过期或未认证，请重新授权");
+      authError.code = "reauthorization_required";
+      authError.httpStatus = response.status;
+      account.quota_error = { code: "reauthorization_required", message: authError.message, timestamp: ts() };
+      scheduleQuotaRetry(account, authError, now);
       saveCursorAcct(account);
       upsertCursorIndex(account);
       return account.quota;
     }
     if (response.status < 200 || response.status >= 300) {
       const code = extractErrorCode(response.body) || `HTTP ${response.status}`;
-      throw Object.assign(new Error(`Cursor usage request failed: ${code}`), { code, httpStatus: response.status });
+      throw Object.assign(new Error(`Cursor usage request failed: ${code}`), {
+        code,
+        httpStatus: response.status,
+        headers: response.headers || {},
+        retryAfter: response.headers?.["retry-after"] || response.headers?.["Retry-After"],
+      });
     }
     let payload = {};
     try {
@@ -161,6 +201,7 @@ async function refreshCursorQuota(account, options = {}) {
     }
     account.quota = quota;
     account.quota_error = null;
+    clearQuotaRetry(account);
     account.usage_updated_at = ts();
     account.banned = false;
     account.probe = {
@@ -186,6 +227,7 @@ async function refreshCursorQuota(account, options = {}) {
       checked_at: ts(),
     };
     account.banned = false;
+    scheduleQuotaRetry(account, error, now);
     saveCursorAcct(account);
     upsertCursorIndex(account);
     logWarn(`Cursor quota refresh failed for ${account.email}: ${error.message}${error.stack ? `\n${error.stack}` : ""}`);

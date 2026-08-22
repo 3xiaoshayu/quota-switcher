@@ -37,6 +37,26 @@ function listedCannotRefreshQuota(listed) {
     return true;
 }
 
+function leftoverAccessUsable(eng, account) {
+    if (!account || account.has_access === false) return false;
+    const access = account.tokens?.access_token || "";
+    const jwtExp = access && typeof eng.jwtExp === "function" ? eng.jwtExp(access) : null;
+    if (jwtExp && typeof eng.isTokenExpired === "function") {
+        return !eng.isTokenExpired(access);
+    }
+    const exp = Number(account.token_exp || account.tokens?.expiry_timestamp || 0);
+    if (!Number.isFinite(exp) || exp <= 0) {
+        return account.has_access === true || !!access;
+    }
+    if (typeof eng.isExpiryStale === "function") return !eng.isExpiryStale(exp);
+    const now = typeof eng.ts === "function" ? eng.ts() : Math.floor(Date.now() / 1000);
+    return exp > now;
+}
+
+function shouldSkipReauthQuota(eng, account) {
+    return !!account?.requires_reauth && !leftoverAccessUsable(eng, account);
+}
+
 function skippedQuotaResult(listed, reason, extra = {}) {
     return {
         id: listed.id,
@@ -45,13 +65,6 @@ function skippedQuotaResult(listed, reason, extra = {}) {
         reason,
         ...extra,
     };
-}
-
-function quotaRetryPending(eng, account) {
-    const retryAt = Number(account?.quota_next_retry_at || 0);
-    if (!Number.isFinite(retryAt) || retryAt <= 0) return false;
-    const now = typeof eng.ts === "function" ? eng.ts() : Math.floor(Date.now() / 1000);
-    return retryAt > now;
 }
 
 async function refreshAccountQuota(eng, account, force) {
@@ -453,6 +466,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                 message: account.quota_error.message || String(account.quota_error),
                 timestamp: account.quota_error.timestamp || null,
             } : null,
+            quota_next_retry_at: account.quota_next_retry_at || null,
             token_status: publicTokenStatus(eng, account),
         };
     }
@@ -573,15 +587,12 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         const results = await runMapped(eng, listedAccounts, async (listed) => {
             try {
                 return await eng.withAccountLock(listed.id, async () => {
-                    if (listed.requires_reauth) {
+                    if (shouldSkipReauthQuota(eng, listed)) {
                         return skippedQuotaResult(listed, "reauthorization_required");
-                    }
-                    if (quotaRetryPending(eng, listed)) {
-                        return skippedQuotaResult(listed, "quota_retry_pending");
                     }
                     const account = eng.loadCursorAcct(listed.id);
                     if (!account) return null;
-                    if (account.requires_reauth) {
+                    if (shouldSkipReauthQuota(eng, account)) {
                         return {
                             id: account.id,
                             email: account.email,
@@ -589,17 +600,9 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                             reason: "reauthorization_required",
                         };
                     }
-                    if (quotaRetryPending(eng, account)) {
-                        return {
-                            id: account.id,
-                            email: account.email,
-                            skipped: true,
-                            reason: "quota_retry_pending",
-                        };
-                    }
                     const quota = await eng.refreshCursorQuota(account, { force: true });
                     const fresh = account;
-                    if (fresh.requires_reauth || fresh.quota_error?.code === "reauthorization_required") {
+                    if (fresh.quota_error?.code === "reauthorization_required") {
                         return {
                             id: account.id,
                             email: account.email,
@@ -678,6 +681,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                 message: account.quota_error.message || String(account.quota_error),
                 timestamp: account.quota_error.timestamp || null,
             } : null,
+            quota_next_retry_at: account.quota_next_retry_at || null,
             token_status: publicTokenStatus(eng, account),
         };
     }
@@ -788,15 +792,12 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         const results = await runMapped(eng, listedAccounts, async (listed) => {
             try {
                 return await eng.withAccountLock(listed.id, async () => {
-                    if (listed.requires_reauth) {
+                    if (shouldSkipReauthQuota(eng, listed)) {
                         return skippedQuotaResult(listed, "reauthorization_required");
-                    }
-                    if (quotaRetryPending(eng, listed)) {
-                        return skippedQuotaResult(listed, "quota_retry_pending");
                     }
                     const account = eng.loadAntigravityAcct(listed.id);
                     if (!account) return null;
-                    if (account.requires_reauth) {
+                    if (shouldSkipReauthQuota(eng, account)) {
                         return {
                             id: account.id,
                             email: account.email,
@@ -804,17 +805,9 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                             reason: "reauthorization_required",
                         };
                     }
-                    if (quotaRetryPending(eng, account)) {
-                        return {
-                            id: account.id,
-                            email: account.email,
-                            skipped: true,
-                            reason: "quota_retry_pending",
-                        };
-                    }
                     const quota = await eng.refreshAntigravityQuota(account, { force: true });
                     const fresh = account;
-                    if (fresh.requires_reauth || fresh.quota_error?.code === "reauthorization_required") {
+                    if (fresh.quota_error?.code === "reauthorization_required") {
                         return {
                             id: account.id,
                             email: account.email,
@@ -1013,9 +1006,6 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         const results = await runMapped(eng, listedAccounts, async (listed) => {
             try {
                 return await eng.withAccountLock(listed.id, async () => {
-                    if (quotaRetryPending(eng, listed)) {
-                        return skippedQuotaResult(listed, "quota_retry_pending");
-                    }
                     if (listedCannotRefreshQuota(listed)) {
                         return skippedQuotaResult(listed, listed.banned ? "account_banned" : "reauthorization_required", {
                             banned: !!listed.banned,
@@ -1024,14 +1014,6 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                     const account = eng.loadAcct(listed.id);
                     if (!account) return null;
                     try {
-                        if (quotaRetryPending(eng, account)) {
-                            return {
-                                id: account.id,
-                                email: account.email,
-                                skipped: true,
-                                reason: "quota_retry_pending",
-                            };
-                        }
                         if (account.banned || account.requires_reauth) {
                             if (typeof eng.canProbeUsageWithoutRefresh === "function"
                                 && typeof eng.probeUsageOnly === "function"

@@ -1,10 +1,11 @@
 const { CURSOR_TOKEN_URL, CURSOR_CLIENT_ID, CURSOR_META_URL } = require("./config");
 const { ts, jwtPayload, isTokenExpired, isExpiryStale } = require("./crypto-utils");
-const { extractErrorCode } = require("./http-client");
+const { extractErrorCode, isTransientNetworkError } = require("./http-client");
 const { getCursorRuntime } = require("./cursor-runtime");
 const { listCursorAccts, loadCursorAcct, saveCursorAcct, upsertCursorIndex } = require("./cursor-storage");
 const { withAccountLock, mapLimit } = require("./operation-locks");
 const { logInfo, logWarn } = require("./logger");
+const { clearTokenRetry, scheduleTokenRetry, tokenRetryPending } = require("./quota-retry");
 
 function markCursorReauth(account, reason) {
   account.requires_reauth = true;
@@ -26,6 +27,17 @@ function parseJsonBody(body) {
     return JSON.parse(body || "{}");
   } catch {
     return {};
+  }
+}
+
+function responseLooksLikeNonJson(body) {
+  const raw = String(body || "").trim();
+  if (!raw || raw[0] === "<") return true;
+  try {
+    JSON.parse(raw);
+    return false;
+  } catch {
+    return true;
   }
 }
 
@@ -54,18 +66,48 @@ async function refreshCursorToken(account, options = {}) {
   if (!force && account.tokens.access_token && !isTokenExpired(account.tokens.access_token)) {
     return { ok: true, skipped: true, account };
   }
+  if (tokenRetryPending(account, force)) {
+    return { ok: false, error: account.token_retry_error || "HTTP 429" };
+  }
 
   const runtime = getCursorRuntime();
-  const response = await runtime.httpJson(CURSOR_TOKEN_URL, {
-    method: "POST",
-    idempotent: false,
-    body: {
-      grant_type: "refresh_token",
-      client_id: CURSOR_CLIENT_ID,
-      refresh_token: account.tokens.refresh_token,
-    },
-  });
+  let response;
+  try {
+    response = await runtime.httpJson(CURSOR_TOKEN_URL, {
+      method: "POST",
+      idempotent: false,
+      body: {
+        grant_type: "refresh_token",
+        client_id: CURSOR_CLIENT_ID,
+        refresh_token: account.tokens.refresh_token,
+      },
+    });
+  } catch (error) {
+    if (isTransientNetworkError(error)) {
+      scheduleTokenRetry(account, error);
+      saveCursorAcct(account);
+      upsertCursorIndex(account);
+      return { ok: false, error: error.message || String(error) };
+    }
+    throw error;
+  }
   const payload = parseJsonBody(response.body);
+  if (response.status >= 500) {
+    scheduleTokenRetry(account, { message: `HTTP ${response.status}`, headers: response.headers });
+    saveCursorAcct(account);
+    upsertCursorIndex(account);
+    return { ok: false, error: `Token refresh failed: HTTP ${response.status}` };
+  }
+  if (response.status === 429) {
+    scheduleTokenRetry(account, {
+      message: "HTTP 429",
+      retryAfter: response.headers?.["retry-after"] || response.headers?.["Retry-After"],
+      headers: response.headers,
+    });
+    saveCursorAcct(account);
+    upsertCursorIndex(account);
+    return { ok: false, error: "HTTP 429" };
+  }
   if (response.status === 401 || response.status === 403 || payload.shouldLogout === true) {
     markCursorReauth(account, "Cursor refresh token 已失效，请重新授权");
     return {
@@ -75,20 +117,35 @@ async function refreshCursorToken(account, options = {}) {
       error: "Cursor refresh token 已失效，请重新授权",
     };
   }
-  if (response.status < 200 || response.status >= 300 || !payload.accessToken) {
+  const accessToken = String(payload.accessToken || "").trim();
+  if (response.status < 400 && !accessToken && responseLooksLikeNonJson(response.body)) {
+    scheduleTokenRetry(account, { message: "响应不是 JSON" });
+    saveCursorAcct(account);
+    upsertCursorIndex(account);
+    return { ok: false, error: "响应不是 JSON" };
+  }
+  if (response.status >= 200 && response.status < 300 && !accessToken) {
+    scheduleTokenRetry(account, { message: "响应无 access_token" });
+    saveCursorAcct(account);
+    upsertCursorIndex(account);
+    return { ok: false, error: "响应无 access_token" };
+  }
+  if (response.status < 200 || response.status >= 300 || !accessToken) {
     const code = extractErrorCode(response.body) || `HTTP ${response.status}`;
     logWarn(`Cursor token refresh failed: ${code}`);
     return { ok: false, error: `Token refresh failed: ${code}` };
   }
 
-  account.tokens.access_token = payload.accessToken;
-  if (payload.refreshToken) account.tokens.refresh_token = payload.refreshToken;
+  account.tokens.access_token = accessToken;
+  const nextRefresh = String(payload.refreshToken || "").trim();
+  if (nextRefresh) account.tokens.refresh_token = nextRefresh;
   account.token_generation = (account.token_generation || 0) + 1;
   account.token_updated_at = ts();
   account.requires_reauth = false;
   account.reauth_reason = null;
   account.banned = false;
   account.quota_error = null;
+  clearTokenRetry(account);
   saveCursorAcct(account);
   upsertCursorIndex(account);
   logInfo(`Refreshed Cursor token for ${account.email}`);
@@ -155,10 +212,21 @@ async function refreshAllCursorTokens(force = false) {
           reauthRequired: true,
         };
       }
-      const result = await refreshCursorToken(account, {
-        force: !!force,
-        observedGeneration: listed.token_generation,
-      });
+      let result;
+      try {
+        result = await refreshCursorToken(account, {
+          force: !!force,
+          observedGeneration: listed.token_generation,
+        });
+      } catch (error) {
+        return {
+          email: account.email,
+          ok: false,
+          skipped: false,
+          error: error.message || String(error),
+          reauthRequired: false,
+        };
+      }
       return {
         email: account.email,
         ok: !!result.ok,

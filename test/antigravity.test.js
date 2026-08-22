@@ -772,6 +772,36 @@ test("antigravity free-tier refresh without quota windows is not a probe failure
   assert.equal(latest.quota.gemini_weekly_remaining, null);
 });
 
+test("antigravity quota still reads a Google XSSI-prefixed usage body", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "xssi@example.com",
+    access_token: "ya29.xssi",
+    refresh_token: "1//xssi",
+    expiry_timestamp: Math.floor(Date.now() / 1000) + 3600,
+  });
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async (url) => {
+      if (String(url).includes("loadCodeAssist")) {
+        return {
+          status: 200,
+          body: ")]}'\n" + JSON.stringify({
+            allowedTiers: [{ id: "free-tier", name: "Free", isDefault: true }],
+          }),
+        };
+      }
+      return { status: 200, body: "{}" };
+    },
+  });
+  await engine.refreshAntigravityQuota(engine.loadAntigravityAcct(created.account.id), { force: true });
+  const latest = engine.loadAntigravityAcct(created.account.id);
+  assert.equal(latest.quota.tier, "free-tier");
+  assert.equal(latest.quota_error, null);
+  assert.equal(latest.probe.status, "active");
+  assert.equal(latest.requires_reauth, false);
+});
+
 test("antigravity unpaid standard-tier refresh without windows is not a probe failure", async (t) => {
   const { engine } = freshEngine(t);
   const created = await engine.upsertAntigravityAccount({
@@ -803,6 +833,336 @@ test("antigravity unpaid standard-tier refresh without windows is not a probe fa
   assert.equal(latest.plan_type, "standard-tier");
   assert.equal(latest.quota_error, null);
   assert.equal(latest.probe.status, "active");
+});
+
+test("antigravity quota falls over to the second Cloud Code host after a timeout", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "failover@example.com",
+    access_token: "ya29.failover",
+    refresh_token: "1//failover",
+    expiry_timestamp: Math.floor(Date.now() / 1000) + 3600,
+  });
+  const hosts = [];
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async (url) => {
+      const host = new URL(url).host;
+      hosts.push(host);
+      if (host.startsWith("daily-") && String(url).includes("loadCodeAssist")) {
+        throw new Error("请求超时");
+      }
+      if (String(url).includes("loadCodeAssist")) {
+        return {
+          status: 200,
+          body: JSON.stringify({
+            allowedTiers: [{ id: "free-tier", name: "Free", isDefault: true }],
+          }),
+        };
+      }
+      return { status: 200, body: "{}" };
+    },
+  });
+  await engine.refreshAntigravityQuota(engine.loadAntigravityAcct(created.account.id), { force: true });
+  const latest = engine.loadAntigravityAcct(created.account.id);
+  assert.equal(latest.quota.tier, "free-tier");
+  assert.equal(latest.quota_error, null);
+  assert.ok(hosts.some((host) => host.startsWith("daily-")));
+  assert.ok(hosts.some((host) => host === "cloudcode-pa.googleapis.com"));
+});
+
+test("antigravity quota falls over to the second Cloud Code host after HTTP 504", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "failover-504@example.com",
+    access_token: "ya29.failover-504",
+    refresh_token: "1//failover-504",
+    expiry_timestamp: Math.floor(Date.now() / 1000) + 3600,
+  });
+  const hosts = [];
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async (url) => {
+      const host = new URL(url).host;
+      hosts.push(host);
+      if (host.startsWith("daily-") && String(url).includes("loadCodeAssist")) {
+        return { status: 504, body: "Gateway Timeout" };
+      }
+      if (String(url).includes("loadCodeAssist")) {
+        return {
+          status: 200,
+          body: JSON.stringify({
+            allowedTiers: [{ id: "free-tier", name: "Free", isDefault: true }],
+          }),
+        };
+      }
+      return { status: 200, body: "{}" };
+    },
+  });
+  await engine.refreshAntigravityQuota(engine.loadAntigravityAcct(created.account.id), { force: true });
+  const latest = engine.loadAntigravityAcct(created.account.id);
+  assert.equal(latest.quota.tier, "free-tier");
+  assert.equal(latest.quota_error, null);
+  assert.ok(hosts.some((host) => host.startsWith("daily-")));
+  assert.ok(hosts.some((host) => host === "cloudcode-pa.googleapis.com"));
+});
+
+test("antigravity quota falls over to the second Cloud Code host after HTTP 524", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "failover-524@example.com",
+    access_token: "ya29.failover-524",
+    refresh_token: "1//failover-524",
+    expiry_timestamp: Math.floor(Date.now() / 1000) + 3600,
+  });
+  const hosts = [];
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async (url) => {
+      const host = new URL(url).host;
+      hosts.push(host);
+      if (host.startsWith("daily-") && String(url).includes("loadCodeAssist")) {
+        return { status: 524, body: "A Timeout Occurred" };
+      }
+      if (String(url).includes("loadCodeAssist")) {
+        return {
+          status: 200,
+          body: JSON.stringify({
+            allowedTiers: [{ id: "free-tier", name: "Free", isDefault: true }],
+          }),
+        };
+      }
+      return { status: 200, body: "{}" };
+    },
+  });
+  await engine.refreshAntigravityQuota(engine.loadAntigravityAcct(created.account.id), { force: true });
+  const latest = engine.loadAntigravityAcct(created.account.id);
+  assert.equal(latest.quota.tier, "free-tier");
+  assert.equal(latest.quota_error, null);
+  assert.ok(hosts.some((host) => host.startsWith("daily-")));
+  assert.ok(hosts.some((host) => host === "cloudcode-pa.googleapis.com"));
+});
+
+test("antigravity quota falls over to the second Cloud Code host after HTTP 520", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "failover-520@example.com",
+    access_token: "ya29.failover-520",
+    refresh_token: "1//failover-520",
+    expiry_timestamp: Math.floor(Date.now() / 1000) + 3600,
+  });
+  const hosts = [];
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async (url) => {
+      const host = new URL(url).host;
+      hosts.push(host);
+      if (host.startsWith("daily-") && String(url).includes("loadCodeAssist")) {
+        return { status: 520, body: "Unknown Error" };
+      }
+      if (String(url).includes("loadCodeAssist")) {
+        return {
+          status: 200,
+          body: JSON.stringify({
+            allowedTiers: [{ id: "free-tier", name: "Free", isDefault: true }],
+          }),
+        };
+      }
+      return { status: 200, body: "{}" };
+    },
+  });
+  await engine.refreshAntigravityQuota(engine.loadAntigravityAcct(created.account.id), { force: true });
+  const latest = engine.loadAntigravityAcct(created.account.id);
+  assert.equal(latest.quota.tier, "free-tier");
+  assert.equal(latest.quota_error, null);
+  assert.ok(hosts.some((host) => host.startsWith("daily-")));
+  assert.ok(hosts.some((host) => host === "cloudcode-pa.googleapis.com"));
+});
+
+test("antigravity quota falls over to the second Cloud Code host after HTTP 500", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "failover-500@example.com",
+    access_token: "ya29.failover-500",
+    refresh_token: "1//failover-500",
+    expiry_timestamp: Math.floor(Date.now() / 1000) + 3600,
+  });
+  const hosts = [];
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async (url) => {
+      const host = new URL(url).host;
+      hosts.push(host);
+      if (host.startsWith("daily-") && String(url).includes("loadCodeAssist")) {
+        return { status: 500, body: "Internal Server Error" };
+      }
+      if (String(url).includes("loadCodeAssist")) {
+        return {
+          status: 200,
+          body: JSON.stringify({
+            allowedTiers: [{ id: "free-tier", name: "Free", isDefault: true }],
+          }),
+        };
+      }
+      return { status: 200, body: "{}" };
+    },
+  });
+  await engine.refreshAntigravityQuota(engine.loadAntigravityAcct(created.account.id), { force: true });
+  const latest = engine.loadAntigravityAcct(created.account.id);
+  assert.equal(latest.quota.tier, "free-tier");
+  assert.equal(latest.quota_error, null);
+  assert.ok(hosts.some((host) => host.startsWith("daily-")));
+  assert.ok(hosts.some((host) => host === "cloudcode-pa.googleapis.com"));
+});
+
+test("antigravity Cloud Code host fallback gives each host its own budget", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "deadline@example.com",
+    access_token: "ya29.deadline",
+    refresh_token: "1//deadline",
+    expiry_timestamp: Math.floor(Date.now() / 1000) + 3600,
+  });
+  const timeouts = [];
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async (url, opts = {}) => {
+      timeouts.push(opts.timeout);
+      await new Promise((resolve) => setTimeout(resolve, Math.max(1, Number(opts.timeout) || 0)));
+      throw new Error("请求超时");
+    },
+  });
+  const started = Date.now();
+  await assert.rejects(
+    () => engine.refreshAntigravityQuota(engine.loadAntigravityAcct(created.account.id), { force: true, timeout: 250 }),
+    /请求超时/,
+  );
+  const elapsed = Date.now() - started;
+  assert.equal(timeouts.length, 2);
+  assert.ok(timeouts.every((value) => value <= 250));
+  assert.ok(elapsed < 900, `two Cloud Code hosts with a 250ms budget each took ${elapsed}ms`);
+});
+
+test("antigravity quota refresh backs off after a network miss", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "backoff@example.com",
+    access_token: "ya29.backoff",
+    refresh_token: "1//backoff",
+    expiry_timestamp: Math.floor(Date.now() / 1000) + 3600,
+  });
+  let usageCalls = 0;
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async () => {
+      usageCalls += 1;
+      throw Object.assign(new Error("网络请求失败"), { code: "ENOTFOUND" });
+    },
+  });
+  await assert.rejects(
+    () => engine.refreshAntigravityQuota(engine.loadAntigravityAcct(created.account.id), { force: true }),
+    /网络请求失败/,
+  );
+  const failed = engine.loadAntigravityAcct(created.account.id);
+  assert.equal(failed.quota_error.code, "ENOTFOUND");
+  assert.ok(Number(failed.quota_next_retry_at) > Math.floor(Date.now() / 1000));
+  assert.ok(usageCalls >= 1);
+  const afterFail = usageCalls;
+
+  await assert.rejects(
+    () => engine.refreshAntigravityQuota(engine.loadAntigravityAcct(created.account.id), { force: false }),
+    (error) => error.code === "quota_retry_pending",
+  );
+  assert.equal(usageCalls, afterFail);
+
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async (url) => {
+      usageCalls += 1;
+      if (String(url).includes("loadCodeAssist")) {
+        return { status: 200, body: JSON.stringify({ currentTier: { id: "FREE", creditsRemaining: 9, creditsLimit: 10 } }) };
+      }
+      return { status: 200, body: "{}" };
+    },
+  });
+  await engine.refreshAntigravityQuota(engine.loadAntigravityAcct(created.account.id), { force: true });
+  const recovered = engine.loadAntigravityAcct(created.account.id);
+  assert.ok(usageCalls > afterFail);
+  assert.equal(recovered.quota_error, null);
+  assert.equal(recovered.quota_next_retry_at, null);
+  assert.equal(recovered.quota.tier, "FREE");
+});
+
+test("antigravity leftover usage 401 backs off instead of retrying every minute", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "stale-session@example.com",
+    access_token: "ya29.stale",
+    refresh_token: "1//stale",
+    expiry_timestamp: Math.floor(Date.now() / 1000) + 3600,
+  });
+  let usageCalls = 0;
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async () => {
+      usageCalls += 1;
+      return { status: 401, body: JSON.stringify({ error: "unauthorized" }) };
+    },
+  });
+  await engine.refreshAntigravityQuota(engine.loadAntigravityAcct(created.account.id), { force: true });
+  const failed = engine.loadAntigravityAcct(created.account.id);
+  assert.equal(failed.requires_reauth, true);
+  assert.equal(failed.quota_error.code, "reauthorization_required");
+  assert.ok(Number(failed.quota_next_retry_at) > Math.floor(Date.now() / 1000));
+  assert.ok(usageCalls >= 1);
+  const afterFail = usageCalls;
+
+  await assert.rejects(
+    () => engine.refreshAntigravityQuota(engine.loadAntigravityAcct(created.account.id), { force: false }),
+    (error) => error.code === "quota_retry_pending",
+  );
+  assert.equal(usageCalls, afterFail);
+});
+
+test("antigravity quota refresh backs off when an expired token cannot be refreshed", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "expired-token@example.com",
+    access_token: "ya29.expired",
+    refresh_token: "1//expired",
+    expiry_timestamp: Math.floor(Date.now() / 1000) - 30,
+  });
+  let usageCalls = 0;
+  let tokenCalls = 0;
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async (url) => {
+      if (String(url).includes("oauth2.googleapis.com/token")) {
+        tokenCalls += 1;
+        throw Object.assign(new Error("网络请求失败"), { code: "ENOTFOUND" });
+      }
+      usageCalls += 1;
+      throw new Error("usage must not run after a token network miss");
+    },
+  });
+  await assert.rejects(
+    () => engine.refreshAntigravityQuota(engine.loadAntigravityAcct(created.account.id), { force: true }),
+    /网络请求失败/,
+  );
+  const failed = engine.loadAntigravityAcct(created.account.id);
+  assert.equal(failed.requires_reauth, false);
+  assert.equal(failed.quota_error.code, "probe_failed");
+  assert.match(String(failed.quota_error.message || ""), /网络请求失败/);
+  assert.ok(Number(failed.quota_next_retry_at) > Math.floor(Date.now() / 1000));
+  assert.equal(tokenCalls, 1);
+  assert.equal(usageCalls, 0);
+
+  await assert.rejects(
+    () => engine.refreshAntigravityQuota(engine.loadAntigravityAcct(created.account.id), { force: false }),
+    (error) => error.code === "quota_retry_pending",
+  );
+  assert.equal(tokenCalls, 1);
+  assert.equal(usageCalls, 0);
 });
 
 test("antigravity quota refresh does not grow NO_PROXY", async (t) => {
@@ -2426,6 +2786,214 @@ test("antigravity collapse does not decrypt unique accounts", async (t) => {
   assert.equal(decrypts.count, 0);
 });
 
+test("antigravity token refresh backs off after a network miss and does not replay until then", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "token-net@example.com",
+    access_token: "ya29.token-net",
+    refresh_token: "1//token-net",
+    expiry_timestamp: Math.floor(Date.now() / 1000) - 10,
+  });
+  let calls = 0;
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async () => {
+      calls += 1;
+      const error = new Error("getaddrinfo ENOTFOUND oauth2.googleapis.com");
+      error.code = "ENOTFOUND";
+      throw error;
+    },
+  });
+  const first = await engine.refreshAntigravityToken(engine.loadAntigravityAcct(created.account.id), { force: true });
+  assert.equal(first.ok, false);
+  assert.equal(first.reauthRequired, undefined);
+  const stored = engine.loadAntigravityAcct(created.account.id);
+  assert.equal(stored.requires_reauth, false);
+  assert.ok(Number(stored.token_next_retry_at) > Math.floor(Date.now() / 1000));
+  const second = await engine.refreshAntigravityToken(engine.loadAntigravityAcct(created.account.id), { force: false });
+  assert.equal(second.ok, false);
+  assert.equal(calls, 1);
+});
+
+test("antigravity token refresh honors Retry-After on HTTP 429 and does not replay until then", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "token-429@example.com",
+    access_token: "ya29.token-429",
+    refresh_token: "1//token-429",
+    expiry_timestamp: Math.floor(Date.now() / 1000) - 10,
+  });
+  let calls = 0;
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async () => {
+      calls += 1;
+      return { status: 429, headers: { "retry-after": "45" }, body: "rate limited" };
+    },
+  });
+  const first = await engine.refreshAntigravityToken(engine.loadAntigravityAcct(created.account.id), { force: true });
+  assert.equal(first.ok, false);
+  assert.match(first.error, /429/);
+  const stored = engine.loadAntigravityAcct(created.account.id);
+  assert.equal(stored.requires_reauth, false);
+  const delay = Number(stored.token_next_retry_at) - Math.floor(Date.now() / 1000);
+  assert.ok(delay >= 45 && delay <= 90, `Retry-After 45s should beat the 15-minute default, got ${delay}s`);
+  const second = await engine.refreshAntigravityToken(engine.loadAntigravityAcct(created.account.id), { force: false });
+  assert.equal(second.ok, false);
+  assert.equal(calls, 1);
+});
+
+test("antigravity token refresh treats an HTML interstitial as a temporary miss", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "html-token@example.com",
+    access_token: "ya29.html-token",
+    refresh_token: "1//html-token",
+    expiry_timestamp: Math.floor(Date.now() / 1000) - 10,
+  });
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async () => ({
+      status: 200,
+      headers: { "content-type": "text/html" },
+      body: "<!DOCTYPE html><html><body>captive portal</body></html>",
+    }),
+  });
+  const result = await engine.refreshAntigravityToken(engine.loadAntigravityAcct(created.account.id), { force: true });
+  assert.equal(result.ok, false);
+  assert.equal(result.reauthRequired, undefined);
+  assert.match(result.error, /响应不是 JSON/);
+  const latest = engine.loadAntigravityAcct(created.account.id);
+  assert.equal(latest.requires_reauth, false);
+  assert.ok(Number(latest.token_next_retry_at) > Math.floor(Date.now() / 1000));
+});
+
+test("antigravity token refresh backs off after an empty JSON 200 and does not replay until then", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "empty-token@example.com",
+    access_token: "ya29.empty-token",
+    refresh_token: "1//empty-token",
+    expiry_timestamp: Math.floor(Date.now() / 1000) - 10,
+  });
+  let calls = 0;
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async () => {
+      calls += 1;
+      return { status: 200, headers: { "content-type": "application/json" }, body: "{}" };
+    },
+  });
+  const first = await engine.refreshAntigravityToken(engine.loadAntigravityAcct(created.account.id), { force: true });
+  assert.equal(first.ok, false);
+  assert.equal(first.reauthRequired, undefined);
+  assert.match(first.error, /响应无 access_token/);
+  const stored = engine.loadAntigravityAcct(created.account.id);
+  assert.equal(stored.requires_reauth, false);
+  assert.ok(Number(stored.token_next_retry_at) > Math.floor(Date.now() / 1000));
+  const second = await engine.refreshAntigravityToken(engine.loadAntigravityAcct(created.account.id), { force: false });
+  assert.equal(second.ok, false);
+  assert.equal(calls, 1);
+});
+
+test("antigravity token refresh keeps the old refresh token when the new one is blank", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "blank-rt@example.com",
+    access_token: "ya29.blank-rt",
+    refresh_token: "1//blank-rt",
+    expiry_timestamp: Math.floor(Date.now() / 1000) - 10,
+  });
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async () => ({
+      status: 200,
+      body: JSON.stringify({ access_token: "ya29.rotated", refresh_token: "   ", expires_in: 3600 }),
+    }),
+  });
+  const result = await engine.refreshAntigravityToken(engine.loadAntigravityAcct(created.account.id), { force: true });
+  assert.equal(result.ok, true);
+  const stored = engine.loadAntigravityAcct(created.account.id);
+  assert.equal(stored.tokens.access_token, "ya29.rotated");
+  assert.equal(stored.tokens.refresh_token, "1//blank-rt");
+});
+
+test("antigravity token refresh still rotates when a new refresh token is present", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "rotate-rt@example.com",
+    access_token: "ya29.rotate-rt",
+    refresh_token: "1//rotate-rt",
+    expiry_timestamp: Math.floor(Date.now() / 1000) - 10,
+  });
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async () => ({
+      status: 200,
+      body: JSON.stringify({ access_token: "ya29.rotated", refresh_token: "1//rotate-rt-next", expires_in: 3600 }),
+    }),
+  });
+  const result = await engine.refreshAntigravityToken(engine.loadAntigravityAcct(created.account.id), { force: true });
+  assert.equal(result.ok, true);
+  const stored = engine.loadAntigravityAcct(created.account.id);
+  assert.equal(stored.tokens.refresh_token, "1//rotate-rt-next");
+});
+
+test("antigravity token refresh still reads a Google XSSI-prefixed token body", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "xssi-token@example.com",
+    access_token: "ya29.xssi-token",
+    refresh_token: "1//xssi-token",
+    expiry_timestamp: Math.floor(Date.now() / 1000) - 10,
+  });
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async () => ({
+      status: 200,
+      body: ")]}',\n" + JSON.stringify({
+        access_token: "ya29.xssi-rotated",
+        refresh_token: "1//xssi-token",
+        expires_in: 3600,
+      }),
+    }),
+  });
+  const result = await engine.refreshAntigravityToken(engine.loadAntigravityAcct(created.account.id), { force: true });
+  assert.equal(result.ok, true);
+  const stored = engine.loadAntigravityAcct(created.account.id);
+  assert.equal(stored.tokens.access_token, "ya29.xssi-rotated");
+  assert.equal(stored.requires_reauth, false);
+  assert.equal(stored.token_next_retry_at, null);
+});
+
+test("antigravity token refresh treats a blank access_token as a temporary miss", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "blank-token@example.com",
+    access_token: "ya29.blank-token",
+    refresh_token: "1//blank-token",
+    expiry_timestamp: Math.floor(Date.now() / 1000) - 10,
+  });
+  let calls = 0;
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async () => {
+      calls += 1;
+      return { status: 200, headers: {}, body: JSON.stringify({ access_token: "   " }) };
+    },
+  });
+  const first = await engine.refreshAntigravityToken(engine.loadAntigravityAcct(created.account.id), { force: true });
+  assert.equal(first.ok, false);
+  assert.match(first.error, /响应无 access_token/);
+  const stored = engine.loadAntigravityAcct(created.account.id);
+  assert.equal(stored.requires_reauth, false);
+  assert.equal(stored.tokens.access_token, "ya29.blank-token");
+  assert.ok(Number(stored.token_next_retry_at) > Math.floor(Date.now() / 1000));
+  const second = await engine.refreshAntigravityToken(engine.loadAntigravityAcct(created.account.id), { force: false });
+  assert.equal(second.ok, false);
+  assert.equal(calls, 1);
+});
+
 test("antigravity token refreshAll skips reauth accounts without decrypting them", async (t) => {
   const { engine } = freshEngine(t);
   const reauth = await engine.upsertAntigravityAccount({
@@ -2481,6 +3049,45 @@ test("antigravity token refreshAll skips unexpired accounts without decrypting t
   assert.equal(summary.results[0].ok, true);
   assert.equal(summary.results[0].skipped, true);
   assert.equal(decrypts.count, 0);
+});
+
+test("antigravity token refreshAll keeps going after a network miss", async (t) => {
+  const { engine } = freshEngine(t);
+  await engine.upsertAntigravityAccount({
+    email: "batch-net@example.com",
+    access_token: "ya29.batch-net",
+    refresh_token: "1//batch-net",
+    expiry_timestamp: Math.floor(Date.now() / 1000) - 30,
+  });
+  await engine.upsertAntigravityAccount({
+    email: "batch-ok@example.com",
+    access_token: "ya29.batch-ok",
+    refresh_token: "1//batch-ok",
+    expiry_timestamp: Math.floor(Date.now() / 1000) - 30,
+  });
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async (url, opts = {}) => {
+      const body = String(opts.body || "");
+      if (body.includes("batch-net")) {
+        throw Object.assign(new Error("网络请求失败"), { code: "ENOTFOUND" });
+      }
+      return {
+        status: 200,
+        body: JSON.stringify({
+          access_token: "ya29.rotated-ok",
+          expires_in: 3600,
+        }),
+      };
+    },
+  });
+  const summary = await engine.refreshAllAntigravityTokens(false);
+  const missed = summary.results.find((item) => item.email === "batch-net@example.com");
+  const recovered = summary.results.find((item) => item.email === "batch-ok@example.com");
+  assert.equal(missed.ok, false);
+  assert.equal(missed.reauthRequired, false);
+  assert.match(String(missed.error || ""), /网络请求失败/);
+  assert.equal(recovered.ok, true);
 });
 
 test("antigravity empty quota refresh is a sync failure", async (t) => {
@@ -2761,6 +3368,7 @@ test("antigravity refreshAll skips persisted reauth accounts without decrypting 
   });
   const stored = engine.loadAntigravityAcct(reauth.account.id);
   stored.requires_reauth = true;
+  stored.tokens.expiry_timestamp = Math.floor(Date.now() / 1000) - 60;
   engine.saveAntigravityAcct(stored);
   const live = await engine.upsertAntigravityAccount({
     email: "batch-live@example.com",
@@ -2791,6 +3399,43 @@ test("antigravity refreshAll skips persisted reauth accounts without decrypting 
   assert.equal(skipped.skipped, true);
   assert.equal(skipped.reason, "reauthorization_required");
   assert.equal(okRow.quota.plan, "google-one");
+  assert.equal(decrypts.count, 1);
+});
+
+test("antigravity refreshAll still refreshes leftover access on a reauth account", async (t) => {
+  const { engine } = freshEngine(t);
+  const reauth = await engine.upsertAntigravityAccount({
+    email: "batch-leftover@example.com",
+    access_token: "ya29.batch-leftover",
+    refresh_token: "1//batch-leftover",
+  });
+  const stored = engine.loadAntigravityAcct(reauth.account.id);
+  stored.requires_reauth = true;
+  stored.tokens.expiry_timestamp = Math.floor(Date.now() / 1000) + 3600;
+  engine.saveAntigravityAcct(stored);
+  engine.refreshAntigravityQuota = async (account) => {
+    account.quota = { plan: "google-one" };
+    account.quota_error = null;
+    return account.quota;
+  };
+  const handlers = new Map();
+  delete require.cache[require.resolve("../src/main/ipc-handlers")];
+  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
+  registerIpcHandlers(engine, {
+    electron: {
+      ipcMain: { handle(channel, listener) { handlers.set(channel, listener); } },
+      BrowserWindow: { getAllWindows: () => [] },
+      app: { getVersion: () => "2.0.5", isPackaged: false },
+      shell: { async openExternal() {}, async openPath() { return ""; } },
+    },
+  });
+  const decrypts = countDecrypts(engine);
+  decrypts.reset();
+  const result = await handlers.get("antigravity:refreshAllQuotas")({});
+  assert.equal(result.success, true);
+  const row = result.data.find((item) => item.id === reauth.account.id);
+  assert.equal(row.skipped, undefined);
+  assert.equal(row.quota.plan, "google-one");
   assert.equal(decrypts.count, 1);
 });
 

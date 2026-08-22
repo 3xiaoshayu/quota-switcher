@@ -100,7 +100,7 @@ test("empty 401 and HTML 403 are probe_failed", () => {
   }).status, "probe_failed");
 });
 
-test("usage 429 is usage_limited", () => {
+test("usage 429 usage_limit_reached is usage_limited", () => {
   const probe = classifyProbe({
     source: "usage",
     httpStatus: 429,
@@ -108,6 +108,23 @@ test("usage 429 is usage_limited", () => {
     headers: {},
   });
   assert.equal(probe.status, "usage_limited");
+});
+
+test("usage 429 rate_limit is a temporary miss", () => {
+  const probe = classifyProbe({
+    source: "usage",
+    httpStatus: 429,
+    body: JSON.stringify({ error: { code: "rate_limit" } }),
+    headers: {},
+  });
+  assert.equal(probe.status, "probe_failed");
+  assert.equal(probe.error_code, "rate_limit");
+  assert.equal(classifyProbe({
+    source: "usage",
+    httpStatus: 429,
+    body: "too many requests",
+    headers: {},
+  }).status, "probe_failed");
 });
 
 test("timeout with no status is probe_failed", () => {

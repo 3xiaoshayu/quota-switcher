@@ -13,7 +13,7 @@ import {
   LogEntry,
   StorageDiagnostic,
 } from '../types';
-import { toAntigravityUserMessage, toCursorUserMessage, toUserMessage } from './user-messages';
+import { isQuotaTemporaryFailure, toAntigravityUserMessage, toCursorUserMessage, toUserMessage } from './user-messages';
 
 function isManagedProduct(value: string | null | undefined): boolean {
   return value === 'cursor' || value === 'antigravity';
@@ -878,13 +878,10 @@ function statusForUi(
   if (
     probeStatus === 'usage_limited'
     || errorCode === 'usage_limit_reached'
-    || errorCode === 'rate_limit'
-    || errorCode === 'rate_limit_exceeded'
-    || errorCode === 'http_429'
+    || errorCode === 'insufficient_quota'
   ) {
     return 'LIMITED';
   }
-  if (account.quota_error) return 'SYNC_FAILED';
   const hasPresence = account.quota?.hourly_window_present !== undefined || account.quota?.weekly_window_present !== undefined;
   const hourlyPresent = !hasPresence || account.quota?.hourly_window_present === true;
   const weeklyPresent = !hasPresence || account.quota?.weekly_window_present === true;
@@ -894,6 +891,9 @@ function statusForUi(
   const weekly = weeklyPresent
     ? clampPercent(account.quota?.weekly_remaining_percentage ?? account.quota?.weekly_percentage)
     : null;
+  if (account.quota_error && (!quotaErrorIsTemporary(account) || (hourly == null && weekly == null))) {
+    return 'SYNC_FAILED';
+  }
   if (hourly === 0 || weekly === 0) return 'EXPIRED';
   if (hourly !== null && hourly <= Number(config.primary_threshold ?? 20)) return 'LOW_QUOTA';
   if (weekly !== null && weekly <= Number(config.secondary_threshold ?? 30)) return 'WARNING';
@@ -922,6 +922,12 @@ function leftoverAccessUsableFor(account: DesktopAccount, tokenStatus: DesktopAc
   return !!tokenStatus?.accessAvailable
     && !tokenStatus?.expired
     && !leftoverAccessRejected(account);
+}
+
+function quotaErrorIsTemporary(account: DesktopAccount): boolean {
+  const raw = String(account.quota_error?.message || account.quota_error?.code || '');
+  if (!raw) return false;
+  return isQuotaTemporaryFailure(raw) || isQuotaTemporaryFailure(toUserMessage(raw));
 }
 
 export function canRefreshQuota(account: Pick<AccountQuota, 'status' | 'leftoverAccessUsable' | 'tokenExpired' | 'tokenAccessAvailable' | 'tokenRefreshAvailable'>): boolean {
@@ -960,11 +966,13 @@ export function summarizeRefreshAllResults(results: Array<{
   reauthSkipped: number;
   bannedSkipped: number;
   failed: number;
+  networkFailed: number;
 } {
   let refreshed = 0;
   let reauthSkipped = 0;
   let bannedSkipped = 0;
   let failed = 0;
+  let networkFailed = 0;
   for (const item of results) {
     if (item.reason === 'account_banned' || (item.skipped && item.banned) || (item.error && item.banned)) {
       bannedSkipped += 1;
@@ -975,12 +983,13 @@ export function summarizeRefreshAllResults(results: Array<{
       continue;
     }
     if (item.error) {
-      failed += 1;
+      if (isQuotaTemporaryFailure(item.error)) networkFailed += 1;
+      else failed += 1;
       continue;
     }
     refreshed += 1;
   }
-  return { refreshed, reauthSkipped, bannedSkipped, failed };
+  return { refreshed, reauthSkipped, bannedSkipped, failed, networkFailed };
 }
 
 export function tokenNeedsAttention(account: Pick<AccountQuota, 'status' | 'tokenExpired' | 'tokenValidity'>): boolean {
@@ -1011,11 +1020,13 @@ export function summarizeTokenCheckResults(results: Array<{
   reauthSkipped: number;
   bannedSkipped: number;
   failed: number;
+  networkFailed: number;
 } {
   let passed = 0;
   let reauthSkipped = 0;
   let bannedSkipped = 0;
   let failed = 0;
+  let networkFailed = 0;
   for (const item of results) {
     if (item.banned) {
       bannedSkipped += 1;
@@ -1026,12 +1037,13 @@ export function summarizeTokenCheckResults(results: Array<{
       continue;
     }
     if (!item.ok) {
-      failed += 1;
+      if (isQuotaTemporaryFailure(item.error || '')) networkFailed += 1;
+      else failed += 1;
       continue;
     }
     passed += 1;
   }
-  return { passed, reauthSkipped, bannedSkipped, failed };
+  return { passed, reauthSkipped, bannedSkipped, failed, networkFailed };
 }
 
 export function formatTokenCheckMessage(results: Array<{
@@ -1042,12 +1054,13 @@ export function formatTokenCheckMessage(results: Array<{
   error?: string;
 }> = [], options: { product?: ProductKind } = {}): { message: string; tone: 'success' | 'warning' | 'info' } {
   const total = results.length;
-  const { passed, reauthSkipped, bannedSkipped, failed } = summarizeTokenCheckResults(results);
+  const { passed, reauthSkipped, bannedSkipped, failed, networkFailed } = summarizeTokenCheckResults(results);
   if (total === 0) return { message: '没有可检查的账号', tone: 'info' };
-  if (failed || bannedSkipped || reauthSkipped) {
+  if (failed || bannedSkipped || reauthSkipped || networkFailed) {
     const parts = [`${passed}/${total} 通过`];
     if (reauthSkipped) parts.push(`${reauthSkipped} 个需重新授权`);
     if (bannedSkipped) parts.push(`${bannedSkipped} 个无法继续`);
+    if (networkFailed) parts.push(`${networkFailed} 个令牌暂时没刷到，登录还在`);
     if (failed) parts.push(`${failed} 个失败`);
     return { message: `令牌检查完成：${parts.join('，')}。`, tone: 'warning' };
   }
@@ -1144,10 +1157,12 @@ function cursorStatusForUi(account: DesktopAccount): AccountQuota['status'] {
   const tokenUnusable = (account.token_status?.expired || account.token_status?.accessAvailable === false)
     && account.token_status?.refreshAvailable === false;
   if (tokenUnusable) return 'SUSPENDED';
-  if (account.quota_error) return 'SYNC_FAILED';
   const plan = clampPercent(account.quota?.plan_remaining_percentage);
   const auto = clampPercent(account.quota?.auto_remaining_percentage);
   const api = clampPercent(account.quota?.api_remaining_percentage);
+  if (account.quota_error && (!quotaErrorIsTemporary(account) || (plan == null && auto == null && api == null))) {
+    return 'SYNC_FAILED';
+  }
   if (account.probe?.status === 'usage_limited' || plan === 0) return 'EXPIRED';
   if (plan !== null && plan <= 20) return 'LOW_QUOTA';
   if (auto === 0 || api === 0 || (auto !== null && auto <= 20) || (api !== null && api <= 20)) return 'WARNING';
@@ -1208,6 +1223,7 @@ export function mapCursorAccountForUi(
     warning: cursorWarningForUi(account, status, quotaError),
     isCurrent: !!currentAccount && currentAccount.id === account.id,
     quotaUpdatedAt: account.usage_updated_at,
+    quotaNextRetryAt: account.quota_next_retry_at,
     quotaError,
     tokenExpired: !!tokenStatus.expired,
     tokenAccessAvailable: !!tokenStatus.accessAvailable,
@@ -1223,13 +1239,15 @@ function antigravityStatusForUi(account: DesktopAccount): AccountQuota['status']
   const tokenUnusable = (account.token_status?.expired || account.token_status?.accessAvailable === false)
     && account.token_status?.refreshAvailable === false;
   if (tokenUnusable) return 'SUSPENDED';
-  if (account.quota_error) return 'SYNC_FAILED';
   const windows = [
     clampPercent(account.quota?.gemini_five_hour_remaining),
     clampPercent(account.quota?.gemini_weekly_remaining),
     clampPercent(account.quota?.third_party_five_hour_remaining),
     clampPercent(account.quota?.third_party_weekly_remaining),
   ].filter((value): value is number => value != null);
+  if (account.quota_error && (!quotaErrorIsTemporary(account) || windows.length === 0)) {
+    return 'SYNC_FAILED';
+  }
   if (account.probe?.status === 'usage_limited' || (windows.length > 0 && windows.every((value) => value === 0))) {
     return 'EXPIRED';
   }
@@ -1335,6 +1353,7 @@ export function mapAntigravityAccountForUi(
     warning: antigravityWarningForUi(account, status, quotaError),
     isCurrent: !!currentAccount && currentAccount.id === account.id,
     quotaUpdatedAt: account.usage_updated_at,
+    quotaNextRetryAt: account.quota_next_retry_at,
     quotaError,
     tokenExpired: !!tokenStatus.expired,
     tokenAccessAvailable: !!tokenStatus.accessAvailable,

@@ -22,6 +22,31 @@ const inheritedProxyEnv = Object.fromEntries(
 let liveSignature = null;
 const liveByHost = new Map();
 let appliedProxyUrl = undefined;
+const FAILED_PROXY_MS = 60_000;
+const failedProxies = new Map();
+
+function markProxyFailed(proxyUrl) {
+  const url = String(proxyUrl || "").trim();
+  if (!url) return;
+  failedProxies.set(url, Date.now() + FAILED_PROXY_MS);
+  forgetLastGoodIf(url);
+}
+
+function isProxyRecentlyFailed(proxyUrl, now = Date.now()) {
+  const url = String(proxyUrl || "").trim();
+  if (!url) return false;
+  const until = failedProxies.get(url);
+  if (!until) return false;
+  if (now >= until) {
+    failedProxies.delete(url);
+    return false;
+  }
+  return true;
+}
+
+function resetFailedProxiesForTests() {
+  failedProxies.clear();
+}
 
 function normalizeProxyRule(rule) {
   if (!rule) return "";
@@ -170,6 +195,19 @@ function persistLastGood(signature) {
         proxyUrl: signature.proxyUrl,
         probedAt: Date.now(),
       },
+    }, { backup: true });
+  } catch {}
+}
+
+function forgetLastGoodIf(proxyUrl) {
+  const url = String(proxyUrl || "").trim();
+  if (!url) return;
+  try {
+    const current = loadNetworkState({ requireReadable: true });
+    if (!current.lastGood || current.lastGood.proxyUrl !== url) return;
+    writeJsonAtomic(NETWORK_FILE, {
+      ...current,
+      lastGood: null,
     }, { backup: true });
   } catch {}
 }
@@ -416,8 +454,8 @@ function logProxySignature(signature) {
 async function resolveLiveProxy(url = "https://chatgpt.com/") {
   const destHost = (() => { try { return new URL(url).hostname; } catch { return "chatgpt.com"; } })();
   const cached = liveByHost.get(destHost);
-  if (cached?.proxyUrl) return cached;
-  if (liveSignature?.proxyUrl && await probeProxyUrl(liveSignature.proxyUrl, destHost)) {
+  if (cached?.proxyUrl && !isProxyRecentlyFailed(cached.proxyUrl)) return cached;
+  if (liveSignature?.proxyUrl && !isProxyRecentlyFailed(liveSignature.proxyUrl) && await probeProxyUrl(liveSignature.proxyUrl, destHost)) {
     liveByHost.set(destHost, liveSignature);
     return liveSignature;
   }
@@ -426,6 +464,7 @@ async function resolveLiveProxy(url = "https://chatgpt.com/") {
   const candidates = await collectCandidates(url, { pacRule: await readPacRule(url) });
 
   for (const candidate of candidates) {
+    if (isProxyRecentlyFailed(candidate.proxyUrl)) continue;
     if (await probeProxyUrl(candidate.proxyUrl, destHost)) {
       liveSignature = { ...candidate, probed: true };
       liveByHost.set(destHost, liveSignature);
@@ -433,7 +472,7 @@ async function resolveLiveProxy(url = "https://chatgpt.com/") {
       return liveSignature;
     }
     const socksUrl = socksFallbackUrl(candidate.proxyUrl);
-    if (socksUrl && socksUrl !== candidate.proxyUrl && await probeProxyUrl(socksUrl, destHost)) {
+    if (socksUrl && socksUrl !== candidate.proxyUrl && !isProxyRecentlyFailed(socksUrl) && await probeProxyUrl(socksUrl, destHost)) {
       liveSignature = { source: candidate.source, proxyUrl: socksUrl, probed: true };
       liveByHost.set(destHost, liveSignature);
       persistLastGood(liveSignature);
@@ -533,9 +572,13 @@ module.exports = {
   invalidateLiveProxy,
   discoverProxyForUrl,
   applyAppProxy,
+  markProxyFailed,
+  isProxyRecentlyFailed,
+  resetFailedProxiesForTests,
   applyStartupProxyHint,
   applySignatureToRuntime,
   loadNetworkState,
   persistLastGood,
+  forgetLastGoodIf,
   syncProxyEnv,
 };

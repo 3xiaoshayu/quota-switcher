@@ -885,19 +885,21 @@ function DashboardApp() {
       addLogEntry('开始同步全部账号额度...', 'info', kind);
       try {
         const results = await actions.refreshAllQuotas(kind);
-        const { refreshed, reauthSkipped, bannedSkipped, failed } = summarizeRefreshAllResults(results);
+        const { refreshed, reauthSkipped, bannedSkipped, failed, networkFailed } = summarizeRefreshAllResults(results);
         const snapshot = await loadDashboardState(false);
         if (snapshot && currentProduct.features.autoSwitch) queueQuotaAutoSync(snapshot.accounts);
         if (productRef.current !== kind) return;
-        if (failed || bannedSkipped) {
+        if (failed || bannedSkipped || networkFailed) {
           const parts = [`已刷新 ${refreshed} 个`];
           if (reauthSkipped) parts.push(`${reauthSkipped} 个需重新授权`);
           if (bannedSkipped && currentProduct.features.autoSwitch) parts.push(`${bannedSkipped} 个已封号`);
+          if (networkFailed) parts.push(`${networkFailed} 个额度暂时没刷到，登录还在`);
           if (failed) parts.push(isManagedProduct(kind) ? `${failed} 个这次没查清` : `${failed} 个同步失败`);
           addToast(parts.join('，'), 'warning', kind);
           const logParts = [];
           if (reauthSkipped) logParts.push(`需重新授权 ${reauthSkipped} 个`);
           if (bannedSkipped && currentProduct.features.autoSwitch) logParts.push(`封号 ${bannedSkipped} 个`);
+          if (networkFailed) logParts.push(`暂时没刷到 ${networkFailed} 个`);
           if (failed) logParts.push(isManagedProduct(kind) ? `没查清 ${failed} 个` : `失败 ${failed} 个`);
           addLogEntry(`额度刷新完成：${logParts.join('，')}。`, 'warning', kind);
         } else if (reauthSkipped) {

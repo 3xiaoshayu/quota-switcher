@@ -24,8 +24,10 @@ const RULES: Array<{ test: RegExp; to: string }> = [
   { test: /^recently_switched$/i, to: '刚切过号，本次不自动再切' },
   { test: /^oauth_pending$/i, to: '已有授权正在进行，本次不自动切号' },
   { test: /^switch_verify_failed$/i, to: '官方登录写入后核对失败，没有切到目标账号' },
+  { test: /Quota authorization could not be repaired.{0,120}HTTP\s+5\d\d/i, to: '服务暂时不可用，请稍后刷新额度' },
   { test: /Quota authorization could not be repaired/i, to: '额度授权无法修复，刷新令牌已失效，请重新授权' },
   { test: /refresh_token_invalidated|invalid_refresh_token|invalid_grant/i, to: '刷新令牌已失效，请重新授权' },
+  { test: /(?:Token 已过期且刷新失败|令牌已过期且刷新失败).{0,120}HTTP\s+5\d\d/i, to: '服务暂时不可用，请稍后刷新额度' },
   { test: /Token 已过期且刷新失败|令牌已过期且刷新失败/i, to: '令牌已过期且刷新失败，请重新授权' },
   { test: /target account is incomplete/i, to: '该账号资料不完整，无法切换' },
   { test: /Official Antigravity(?: IDE)? did not exit|antigravity_process_still_running/i, to: '官方 Antigravity IDE 没能退出，请手动关掉后再切' },
@@ -84,6 +86,7 @@ const RULES: Array<{ test: RegExp; to: string }> = [
   { test: /(token refresh failed|quota authorization could not be repaired).{0,160}account_disabled/i, to: '刷新令牌已失效，请重新授权' },
   { test: /HTTP 40[13]\b.*\baccount_disabled\b|\baccount_disabled\b.*HTTP 40[13]\b/i, to: '账号已封号，无法继续使用。' },
   { test: /\baccount_disabled\b/i, to: '刷新令牌已失效，请重新授权' },
+  { test: /Token refresh failed.{0,120}HTTP\s+5\d\d/i, to: '服务暂时不可用，请稍后刷新额度' },
   { test: /Token refresh failed/i, to: '令牌刷新失败' },
   { test: /Authentication state is busy|Read authentication state timed out/i, to: '正在确认官方登录，稍后会自动刷新' },
   { test: /quota refresh is waiting for retry|quota_retry_pending/i, to: '额度刷新稍后会自动重试' },
@@ -108,11 +111,22 @@ function hasChinese(text: string): boolean {
   return /[\u4e00-\u9fff]/.test(text)
 }
 
-function isQuotaNetworkFailure(text: string): boolean {
+export function isQuotaNetworkFailure(text: string): boolean {
   return /网络请求失败/.test(text)
-    || /ERR_CONNECTION|ETIMEDOUT|ECONNRESET|ENOTFOUND|net::ERR_/i.test(text)
+    || /ERR_CONNECTION|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|EADDRNOTAVAIL|ENETDOWN|EHOSTDOWN|EPIPE|UND_ERR|net::ERR_/i.test(text)
+    || /engine_worker_down|Engine worker timed out|Engine worker is not running|Engine worker exited/i.test(text)
     || /Electron network failed|Node network failed|network unavailable/i.test(text)
-    || /Invalid string length|response_too_large|响应过大/i.test(text)
+    || /Invalid string length|response_too_large|响应过大|响应解压失败|请求超时/i.test(text)
+    || /Unexpected token|unexpected_non_json|响应不是 JSON|响应无 access_token/i.test(text)
+}
+
+export function isQuotaTemporaryFailure(text: string): boolean {
+  return isQuotaNetworkFailure(text)
+    || /HTTP\s+5\d\d/.test(text)
+    || /HTTP\s+429/.test(text)
+    || /rate.?limit/i.test(text)
+    || /这次没查清|invalid_usage_json|was not JSON|响应不是 JSON|响应无 access_token/i.test(text)
+    || /服务暂时不可用/.test(text)
 }
 
 export function toUserMessage(raw: unknown): string {

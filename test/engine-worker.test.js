@@ -15,6 +15,7 @@ const {
   readVscdbItems,
   setRpcTimeoutMsForTests,
   setEngineWorkerForTests,
+  rpcTimeoutForHttpJson,
 } = require("../src/main/engine-worker-host");
 const { readVscdbItemRows, setSqliteReadTransport } = require("../engine/sqlite-native");
 
@@ -67,7 +68,22 @@ test("Node tests cannot fork the Electron utilityProcess and stay in-process", (
   assert.equal(isEngineWorkerAlive(), false);
 });
 
-test("engine worker HTTP jobs talk to Node http, not Chromium fetch", async () => {
+test("engine worker HTTP jobs talk to Node http, not Chromium fetch", async (t) => {
+  const proxy = require("../engine/proxy-resolve");
+  const originalResolve = proxy.resolveLiveProxy;
+  const originalPoison = proxy.hostLooksPoisoned;
+  const originalApply = proxy.applySignatureToRuntime;
+  const originalInvalidate = proxy.invalidateLiveProxy;
+  proxy.resolveLiveProxy = async () => ({ source: "direct", proxyUrl: "", probed: false });
+  proxy.hostLooksPoisoned = async () => false;
+  proxy.applySignatureToRuntime = async (signature) => signature;
+  proxy.invalidateLiveProxy = () => {};
+  t.after(() => {
+    proxy.resolveLiveProxy = originalResolve;
+    proxy.hostLooksPoisoned = originalPoison;
+    proxy.applySignatureToRuntime = originalApply;
+    proxy.invalidateLiveProxy = originalInvalidate;
+  });
   const server = http.createServer((req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ path: req.url, ok: true }));
@@ -114,10 +130,66 @@ test("unknown engine worker operations fail closed", async () => {
   );
 });
 
+test("quota HTTP does not wait the full worker RPC budget for a stuck child", () => {
+  setRpcTimeoutMsForTests(90_000);
+  try {
+    assert.equal(rpcTimeoutForHttpJson({ timeout: 25_000 }), 58_000);
+    assert.ok(rpcTimeoutForHttpJson({ timeout: 25_000 }) < 90_000);
+    assert.ok(rpcTimeoutForHttpJson({ timeout: 50 }) < 2_000);
+  } finally {
+    setRpcTimeoutMsForTests();
+  }
+});
+
 test("engine worker RPC timeout kills the stuck child and falls back in-process", async (t) => {
+  const proxy = require("../engine/proxy-resolve");
+  const originalResolve = proxy.resolveLiveProxy;
+  const originalPoison = proxy.hostLooksPoisoned;
+  const originalApply = proxy.applySignatureToRuntime;
+  const originalInvalidate = proxy.invalidateLiveProxy;
+  proxy.resolveLiveProxy = async () => ({ source: "direct", proxyUrl: "", probed: false });
+  proxy.hostLooksPoisoned = async () => false;
+  proxy.applySignatureToRuntime = async (signature) => signature;
+  proxy.invalidateLiveProxy = () => {};
   const server = http.createServer((req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ via: "local-after-timeout" }));
+  });
+  const port = await listen(server);
+  let killed = 0;
+  setRpcTimeoutMsForTests(30);
+  setEngineWorkerForTests({
+    child: {
+      postMessage() {},
+      kill() { killed += 1; },
+    },
+  });
+  t.after(() => {
+    proxy.resolveLiveProxy = originalResolve;
+    proxy.hostLooksPoisoned = originalPoison;
+    proxy.applySignatureToRuntime = originalApply;
+    proxy.invalidateLiveProxy = originalInvalidate;
+    setRpcTimeoutMsForTests();
+    setEngineWorkerForTests();
+    stopEngineWorker();
+  });
+  try {
+    const result = await httpJson(`http://127.0.0.1:${port}/`, { timeout: 3000 });
+    assert.equal(result.status, 200);
+    assert.match(result.body, /local-after-timeout/);
+    assert.equal(killed, 1);
+    assert.equal(isEngineWorkerAlive(), false);
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test("engine worker RPC timeout does not replay a non-idempotent token POST", async (t) => {
+  let posts = 0;
+  const server = http.createServer((req, res) => {
+    if (req.method === "POST") posts += 1;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ access_token: "replayed" }));
   });
   const port = await listen(server);
   let killed = 0;
@@ -134,17 +206,38 @@ test("engine worker RPC timeout kills the stuck child and falls back in-process"
     stopEngineWorker();
   });
   try {
-    const result = await httpJson(`http://127.0.0.1:${port}/`, { timeout: 3000 });
-    assert.equal(result.status, 200);
-    assert.match(result.body, /local-after-timeout/);
+    await assert.rejects(
+      () => httpJson(`http://127.0.0.1:${port}/token`, {
+        method: "POST",
+        body: "grant_type=refresh_token",
+        timeout: 3000,
+        idempotent: false,
+      }),
+      (error) => error.code === "engine_worker_down",
+    );
+    assert.equal(posts, 0);
     assert.equal(killed, 1);
-    assert.equal(isEngineWorkerAlive(), false);
   } finally {
     await closeServer(server);
   }
 });
 
-test("worker host HTTP falls back in-process when the child is down", async () => {
+test("worker host HTTP falls back in-process when the child is down", async (t) => {
+  const proxy = require("../engine/proxy-resolve");
+  const originalResolve = proxy.resolveLiveProxy;
+  const originalPoison = proxy.hostLooksPoisoned;
+  const originalApply = proxy.applySignatureToRuntime;
+  const originalInvalidate = proxy.invalidateLiveProxy;
+  proxy.resolveLiveProxy = async () => ({ source: "direct", proxyUrl: "", probed: false });
+  proxy.hostLooksPoisoned = async () => false;
+  proxy.applySignatureToRuntime = async (signature) => signature;
+  proxy.invalidateLiveProxy = () => {};
+  t.after(() => {
+    proxy.resolveLiveProxy = originalResolve;
+    proxy.hostLooksPoisoned = originalPoison;
+    proxy.applySignatureToRuntime = originalApply;
+    proxy.invalidateLiveProxy = originalInvalidate;
+  });
   const server = http.createServer((req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ via: "local" }));

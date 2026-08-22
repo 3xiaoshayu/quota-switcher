@@ -1,4 +1,5 @@
 const path = require("node:path");
+const { REFRESH_TIMEOUT } = require("../../engine/config");
 const { httpJsonLocal } = require("../../engine/http-client");
 const { readVscdbItemRowsLocal } = require("../../engine/sqlite-native");
 const { reviveError } = require("./engine-worker");
@@ -76,7 +77,13 @@ function onWorkerMessage(data) {
   else waiter.reject(reviveError(payload.error));
 }
 
-function rpc(op, payload) {
+function rpcTimeoutForHttpJson(opts = {}) {
+  const timeout = Number(opts.timeout) > 0 ? Number(opts.timeout) : REFRESH_TIMEOUT;
+  const slack = Math.min(8000, Math.max(1000, timeout));
+  return Math.min(rpcTimeoutMs, timeout * 2 + slack);
+}
+
+function rpc(op, payload, timeoutMs = rpcTimeoutMs) {
   if (!alive || !child || typeof child.postMessage !== "function") {
     return Promise.reject(workerDownError());
   }
@@ -85,7 +92,7 @@ function rpc(op, payload) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       abandonStuckWorker("Engine worker timed out");
-    }, rpcTimeoutMs);
+    }, timeoutMs);
     pending.set(id, { resolve, reject, timer });
     try {
       child.postMessage({ id, op, payload });
@@ -170,9 +177,14 @@ function setEngineWorkerForTests(next = null) {
 async function httpJson(url, opts = {}) {
   if (!alive) return httpJsonLocal(url, opts);
   try {
-    return await rpc("httpJson", { url, opts });
+    return await rpc("httpJson", { url, opts }, rpcTimeoutForHttpJson(opts));
   } catch (error) {
-    if (error && error.code === WORKER_DOWN) return httpJsonLocal(url, opts);
+    if (error && error.code === WORKER_DOWN) {
+      // A timed-out worker may already have sent a token POST. Do not
+      // replay refresh-token rotation from the parent process.
+      if (opts.idempotent === false) throw error;
+      return httpJsonLocal(url, opts);
+    }
     throw error;
   }
 }
@@ -199,4 +211,5 @@ module.exports = {
   shouldScheduleWorkerRestart,
   setRpcTimeoutMsForTests,
   setEngineWorkerForTests,
+  rpcTimeoutForHttpJson,
 };

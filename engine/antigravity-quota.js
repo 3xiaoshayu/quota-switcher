@@ -1,9 +1,10 @@
-const { ANTIGRAVITY_CLOUDCODE_URL, ANTIGRAVITY_CLOUDCODE_DAILY_URL } = require("./config");
+const { ANTIGRAVITY_CLOUDCODE_URL, ANTIGRAVITY_CLOUDCODE_DAILY_URL, REFRESH_TIMEOUT } = require("./config");
 const { ts } = require("./crypto-utils");
-const { extractErrorCode } = require("./http-client");
+const { extractErrorCode, stripXssiPrefix } = require("./http-client");
 const { getAntigravityRuntime } = require("./antigravity-runtime");
 const { saveAntigravityAcct, upsertAntigravityIndex } = require("./antigravity-storage");
-const { refreshAntigravityToken, markAntigravityReauth } = require("./antigravity-token");
+const { refreshAntigravityToken, markAntigravityReauth, antigravityAccessExpired } = require("./antigravity-token");
+const { clearQuotaRetry, scheduleQuotaRetry, throwIfQuotaRetryPending } = require("./quota-retry");
 const { logInfo, logWarn } = require("./logger");
 
 const CLOUD_CODE_IDE_VERSION = "1.20.5";
@@ -512,30 +513,59 @@ function cloudCodeBases() {
   return [ANTIGRAVITY_CLOUDCODE_DAILY_URL, ANTIGRAVITY_CLOUDCODE_URL];
 }
 
+function isCloudCodeHostFailoverStatus(status) {
+  const code = Number(status);
+  return code === 404
+    || code === 408
+    || code === 500
+    || code === 502
+    || code === 503
+    || code === 504
+    || (code >= 520 && code <= 527)
+    || code === 530;
+}
+
 async function cloudCodePost(path, accessToken, body, options = {}) {
   const runtime = getAntigravityRuntime();
   const bases = options.bases || cloudCodeBases();
   const userAgent = options.userAgent || CLOUD_CODE_USER_AGENT;
+  const budget = Number(options.timeout) > 0 ? Number(options.timeout) : REFRESH_TIMEOUT;
   let last = null;
+  let lastError = null;
   for (const base of bases) {
-    last = await runtime.httpJson(`${base}${path}`, {
-      method: options.method || "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": userAgent,
-      },
-      body: options.method === "GET" ? undefined : body,
-    });
-    if (last.status !== 404 && last.status !== 502 && last.status !== 503) return last;
+    // A hung first host can consume one full budget. The next Cloud Code
+    // host still gets its own, same as HTTP proxy failover.
+    const timeout = budget;
+    try {
+      last = await runtime.httpJson(`${base}${path}`, {
+        method: options.method || "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "User-Agent": userAgent,
+        },
+        body: options.method === "GET" ? undefined : body,
+        timeout,
+      });
+      lastError = null;
+    } catch (error) {
+      lastError = error;
+      last = null;
+      continue;
+    }
+    if (!isCloudCodeHostFailoverStatus(last.status)) return last;
   }
-  return last;
+  if (last) return last;
+  if (lastError) throw lastError;
+  const timeoutError = new Error("请求超时");
+  timeoutError.code = "antigravity_cloudcode_timeout";
+  throw timeoutError;
 }
 
 function parseJsonBody(body, fallback = {}) {
   try {
-    return JSON.parse(body || "{}");
+    return JSON.parse(stripXssiPrefix(body) || "{}");
   } catch {
     return fallback;
   }
@@ -569,15 +599,44 @@ async function onboardAntigravityUser(accessToken, assist) {
 
 async function refreshAntigravityQuota(account, options = {}) {
   const force = options.force !== false;
+  const now = ts();
+  throwIfQuotaRetryPending(account, force, now);
   if (account.tokens?.refresh_token) {
-    const refreshed = await refreshAntigravityToken(account, { force: false });
-    if (!refreshed.ok && !account.tokens.access_token) {
+    let refreshed;
+    try {
+      refreshed = await refreshAntigravityToken(account, { force: false });
+    } catch (error) {
+      account.quota_error = {
+        code: error.code || "probe_failed",
+        message: error.message || String(error),
+        timestamp: ts(),
+      };
+      account.banned = false;
+      scheduleQuotaRetry(account, error, now);
+      saveAntigravityAcct(account);
+      upsertAntigravityIndex(account);
+      if (force) throw error;
+      return account.quota;
+    }
+    if (refreshed.account) account = refreshed.account;
+    const accessUsable = !antigravityAccessExpired(account);
+    if (!refreshed.ok && refreshed.reauthRequired && !accessUsable) {
       account.quota_error = { code: "reauthorization_required", message: refreshed.error, timestamp: ts() };
       saveAntigravityAcct(account);
       upsertAntigravityIndex(account);
       return account.quota;
     }
-    if (refreshed.account) account = refreshed.account;
+    if (!refreshed.ok && !accessUsable) {
+      const tokenError = new Error(refreshed.error || "Token refresh failed");
+      tokenError.code = "probe_failed";
+      account.quota_error = { code: "probe_failed", message: tokenError.message, timestamp: ts() };
+      account.banned = false;
+      scheduleQuotaRetry(account, tokenError, now);
+      saveAntigravityAcct(account);
+      upsertAntigravityIndex(account);
+      if (force) throw tokenError;
+      return account.quota;
+    }
   }
 
   if (!account.tokens?.access_token) {
@@ -593,29 +652,40 @@ async function refreshAntigravityQuota(account, options = {}) {
       checked_at: ts(),
     };
     account.banned = false;
+    const sessionError = new Error("这次没查清额度，请稍后重试。");
+    sessionError.code = "antigravity_session_missing";
+    scheduleQuotaRetry(account, sessionError, now);
     saveAntigravityAcct(account);
     upsertAntigravityIndex(account);
-    const error = new Error("这次没查清额度，请稍后重试。");
-    error.code = "antigravity_session_missing";
-    if (force) throw error;
+    if (force) throw sessionError;
     return account.quota;
   }
 
   try {
+    const postOpts = (extra = {}) => ({ timeout: options.timeout, ...extra });
     const assistResponse = await cloudCodePost("/v1internal:loadCodeAssist", account.tokens.access_token, {
       metadata: cloudCodeMetadata(),
       mode: "FULL_ELIGIBILITY_CHECK",
-    }, { userAgent: LOAD_CODE_ASSIST_USER_AGENT });
+    }, postOpts({ userAgent: LOAD_CODE_ASSIST_USER_AGENT }));
     if (assistResponse.status === 401 || assistResponse.status === 403) {
       markAntigravityReauth(account, "Google 登录已失效，请重新授权");
-      account.quota_error = { code: "reauthorization_required", message: "Google 登录已失效，请重新授权", timestamp: ts() };
+      const authError = new Error("Google 登录已失效，请重新授权");
+      authError.code = "reauthorization_required";
+      authError.httpStatus = assistResponse.status;
+      account.quota_error = { code: "reauthorization_required", message: authError.message, timestamp: ts() };
+      scheduleQuotaRetry(account, authError, now);
       saveAntigravityAcct(account);
       upsertAntigravityIndex(account);
       return account.quota;
     }
     if (assistResponse.status < 200 || assistResponse.status >= 300) {
       const code = extractErrorCode(assistResponse.body) || `HTTP ${assistResponse.status}`;
-      throw Object.assign(new Error(`Antigravity usage request failed: ${code}`), { code, httpStatus: assistResponse.status });
+      throw Object.assign(new Error(`Antigravity usage request failed: ${code}`), {
+        code,
+        httpStatus: assistResponse.status,
+        headers: assistResponse.headers || {},
+        retryAfter: assistResponse.headers?.["retry-after"] || assistResponse.headers?.["Retry-After"],
+      });
     }
     let assistPayload = parseJsonBody(assistResponse.body, null);
     if (!assistPayload || typeof assistPayload !== "object") {
@@ -635,7 +705,7 @@ async function refreshAntigravityQuota(account, options = {}) {
         const retryResponse = await cloudCodePost("/v1internal:loadCodeAssist", account.tokens.access_token, {
           metadata: cloudCodeMetadata(),
           mode: "FULL_ELIGIBILITY_CHECK",
-        }, { userAgent: LOAD_CODE_ASSIST_USER_AGENT });
+        }, postOpts({ userAgent: LOAD_CODE_ASSIST_USER_AGENT }));
         if (retryResponse.status >= 200 && retryResponse.status < 300) {
           const retryPayload = parseJsonBody(retryResponse.body, null);
           if (retryPayload && typeof retryPayload === "object") {
@@ -655,7 +725,7 @@ async function refreshAntigravityQuota(account, options = {}) {
     try {
       const modelsResponse = await cloudCodePost("/v1internal:fetchAvailableModels", account.tokens.access_token, {
         project: assist.project || undefined,
-      });
+      }, postOpts());
       if (modelsResponse.status >= 200 && modelsResponse.status < 300) {
         modelsPayload = parseJsonBody(modelsResponse.body);
       }
@@ -664,7 +734,7 @@ async function refreshAntigravityQuota(account, options = {}) {
     try {
       const summaryResponse = await cloudCodePost("/v1internal:retrieveUserQuotaSummary", account.tokens.access_token, {
         project: assist.project || undefined,
-      });
+      }, postOpts());
       if (summaryResponse.status >= 200 && summaryResponse.status < 300) {
         summaryPayload = parseJsonBody(summaryResponse.body);
       }
@@ -673,7 +743,7 @@ async function refreshAntigravityQuota(account, options = {}) {
       try {
         const quotaResponse = await cloudCodePost("/v1internal:retrieveUserQuota", account.tokens.access_token, {
           project: assist.project,
-        });
+        }, postOpts());
         if (quotaResponse.status >= 200 && quotaResponse.status < 300) {
           const quotaPayload = parseJsonBody(quotaResponse.body);
           if (Array.isArray(quotaPayload.buckets) && quotaPayload.buckets.length) {
@@ -690,6 +760,7 @@ async function refreshAntigravityQuota(account, options = {}) {
     }
     account.quota = quota;
     account.quota_error = null;
+    clearQuotaRetry(account);
     account.usage_updated_at = ts();
     account.banned = false;
     account.probe = {
@@ -715,6 +786,7 @@ async function refreshAntigravityQuota(account, options = {}) {
       checked_at: ts(),
     };
     account.banned = false;
+    scheduleQuotaRetry(account, error, now);
     saveAntigravityAcct(account);
     upsertAntigravityIndex(account);
     logWarn(`Antigravity quota refresh failed for ${account.email}: ${error.message}${error.stack ? `\n${error.stack}` : ""}`);

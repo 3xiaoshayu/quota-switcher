@@ -187,7 +187,8 @@ test("dashboard state replaces internal reauthorization details with actionable 
   );
 });
 
-test("quota network failures become sync-failed with short Chinese copy", async () => {
+test("quota network failures keep leftover windows and say login is still there", async () => {
+  const { needsHandling, quotaHero, quotaWindowSummary, accountHasVisibleQuota } = loadDesktopExports(bridge());
   const desktopApi = loadDesktopApiWithBridge(bridge({
     listAccounts: () => ok([{
       id: "online",
@@ -211,12 +212,133 @@ test("quota network failures become sync-failed with short Chinese copy", async 
   }));
 
   const snapshot = await desktopApi.loadDashboardState();
-  assert.equal(snapshot.accounts[0].status, "SYNC_FAILED");
+  const account = snapshot.accounts[0];
+  assert.equal(account.status, "ACTIVE");
+  assert.equal(account.weeklyQuotaRemaining, 95);
+  assert.equal(accountHasVisibleQuota(account), true);
+  assert.equal(quotaHero(account).percent, 95);
+  assert.equal(quotaWindowSummary("weekly", account).text, "95%");
+  assert.equal(needsHandling(account), false);
   assert.equal(
-    snapshot.accounts[0].warning,
+    account.warning,
     "额度暂时没刷到，登录还在。请稍后再试。",
   );
-  assert.doesNotMatch(snapshot.accounts[0].quotaError || "", /ERR_CONNECTION/);
+  assert.doesNotMatch(account.quotaError || "", /ERR_CONNECTION/);
+});
+
+test("a quota 429 rate_limit leftover is not shown as used up", async () => {
+  const { needsHandling, quotaHero, accountHasVisibleQuota } = loadDesktopExports(bridge());
+  const desktopApi = loadDesktopApiWithBridge(bridge({
+    listAccounts: () => ok([{
+      id: "rate-limited",
+      email: "rate-limited@example.com",
+      plan_type: "plus",
+      probe: { status: "probe_failed", error_code: "rate_limit", http_status: 429, checked_at: 1 },
+      quota_error: { code: "rate_limit", message: "HTTP 429 rate_limit" },
+      quota: {
+        weekly_remaining_percentage: 81,
+        weekly_window_present: true,
+      },
+      token_status: {
+        accessAvailable: true,
+        refreshAvailable: true,
+        expired: false,
+        timeLeft: 3600,
+      },
+    }]),
+  }));
+
+  const snapshot = await desktopApi.loadDashboardState();
+  const account = snapshot.accounts[0];
+  assert.equal(account.status, "ACTIVE");
+  assert.notEqual(account.status, "LIMITED");
+  assert.equal(account.weeklyQuotaRemaining, 81);
+  assert.equal(accountHasVisibleQuota(account), true);
+  assert.equal(quotaHero(account).percent, 81);
+  assert.equal(needsHandling(account), false);
+  assert.match(String(account.warning || ""), /服务暂时不可用|额度暂时没刷到/);
+  assert.doesNotMatch(String(account.warning || ""), /额度已达上限|额度已用尽/);
+});
+
+test("a quota 429 keeps leftover windows and is not a hard fail", async () => {
+  const { needsHandling, quotaHero, accountHasVisibleQuota } = loadDesktopExports(bridge());
+  const desktopApi = loadDesktopApiWithBridge(bridge({
+    listAccounts: () => ok([{
+      id: "limited",
+      email: "limited@example.com",
+      plan_type: "plus",
+      quota_error: { code: "probe_failed", message: "HTTP 429" },
+      quota: {
+        weekly_remaining_percentage: 81,
+        weekly_window_present: true,
+      },
+      token_status: {
+        accessAvailable: true,
+        refreshAvailable: true,
+        expired: false,
+        timeLeft: 3600,
+      },
+    }]),
+  }));
+
+  const snapshot = await desktopApi.loadDashboardState();
+  const account = snapshot.accounts[0];
+  assert.equal(account.status, "ACTIVE");
+  assert.equal(account.weeklyQuotaRemaining, 81);
+  assert.equal(accountHasVisibleQuota(account), true);
+  assert.equal(quotaHero(account).percent, 81);
+  assert.equal(needsHandling(account), false);
+  assert.match(String(account.warning || ""), /服务暂时不可用|额度暂时没刷到/);
+});
+
+test("a not-JSON quota miss keeps leftover windows", async () => {
+  const { needsHandling, quotaHero, accountHasVisibleQuota } = loadDesktopExports(bridge());
+  const desktopApi = loadDesktopApiWithBridge(bridge({
+    listAccounts: () => ok([{
+      id: "html",
+      email: "html@example.com",
+      plan_type: "plus",
+      quota_error: { code: "invalid_usage_json", message: "Cursor usage response was not JSON" },
+      quota: {
+        weekly_remaining_percentage: 73,
+        weekly_window_present: true,
+      },
+      token_status: {
+        accessAvailable: true,
+        refreshAvailable: true,
+        expired: false,
+        timeLeft: 3600,
+      },
+    }]),
+  }));
+
+  const snapshot = await desktopApi.loadDashboardState();
+  const account = snapshot.accounts[0];
+  assert.equal(account.status, "ACTIVE");
+  assert.equal(account.weeklyQuotaRemaining, 73);
+  assert.equal(accountHasVisibleQuota(account), true);
+  assert.equal(quotaHero(account).percent, 73);
+  assert.equal(needsHandling(account), false);
+  assert.match(String(account.warning || ""), /没查清|额度暂时没刷到|服务暂时不可用/);
+});
+
+test("a quota network miss with no leftover windows stays sync-failed", async () => {
+  const desktopApi = loadDesktopApiWithBridge(bridge({
+    listAccounts: () => ok([{
+      id: "empty",
+      email: "empty@example.com",
+      quota_error: { code: "network", message: "请求超时" },
+      token_status: {
+        accessAvailable: true,
+        refreshAvailable: true,
+        expired: false,
+        timeLeft: 3600,
+      },
+    }]),
+  }));
+  const snapshot = await desktopApi.loadDashboardState();
+  assert.equal(snapshot.accounts[0].status, "SYNC_FAILED");
+  assert.equal(snapshot.accounts[0].warning, "额度暂时没刷到，登录还在。请稍后再试。");
 });
 
 test("banned accounts beat reauthorization and keep the deactivation code", async () => {
@@ -422,21 +544,33 @@ test("leftover access rejected codes stay aligned with the engine", () => {
     { error: "HTTP 401", banned: true },
     { error: "Account requires reauthorization before quotas can be refreshed.", reason: "reauthorization_required" },
     { error: "The target account is banned and cannot refresh quotas", reason: "account_banned" },
+    { error: "网络请求失败 (chatgpt.com)。详情：请求超时" },
+    { error: "HTTP 500 temporarily_unavailable" },
+    { error: "服务暂时不可用，请稍后刷新额度" },
+    { error: "HTTP 429" },
+    { error: "HTTP 401 token_invalidated" },
   ]);
   assert.equal(summary.refreshed, 1);
   assert.equal(summary.reauthSkipped, 2);
   assert.equal(summary.bannedSkipped, 3);
   assert.equal(summary.failed, 2);
+  assert.equal(summary.networkFailed, 5);
   const tokenSummary = summarizeTokenCheckResults([
     { ok: true, skipped: true },
     { ok: false, skipped: true, reauthRequired: true },
     { ok: false, skipped: true, banned: true },
     { ok: false, error: "timeout" },
+    { ok: false, error: "HTTP 500 temporarily_unavailable" },
+    { ok: false, error: "HTTP 429" },
+    { ok: false, error: "响应不是 JSON" },
+    { ok: false, error: "响应无 access_token" },
+    { ok: false, error: "网络请求失败 (auth.openai.com)。详情：请求超时" },
   ]);
   assert.equal(tokenSummary.passed, 1);
   assert.equal(tokenSummary.reauthSkipped, 1);
   assert.equal(tokenSummary.bannedSkipped, 1);
   assert.equal(tokenSummary.failed, 1);
+  assert.equal(tokenSummary.networkFailed, 5);
 });
 
 test("token status chips stay product-agnostic and summarize batch checks", () => {
@@ -463,6 +597,8 @@ test("token status chips stay product-agnostic and summarize batch checks", () =
   assert.match(formatTokenCheckMessage([{ ok: false }], { product: "cursor" }).message, /失败/);
   assert.doesNotMatch(formatTokenCheckMessage([{ ok: false }], { product: "cursor" }).message, /这次没查清/);
   assert.match(formatTokenCheckMessage([{ ok: false }], { product: "codex" }).message, /失败/);
+  assert.match(formatTokenCheckMessage([{ ok: false, error: "HTTP 500" }]).message, /令牌暂时没刷到，登录还在/);
+  assert.doesNotMatch(formatTokenCheckMessage([{ ok: false, error: "HTTP 500" }]).message, /个失败/);
 });
 
 test("settings token card lists every tokenBatch product", () => {
@@ -1065,6 +1201,10 @@ test("user-facing messages stay in Chinese", () => {
     toUserMessage("Quota authorization could not be repaired: HTTP 401 refresh_token_invalidated"),
     "额度授权无法修复，刷新令牌已失效，请重新授权",
   );
+  assert.equal(
+    toUserMessage("Quota authorization could not be repaired: HTTP 500"),
+    "服务暂时不可用，请稍后刷新额度",
+  );
   assert.equal(toUserMessage("OAuth authorization timed out"), "授权超时，请重新点一次");
   assert.equal(toUserMessage("Waiting for browser authorization."), "请在浏览器完成授权");
   assert.equal(toUserMessage("OAuth authorization was cancelled"), "授权已取消");
@@ -1084,12 +1224,20 @@ test("user-facing messages stay in Chinese", () => {
     toUserMessage("Token refresh failed: HTTP 401 account_disabled"),
     "刷新令牌已失效，请重新授权",
   );
-  assert.equal(toUserMessage("Token refresh failed: HTTP 500"), "令牌刷新失败");
+  assert.equal(toUserMessage("Token refresh failed: HTTP 500"), "服务暂时不可用，请稍后刷新额度");
+  assert.equal(toUserMessage("Token refresh failed: 网络请求失败"), "额度暂时没刷到，登录还在。请稍后再试。");
+  assert.equal(toUserMessage("Token refresh failed: Unexpected token < in JSON"), "额度暂时没刷到，登录还在。请稍后再试。");
+  assert.equal(toUserMessage("Token refresh failed: 响应不是 JSON"), "额度暂时没刷到，登录还在。请稍后再试。");
+  assert.equal(toUserMessage("响应无 access_token"), "额度暂时没刷到，登录还在。请稍后再试。");
+  assert.equal(toUserMessage("Token refresh failed: 响应无 access_token"), "额度暂时没刷到，登录还在。请稍后再试。");
+  assert.equal(toUserMessage("Token refresh failed"), "令牌刷新失败");
   assert.equal(toUserMessage("HTTP 500"), "服务暂时不可用，请稍后刷新额度");
   assert.equal(toUserMessage("disabled"), "全局开关已关闭，不会切号");
   assert.equal(toUserMessage("已从管理器中删除账号 a@b.com。"), "已从管理器中删除账号 a@b.com。");
   assert.equal(toUserMessage("SomeUnknownEnglishFailureXYZ"), "操作失败，请稍后重试");
   assert.equal(toUserMessage("Token 已过期且刷新失败"), "令牌已过期且刷新失败，请重新授权");
+  assert.equal(toUserMessage("Token 已过期且刷新失败: HTTP 500"), "服务暂时不可用，请稍后刷新额度");
+  assert.equal(toUserMessage("Token 已过期且刷新失败: 网络请求失败"), "额度暂时没刷到，登录还在。请稍后再试。");
   assert.equal(toUserMessage("Cursor usage request failed: HTTP 500"), "这次没查清 Cursor 额度，请稍后重试");
   assert.equal(toUserMessage("cursor_session_missing"), "这次没查清 Cursor 额度，请稍后重试");
   assert.equal(toUserMessage("Cursor session cookie could not be built"), "这次没查清 Cursor 额度，请稍后重试");
@@ -1111,6 +1259,14 @@ test("user-facing messages stay in Chinese", () => {
   );
   assert.equal(toUserMessage("Invalid string length"), "额度暂时没刷到，登录还在。请稍后再试。");
   assert.equal(toUserMessage("响应过大"), "额度暂时没刷到，登录还在。请稍后再试。");
+  assert.equal(toUserMessage("响应解压失败"), "额度暂时没刷到，登录还在。请稍后再试。");
+  assert.equal(toUserMessage("请求超时"), "额度暂时没刷到，登录还在。请稍后再试。");
+  assert.equal(toUserMessage("getaddrinfo EAI_AGAIN chatgpt.com"), "额度暂时没刷到，登录还在。请稍后再试。");
+  assert.equal(toUserMessage("connect ECONNREFUSED 127.0.0.1:7890"), "额度暂时没刷到，登录还在。请稍后再试。");
+  assert.equal(toUserMessage("connect ENETUNREACH 2606:4700::1:443"), "额度暂时没刷到，登录还在。请稍后再试。");
+  assert.equal(toUserMessage("write EPIPE"), "额度暂时没刷到，登录还在。请稍后再试。");
+  assert.equal(toUserMessage("UND_ERR_SOCKET: other side closed"), "额度暂时没刷到，登录还在。请稍后再试。");
+  assert.equal(toUserMessage("Engine worker timed out"), "额度暂时没刷到，登录还在。请稍后再试。");
   assert.equal(toUserMessage("Read authentication state timed out"), "正在确认官方登录，稍后会自动刷新");
   assert.equal(toUserMessage("Daemon error"), "后台检查失败，请稍后重试");
   assert.equal(toUserMessage("EISDIR: illegal operation on a directory"), "登录文件暂时读不到，请稍后重试");
@@ -1199,6 +1355,34 @@ test("cursor account mapping never uses ban status and rounds leftover quota", (
   assert.equal(usageFailed.status, "SYNC_FAILED");
   assert.doesNotMatch(String(usageFailed.warning || ""), /usage request failed|HTTP 429/i);
   assert.match(String(usageFailed.warning || ""), /没查清/);
+  const leftoverNetwork = mapCursorAccountForUi({
+    id: "cursor_leftover_net",
+    email: "leftover-net@example.com",
+    quota_error: { code: "probe_failed", message: "HTTP 500 temporarily_unavailable" },
+    quota: {
+      plan_remaining_percentage: 44,
+      auto_remaining_percentage: 61,
+      api_remaining_percentage: 88,
+    },
+    token_status: { accessAvailable: true, refreshAvailable: true, expired: false, timeLeft: 3600 },
+  }, null);
+  assert.notEqual(leftoverNetwork.status, "SYNC_FAILED");
+  assert.equal(leftoverNetwork.cursorAutoRemaining, 61);
+  assert.match(String(leftoverNetwork.warning || ""), /服务暂时不可用|额度暂时没刷到/);
+  const leftover429 = mapCursorAccountForUi({
+    id: "cursor_leftover_429",
+    email: "leftover-429@example.com",
+    quota_error: { code: "probe_failed", message: "Cursor usage request failed: HTTP 429" },
+    quota: {
+      plan_remaining_percentage: 44,
+      auto_remaining_percentage: 61,
+      api_remaining_percentage: 88,
+    },
+    token_status: { accessAvailable: true, refreshAvailable: true, expired: false, timeLeft: 3600 },
+  }, null);
+  assert.notEqual(leftover429.status, "SYNC_FAILED");
+  assert.equal(leftover429.cursorAutoRemaining, 61);
+  assert.match(String(leftover429.warning || ""), /服务暂时不可用|额度暂时没刷到|没查清/);
   const probeBanned = mapCursorAccountForUi({
     id: "cursor_probe_banned",
     email: "probe-banned@example.com",
@@ -1451,6 +1635,60 @@ test("token validity bar uses update or create time when jwt iat is missing", ()
     },
   }, null, config);
   assert.ok(codex.tokenValidityPct > 45 && codex.tokenValidityPct < 55);
+});
+
+test("cursor and antigravity quota errors honor retry backoff", () => {
+  const {
+    mapCursorAccountForUi,
+    mapAntigravityAccountForUi,
+    needsQuotaAutoSync,
+  } = loadDesktopExports(bridge());
+  const retryAt = Math.floor(Date.now() / 1000) + 600;
+  const tokenStatus = { accessAvailable: true, refreshAvailable: true, expired: false, timeLeft: 3600 };
+  const cursor = mapCursorAccountForUi({
+    id: "cursor_retry",
+    email: "retry@example.com",
+    quota_error: { code: "probe_failed", message: "网络请求失败" },
+    quota_next_retry_at: retryAt,
+    token_status: tokenStatus,
+  }, null);
+  assert.equal(cursor.status, "SYNC_FAILED");
+  assert.equal(cursor.quotaNextRetryAt, retryAt);
+  assert.equal(needsQuotaAutoSync(cursor), false);
+
+  const cursorDue = mapCursorAccountForUi({
+    id: "cursor_due",
+    email: "due@example.com",
+    quota_error: { code: "probe_failed", message: "网络请求失败" },
+    quota_next_retry_at: Math.floor(Date.now() / 1000) - 10,
+    token_status: tokenStatus,
+  }, null);
+  assert.equal(needsQuotaAutoSync(cursorDue), true);
+
+  const antigravity = mapAntigravityAccountForUi({
+    id: "ag_retry",
+    email: "retry@example.com",
+    quota_error: { code: "probe_failed", message: "网络请求失败" },
+    quota_next_retry_at: retryAt,
+    token_status: tokenStatus,
+  }, null);
+  assert.equal(antigravity.status, "SYNC_FAILED");
+  assert.equal(antigravity.quotaNextRetryAt, retryAt);
+  assert.equal(needsQuotaAutoSync(antigravity), false);
+
+  const leftover = mapCursorAccountForUi({
+    id: "cursor_leftover_401",
+    email: "leftover@example.com",
+    requires_reauth: true,
+    usage_updated_at: Math.floor(Date.now() / 1000) - 7200,
+    quota_error: { code: "reauthorization_required", message: "Cursor 会话已过期或未认证，请重新授权" },
+    quota_next_retry_at: retryAt,
+    probe: { status: "token_invalid", error_code: "should_logout", http_status: 401 },
+    token_status: tokenStatus,
+  }, { id: "cursor_leftover_401" });
+  assert.equal(leftover.status, "SUSPENDED");
+  assert.equal(leftover.leftoverAccessUsable, true);
+  assert.equal(needsQuotaAutoSync(leftover), false);
 });
 
 test("antigravity quota cards and float use official family labels", () => {
@@ -1793,6 +2031,53 @@ test("oauth and import copy distinguish updated existing accounts", () => {
     product: "cursor",
     email: "fresh@example.com",
   }).message, "已导入 fresh@example.com");
+});
+
+test("antigravity leftover quota stays visible after a temporary miss", () => {
+  const { mapAntigravityAccountForUi, quotaHero, accountHasVisibleQuota } = loadDesktopExports(bridge());
+  const mapped = mapAntigravityAccountForUi({
+    id: "antigravity_leftover_net",
+    email: "leftover@example.com",
+    quota: {
+      gemini_weekly_remaining: 64,
+      gemini_five_hour_remaining: 80,
+    },
+    quota_error: { code: "probe_failed", message: "网络请求失败" },
+    token_status: {
+      accessAvailable: true,
+      refreshAvailable: true,
+      expired: false,
+      timeLeft: 2400,
+    },
+  }, null);
+  assert.notEqual(mapped.status, "SYNC_FAILED");
+  assert.equal(mapped.agGeminiWeeklyRemaining, 64);
+  assert.equal(accountHasVisibleQuota(mapped), true);
+  assert.equal(quotaHero(mapped).percent, 64);
+  assert.match(String(mapped.warning || ""), /额度暂时没刷到/);
+});
+
+test("antigravity leftover quota stays visible after a not-JSON miss", () => {
+  const { mapAntigravityAccountForUi, accountHasVisibleQuota } = loadDesktopExports(bridge());
+  const mapped = mapAntigravityAccountForUi({
+    id: "antigravity_leftover_json",
+    email: "leftover-json@example.com",
+    quota: {
+      gemini_weekly_remaining: 64,
+      gemini_five_hour_remaining: 80,
+    },
+    quota_error: { code: "invalid_usage_json", message: "Antigravity usage response was not JSON" },
+    token_status: {
+      accessAvailable: true,
+      refreshAvailable: true,
+      expired: false,
+      timeLeft: 2400,
+    },
+  }, null);
+  assert.notEqual(mapped.status, "SYNC_FAILED");
+  assert.equal(mapped.agGeminiWeeklyRemaining, 64);
+  assert.equal(accountHasVisibleQuota(mapped), true);
+  assert.match(String(mapped.warning || ""), /没查清|额度暂时没刷到/);
 });
 
 test("antigravity empty refresh maps to sync-failed not 暂无此项", () => {

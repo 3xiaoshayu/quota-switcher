@@ -585,6 +585,162 @@ test("usage account_deactivated does not force another token refresh", async t =
   assert.equal(err.probe.status, "banned");
 });
 
+test("quota refresh does not ask for reauth when an expired token hits HTTP 500", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "token-500@example.com", "acct-token-500", "token-500");
+  account.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+  account.tokens.refresh_token = "refresh-token-500";
+  engine.saveAcct(account);
+  const tokenRefresh = require("../engine/token-refresh");
+  const originalRefresh = tokenRefresh.refreshOneTok;
+  tokenRefresh.refreshOneTok = async () => ({
+    ok: false,
+    error: "HTTP 500 temporarily_unavailable",
+    revoked: false,
+    reauthRequired: false,
+  });
+  t.after(() => { tokenRefresh.refreshOneTok = originalRefresh; });
+  await assert.rejects(
+    () => engine.refreshQuota(engine.loadAcct(account.id), { force: true }),
+    /HTTP 500/,
+  );
+  const latest = engine.loadAcct(account.id);
+  assert.equal(latest.requires_reauth, false);
+  assert.doesNotMatch(String(latest.quota_error?.message || ""), /Token 已过期且刷新失败/);
+  assert.match(String(latest.quota_error?.message || ""), /HTTP 500/);
+  assert.ok(Number(latest.quota_next_retry_at) > Math.floor(Date.now() / 1000));
+  await assert.rejects(
+    () => engine.refreshQuota(engine.loadAcct(account.id), { force: false }),
+    /waiting for retry|quota_retry_pending/,
+  );
+});
+
+test("codex quota 429 honors Retry-After instead of a fixed 15 minutes", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "retry-after@example.com", "acct-retry-after", "retry-after");
+  account.quota = {
+    weekly_remaining_percentage: 81,
+    weekly_window_present: true,
+  };
+  engine.saveAcct(account);
+  const httpClient = require("../engine/http-client");
+  httpClient.setHttpJsonTransport(async () => ({
+    status: 429,
+    headers: { "retry-after": "45" },
+    body: JSON.stringify({ detail: { code: "rate_limit" } }),
+  }));
+  t.after(() => httpClient.setHttpJsonTransport(null));
+  const started = Math.floor(Date.now() / 1000);
+  await assert.rejects(
+    () => engine.refreshQuota(engine.loadAcct(account.id), { force: true }),
+    /429|rate.?limit/,
+  );
+  const latest = engine.loadAcct(account.id);
+  const delay = Number(latest.quota_next_retry_at) - started;
+  assert.ok(delay >= 45 && delay <= 90, `Retry-After 45s should beat the 15-minute default, got ${delay}s`);
+  assert.equal(latest.probe?.status, "probe_failed");
+  assert.notEqual(latest.probe?.status, "usage_limited");
+  assert.equal(latest.quota.weekly_remaining_percentage, 81);
+  assert.equal(latest.requires_reauth, false);
+  assert.equal(latest.banned, false);
+});
+
+test("codex quota 429 honors x-ratelimit-reset-requests when Retry-After is missing", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "reset-requests@example.com", "acct-reset-requests", "reset-requests");
+  const httpClient = require("../engine/http-client");
+  httpClient.setHttpJsonTransport(async () => ({
+    status: 429,
+    headers: { "x-ratelimit-reset-requests": "45s" },
+    body: JSON.stringify({ detail: { code: "rate_limit" } }),
+  }));
+  t.after(() => httpClient.setHttpJsonTransport(null));
+  const started = Math.floor(Date.now() / 1000);
+  await assert.rejects(
+    () => engine.refreshQuota(engine.loadAcct(account.id), { force: true }),
+    /429|rate.?limit/,
+  );
+  const latest = engine.loadAcct(account.id);
+  const delay = Number(latest.quota_next_retry_at) - started;
+  assert.ok(delay >= 45 && delay <= 90, `x-ratelimit-reset-requests 45s should beat the 15-minute default, got ${delay}s`);
+  assert.equal(latest.probe?.status, "probe_failed");
+  assert.equal(latest.requires_reauth, false);
+});
+
+test("codex quota 429 honors a fractional Retry-After instead of a fixed 15 minutes", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "retry-after-frac@example.com", "acct-retry-after-frac", "retry-after-frac");
+  const httpClient = require("../engine/http-client");
+  httpClient.setHttpJsonTransport(async () => ({
+    status: 429,
+    headers: { "retry-after": "45.2" },
+    body: JSON.stringify({ detail: { code: "rate_limit" } }),
+  }));
+  t.after(() => httpClient.setHttpJsonTransport(null));
+  const started = Math.floor(Date.now() / 1000);
+  await assert.rejects(
+    () => engine.refreshQuota(engine.loadAcct(account.id), { force: true }),
+    /429|rate.?limit/,
+  );
+  const latest = engine.loadAcct(account.id);
+  const delay = Number(latest.quota_next_retry_at) - started;
+  assert.ok(delay >= 45 && delay <= 90, `fractional Retry-After 45.2s should beat the 15-minute default, got ${delay}s`);
+  assert.equal(latest.probe?.status, "probe_failed");
+  assert.notEqual(latest.probe?.status, "usage_limited");
+});
+
+test("quota repair does not ask for reauth when token refresh hits HTTP 500", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "repair-500@example.com", "acct-repair-500", "repair-500");
+  const quotaModule = require("../engine/quota");
+  const originalRepair = quotaModule.fetchQuotaWithTokenRepair;
+  quotaModule.fetchQuotaWithTokenRepair = async (acct) => originalRepair(acct, {
+    fetchQuota: async () => {
+      throw new Error("HTTP 401 token_invalidated");
+    },
+    refreshOneTok: async () => ({
+      ok: false,
+      error: "HTTP 500 temporarily_unavailable",
+      revoked: false,
+      reauthRequired: false,
+    }),
+  });
+  t.after(() => { quotaModule.fetchQuotaWithTokenRepair = originalRepair; });
+  await assert.rejects(
+    () => quotaModule.refreshQuota(engine.loadAcct(account.id), { force: true }),
+    /HTTP 500/,
+  );
+  const latest = engine.loadAcct(account.id);
+  assert.equal(latest.requires_reauth, false);
+  assert.doesNotMatch(String(latest.quota_error?.message || ""), /Quota authorization could not be repaired|请重新授权|Token 已过期/);
+  assert.match(String(latest.quota_error?.message || ""), /HTTP 500/);
+  assert.ok(Number(latest.quota_next_retry_at) > Math.floor(Date.now() / 1000));
+});
+
+test("quota refresh still asks for reauth when an expired token is revoked", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "token-revoked@example.com", "acct-token-revoked", "token-revoked");
+  account.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+  account.tokens.refresh_token = "refresh-token-revoked";
+  engine.saveAcct(account);
+  const tokenRefresh = require("../engine/token-refresh");
+  const originalRefresh = tokenRefresh.refreshOneTok;
+  tokenRefresh.refreshOneTok = async () => ({
+    ok: false,
+    error: "invalid_grant",
+    revoked: true,
+    reauthRequired: true,
+  });
+  t.after(() => { tokenRefresh.refreshOneTok = originalRefresh; });
+  await assert.rejects(
+    () => engine.refreshQuota(engine.loadAcct(account.id), { force: true }),
+    /Token 已过期且刷新失败/,
+  );
+  const latest = engine.loadAcct(account.id);
+  assert.match(String(latest.quota_error?.message || ""), /请重新授权/);
+  assert.doesNotMatch(String(latest.quota_error?.message || ""), /额度暂时没刷到|服务暂时不可用/);
+});
+
 test("refresh success plus usage account_deactivated keeps the new refresh token", async t => {
   const { engine } = freshEngine(t);
   const account = await addAccount(engine, "banned@example.com", "acct-banned", "banned");
@@ -1818,6 +1974,53 @@ test("token refresh skips revoked accounts until reauthorization", async t => {
   assert.equal(result.code, "refresh_token_invalidated");
   assert.equal(refreshCalled, false);
   assert.equal(engine.loadAcct(account.id).quota_error.code, "refresh_token_invalidated");
+});
+
+test("auto-switch does not leave the current account after a 429 rate_limit miss", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "as-429-cur@example.com", "acct-as-429-cur", "as-429-cur");
+  const other = await addAccount(engine, "as-429-other@example.com", "acct-as-429-other", "as-429-other");
+  current.quota = {
+    weekly_remaining_percentage: 81,
+    weekly_window_present: true,
+    hourly_window_present: false,
+  };
+  current.usage_updated_at = engine.ts();
+  engine.saveAcct(current);
+  other.quota = {
+    weekly_remaining_percentage: 90,
+    weekly_window_present: true,
+    hourly_window_present: false,
+  };
+  other.usage_updated_at = engine.ts();
+  engine.saveAcct(other);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(current);
+  engine.writeProjection(current, auth);
+  const httpClient = require("../engine/http-client");
+  httpClient.setHttpJsonTransport(async () => ({
+    status: 429,
+    headers: { "retry-after": "45" },
+    body: JSON.stringify({ detail: { code: "rate_limit" } }),
+  }));
+  t.after(() => httpClient.setHttpJsonTransport(null));
+  await assert.rejects(
+    () => engine.refreshQuota(engine.loadAcct(current.id), { force: true }),
+    /429|rate.?limit/,
+  );
+  assert.equal(engine.loadAcct(current.id).probe?.status, "probe_failed");
+  const result = await engine.autoSwitchTick({
+    enabled: true,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+  });
+  assert.equal(result.switched, false);
+  assert.equal(result.reason, "quota_sufficient");
+  assert.equal(engine.loadIdx().current_account_id, current.id);
 });
 
 test("auto-switch refuses to use stale quota after current refresh failure", async t => {
@@ -5516,6 +5719,260 @@ test("token refresh sends a form-encoded OAuth request", async t => {
   assert.ok(params.get("refresh_token"));
 });
 
+test("token refresh keeps the old refresh token when the new one is blank", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "blank-rt@example.com", "acct-blank-rt", "blank-rt");
+  const previousRefresh = account.tokens.refresh_token;
+  account.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+  engine.saveAcct(account);
+  const nextAccess = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
+  const { refreshOneTok } = require("../engine/token-refresh");
+  const result = await refreshOneTok(engine.loadAcct(account.id), {
+    force: true,
+    httpJson: async () => ({
+      status: 200,
+      headers: {},
+      body: JSON.stringify({ access_token: nextAccess, refresh_token: "   " }),
+    }),
+  });
+  assert.equal(result.ok, true);
+  const stored = engine.loadAcct(account.id);
+  assert.equal(stored.tokens.access_token, nextAccess);
+  assert.equal(stored.tokens.refresh_token, previousRefresh);
+  assert.notEqual(stored.tokens.refresh_token, "   ");
+  assert.equal(stored.requires_reauth, false);
+});
+
+test("token refresh still rotates when a new refresh token is present", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "rotate-rt@example.com", "acct-rotate-rt", "rotate-rt");
+  account.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+  engine.saveAcct(account);
+  const next = tokens("rotate-rt@example.com", "acct-rotate-rt", "rotate-rt-next");
+  const { refreshOneTok } = require("../engine/token-refresh");
+  const result = await refreshOneTok(engine.loadAcct(account.id), {
+    force: true,
+    httpJson: async () => ({
+      status: 200,
+      headers: {},
+      body: JSON.stringify({
+        id_token: next.id_token,
+        access_token: next.access_token,
+        refresh_token: next.refresh_token,
+      }),
+    }),
+  });
+  assert.equal(result.ok, true);
+  const stored = engine.loadAcct(account.id);
+  assert.equal(stored.tokens.refresh_token, "refresh-rotate-rt-next");
+  assert.equal(stored.requires_reauth, false);
+});
+
+test("token refresh backs off after a network miss and does not replay until then", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "token-net-retry@example.com", "acct-token-net-retry", "token-net-retry");
+  account.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+  engine.saveAcct(account);
+  let calls = 0;
+  const { refreshOneTok } = require("../engine/token-refresh");
+  const request = async () => {
+    calls += 1;
+    const error = new Error("getaddrinfo ENOTFOUND auth.openai.com");
+    error.code = "ENOTFOUND";
+    throw error;
+  };
+  const first = await refreshOneTok(engine.loadAcct(account.id), { force: true, httpJson: request });
+  assert.equal(first.ok, false);
+  assert.equal(first.revoked, false);
+  assert.match(first.error, /ENOTFOUND/);
+  const stored = engine.loadAcct(account.id);
+  assert.equal(stored.requires_reauth, false);
+  assert.ok(Number(stored.token_next_retry_at) > Math.floor(Date.now() / 1000));
+  const second = await refreshOneTok(engine.loadAcct(account.id), { force: false, httpJson: request });
+  assert.equal(second.ok, false);
+  assert.match(second.error, /ENOTFOUND/);
+  assert.equal(calls, 1);
+});
+
+test("token refresh backs off after HTTP 500 and does not replay until then", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "token-500-retry@example.com", "acct-token-500-retry", "token-500-retry");
+  account.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+  engine.saveAcct(account);
+  let calls = 0;
+  const { refreshOneTok } = require("../engine/token-refresh");
+  const request = async () => {
+    calls += 1;
+    return { status: 500, headers: {}, body: JSON.stringify({ error: "temporarily_unavailable" }) };
+  };
+  const first = await refreshOneTok(engine.loadAcct(account.id), { force: true, httpJson: request });
+  assert.equal(first.ok, false);
+  assert.equal(first.revoked, false);
+  assert.match(first.error, /500/);
+  const stored = engine.loadAcct(account.id);
+  assert.equal(stored.requires_reauth, false);
+  assert.ok(Number(stored.token_next_retry_at) > Math.floor(Date.now() / 1000));
+  const second = await refreshOneTok(engine.loadAcct(account.id), { force: false, httpJson: request });
+  assert.equal(second.ok, false);
+  assert.match(second.error, /500/);
+  assert.equal(calls, 1);
+});
+
+test("token refresh honors Retry-After on HTTP 429 and does not replay until then", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "token-429@example.com", "acct-token-429", "token-429");
+  account.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+  engine.saveAcct(account);
+  let calls = 0;
+  const { refreshOneTok } = require("../engine/token-refresh");
+  const request = async () => {
+    calls += 1;
+    return { status: 429, headers: { "retry-after": "45" }, body: "rate limited" };
+  };
+  const first = await refreshOneTok(engine.loadAcct(account.id), { force: true, httpJson: request });
+  assert.equal(first.ok, false);
+  assert.equal(first.revoked, false);
+  assert.match(first.error, /429/);
+  const stored = engine.loadAcct(account.id);
+  assert.equal(stored.requires_reauth, false);
+  const delay = Number(stored.token_next_retry_at) - Math.floor(Date.now() / 1000);
+  assert.ok(delay >= 45 && delay <= 90, `Retry-After 45s should beat the 15-minute default, got ${delay}s`);
+  const second = await refreshOneTok(engine.loadAcct(account.id), { force: false, httpJson: request });
+  assert.equal(second.ok, false);
+  assert.match(second.error, /429/);
+  assert.equal(calls, 1);
+  const third = await refreshOneTok(engine.loadAcct(account.id), { force: true, httpJson: request });
+  assert.equal(third.ok, false);
+  assert.equal(calls, 2);
+});
+
+test("token refresh honors a fractional Retry-After on HTTP 429", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "token-429-frac@example.com", "acct-token-429-frac", "token-429-frac");
+  account.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+  engine.saveAcct(account);
+  let calls = 0;
+  const { refreshOneTok } = require("../engine/token-refresh");
+  const request = async () => {
+    calls += 1;
+    return { status: 429, headers: { "retry-after": "45.2" }, body: "rate limited" };
+  };
+  const first = await refreshOneTok(engine.loadAcct(account.id), { force: true, httpJson: request });
+  assert.equal(first.ok, false);
+  assert.equal(first.revoked, false);
+  const stored = engine.loadAcct(account.id);
+  const delay = Number(stored.token_next_retry_at) - Math.floor(Date.now() / 1000);
+  assert.ok(delay >= 45 && delay <= 90, `fractional Retry-After 45.2s should beat the 15-minute default, got ${delay}s`);
+  const second = await refreshOneTok(engine.loadAcct(account.id), { force: false, httpJson: request });
+  assert.equal(second.ok, false);
+  assert.equal(calls, 1);
+});
+
+test("token refresh treats an HTML interstitial as a temporary miss", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "html-token@example.com", "acct-html-token", "html-token");
+  account.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+  engine.saveAcct(account);
+  const { refreshOneTok } = require("../engine/token-refresh");
+  const result = await refreshOneTok(engine.loadAcct(account.id), {
+    force: true,
+    httpJson: async () => ({
+      status: 200,
+      headers: { "content-type": "text/html" },
+      body: "<!DOCTYPE html><html><body>captive portal</body></html>",
+    }),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.revoked, false);
+  assert.equal(result.reauthRequired, undefined);
+  assert.match(result.error, /响应不是 JSON/);
+  const persisted = engine.loadAcct(account.id);
+  assert.equal(persisted.requires_reauth, false);
+  assert.ok(Number(persisted.token_next_retry_at) > Math.floor(Date.now() / 1000));
+  let calls = 0;
+  const again = await refreshOneTok(engine.loadAcct(account.id), {
+    force: false,
+    httpJson: async () => {
+      calls += 1;
+      return { status: 200, body: "<html></html>" };
+    },
+  });
+  assert.equal(again.ok, false);
+  assert.equal(calls, 0);
+});
+
+test("token refresh backs off after an empty JSON 200 and does not replay until then", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "empty-token@example.com", "acct-empty-token", "empty-token");
+  account.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+  engine.saveAcct(account);
+  let calls = 0;
+  const { refreshOneTok } = require("../engine/token-refresh");
+  const request = async () => {
+    calls += 1;
+    return { status: 200, headers: { "content-type": "application/json" }, body: "{}" };
+  };
+  const first = await refreshOneTok(engine.loadAcct(account.id), { force: true, httpJson: request });
+  assert.equal(first.ok, false);
+  assert.equal(first.revoked, false);
+  assert.equal(first.reauthRequired, undefined);
+  assert.match(first.error, /响应无 access_token/);
+  const stored = engine.loadAcct(account.id);
+  assert.equal(stored.requires_reauth, false);
+  assert.ok(Number(stored.token_next_retry_at) > Math.floor(Date.now() / 1000));
+  const second = await refreshOneTok(engine.loadAcct(account.id), { force: false, httpJson: request });
+  assert.equal(second.ok, false);
+  assert.match(second.error, /响应无 access_token/);
+  assert.equal(calls, 1);
+});
+
+test("token refresh treats a blank access_token as a temporary miss", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "blank-token@example.com", "acct-blank-token", "blank-token");
+  const expired = jwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+  account.tokens.access_token = expired;
+  engine.saveAcct(account);
+  let calls = 0;
+  const { refreshOneTok } = require("../engine/token-refresh");
+  const request = async () => {
+    calls += 1;
+    return { status: 200, headers: {}, body: JSON.stringify({ access_token: "   " }) };
+  };
+  const first = await refreshOneTok(engine.loadAcct(account.id), { force: true, httpJson: request });
+  assert.equal(first.ok, false);
+  assert.equal(first.revoked, false);
+  assert.match(first.error, /响应无 access_token/);
+  const stored = engine.loadAcct(account.id);
+  assert.equal(stored.requires_reauth, false);
+  assert.equal(stored.tokens.access_token, expired);
+  assert.ok(Number(stored.token_next_retry_at) > Math.floor(Date.now() / 1000));
+  const second = await refreshOneTok(engine.loadAcct(account.id), { force: false, httpJson: request });
+  assert.equal(second.ok, false);
+  assert.equal(calls, 1);
+});
+
+test("token refresh still marks reauth when HTTP 200 JSON carries invalid_grant", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "empty-grant@example.com", "acct-empty-grant", "empty-grant");
+  account.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+  engine.saveAcct(account);
+  const { refreshOneTok } = require("../engine/token-refresh");
+  const result = await refreshOneTok(engine.loadAcct(account.id), {
+    force: true,
+    httpJson: async () => ({
+      status: 200,
+      headers: {},
+      body: JSON.stringify({ error: "invalid_grant" }),
+    }),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.revoked, true);
+  assert.equal(result.reauthRequired, true);
+  const persisted = engine.loadAcct(account.id);
+  assert.equal(persisted.requires_reauth, true);
+  assert.ok(!persisted.token_next_retry_at);
+});
+
 test("an invalid_refresh_token error marks the account for reauthorization", async t => {
   const { engine } = freshEngine(t);
   const account = await addAccount(engine, "invalid-rt@example.com", "acct-invalid-rt", "invalid-rt");
@@ -5898,6 +6355,17 @@ test("network proxy state does not restore a stale backup on a non-JSON filesyst
   assert.equal(JSON.parse(fs.readFileSync(`${NETWORK_FILE}.bak`, "utf8")).keep, "stale");
 });
 
+test("a failed lastGood proxy is forgotten so the next resolve can go elsewhere", (t) => {
+  const { engine } = freshEngine(t);
+  const { persistLastGood, markProxyFailed, loadNetworkState, resetFailedProxiesForTests, NETWORK_FILE } = require("../engine/proxy-resolve");
+  engine.ensureDir(path.dirname(NETWORK_FILE));
+  persistLastGood({ source: "env", proxyUrl: "http://127.0.0.1:7890" });
+  assert.equal(loadNetworkState().lastGood.proxyUrl, "http://127.0.0.1:7890");
+  markProxyFailed("http://127.0.0.1:7890");
+  assert.equal(loadNetworkState().lastGood, null);
+  resetFailedProxiesForTests();
+});
+
 test("network proxy state ignores a stale backup when the file is missing", (t) => {
   const { engine } = freshEngine(t);
   const { loadNetworkState, NETWORK_FILE } = require("../engine/proxy-resolve");
@@ -5917,7 +6385,7 @@ test("Cursor http.proxy survives a transient settings lock", async (t) => {
   const settingsDir = path.join(appdata, "Cursor", "User");
   engine.ensureDir(settingsDir);
   const settingsPath = path.join(settingsDir, "settings.json");
-  fs.writeFileSync(settingsPath, JSON.stringify({ "http.proxy": "http://127.0.0.1:7890" }), "utf8");
+  fs.writeFileSync(settingsPath, JSON.stringify({ "http.proxy": "http://127.0.0.1:17890" }), "utf8");
   process.env.APPDATA = appdata;
   t.after(() => {
     process.env.APPDATA = previousAppdata;
@@ -5940,7 +6408,7 @@ test("Cursor http.proxy survives a transient settings lock", async (t) => {
     extraPorts: [],
     pacRule: "",
   });
-  assert.ok(found.some((item) => item.source === "cursor" && item.proxyUrl === "http://127.0.0.1:7890"));
+  assert.ok(found.some((item) => item.source === "cursor" && item.proxyUrl === "http://127.0.0.1:17890"));
   assert.equal(failures, 2);
 });
 
@@ -5952,7 +6420,7 @@ test("Cursor http.proxy still loads when the first JSON parse sees a torn write"
   const settingsDir = path.join(appdata, "Cursor", "User");
   engine.ensureDir(settingsDir);
   const settingsPath = path.join(settingsDir, "settings.json");
-  fs.writeFileSync(settingsPath, JSON.stringify({ "http.proxy": "http://127.0.0.1:7890" }), "utf8");
+  fs.writeFileSync(settingsPath, JSON.stringify({ "http.proxy": "http://127.0.0.1:17890" }), "utf8");
   process.env.APPDATA = appdata;
   t.after(() => {
     process.env.APPDATA = previousAppdata;
@@ -5964,7 +6432,7 @@ test("Cursor http.proxy still loads when the first JSON parse sees a torn write"
     extraPorts: [],
     pacRule: "",
   });
-  assert.ok(found.some((item) => item.source === "cursor" && item.proxyUrl === "http://127.0.0.1:7890"));
+  assert.ok(found.some((item) => item.source === "cursor" && item.proxyUrl === "http://127.0.0.1:17890"));
 });
 
 test("Cursor http.proxy still reads JSONC settings after parse retries", async (t) => {
@@ -5977,7 +6445,7 @@ test("Cursor http.proxy still reads JSONC settings after parse retries", async (
   const settingsPath = path.join(settingsDir, "settings.json");
   fs.writeFileSync(settingsPath, `{
   // Cursor JSONC
-  "http.proxy": "http://127.0.0.1:7890",
+  "http.proxy": "http://127.0.0.1:17890",
 }`, "utf8");
   process.env.APPDATA = appdata;
   t.after(() => {
@@ -5989,7 +6457,7 @@ test("Cursor http.proxy still reads JSONC settings after parse retries", async (
     extraPorts: [],
     pacRule: "",
   });
-  assert.ok(found.some((item) => item.source === "cursor" && item.proxyUrl === "http://127.0.0.1:7890"));
+  assert.ok(found.some((item) => item.source === "cursor" && item.proxyUrl === "http://127.0.0.1:17890"));
 });
 
 test("atomic writes retry when the target file is transiently locked", t => {
@@ -6949,6 +7417,305 @@ test("the daemon still records a real current quota refresh failure", async t =>
   const worker = await engine.runDaemonWorker();
   assert.equal(worker.autoSwitchResult?.reason, "current_quota_refresh_failed");
   assert.ok(worker.failures.some((item) => item.stage === "auto_switch" && /network unavailable/.test(item.message)));
+});
+
+test("the daemon does not toast a transient quota network miss as a worker failure", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "daemon-quota-net@example.com", "acct-daemon-quota-net", "daemon-quota-net");
+  engine.saveAcct(current);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  engine.saveAutoSwitchCfg({
+    enabled: false,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+    sync_interval_minutes: 60,
+  });
+  const quotaModule = require("../engine/quota");
+  const originalRefresh = quotaModule.refreshQuota;
+  quotaModule.refreshQuota = async () => { throw new Error("connect ECONNREFUSED 127.0.0.1:7890"); };
+  t.after(() => { quotaModule.refreshQuota = originalRefresh; });
+  const worker = await engine.runDaemonWorker();
+  assert.equal(worker.autoSwitchResult, null);
+  assert.ok(!worker.failures.some((item) => item.stage === "quota_refresh"));
+  assert.equal(worker.failures.length, 0);
+});
+
+test("the daemon does not toast an IPv6 unreachable quota miss as a worker failure", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "daemon-quota-v6@example.com", "acct-daemon-quota-v6", "daemon-quota-v6");
+  engine.saveAcct(current);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  engine.saveAutoSwitchCfg({
+    enabled: false,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+    sync_interval_minutes: 60,
+  });
+  const quotaModule = require("../engine/quota");
+  const originalRefresh = quotaModule.refreshQuota;
+  quotaModule.refreshQuota = async () => { throw new Error("connect ENETUNREACH 2606:4700::1:443"); };
+  t.after(() => { quotaModule.refreshQuota = originalRefresh; });
+  const worker = await engine.runDaemonWorker();
+  assert.equal(worker.autoSwitchResult, null);
+  assert.ok(!worker.failures.some((item) => item.stage === "quota_refresh"));
+  assert.equal(worker.failures.length, 0);
+});
+
+test("the daemon does not toast an engine worker timeout as a worker failure", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "daemon-quota-worker@example.com", "acct-daemon-quota-worker", "daemon-quota-worker");
+  engine.saveAcct(current);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  engine.saveAutoSwitchCfg({
+    enabled: false,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+    sync_interval_minutes: 60,
+  });
+  const quotaModule = require("../engine/quota");
+  const originalRefresh = quotaModule.refreshQuota;
+  const workerTimeout = new Error("Engine worker timed out");
+  workerTimeout.code = "engine_worker_down";
+  quotaModule.refreshQuota = async () => { throw workerTimeout; };
+  t.after(() => { quotaModule.refreshQuota = originalRefresh; });
+  const worker = await engine.runDaemonWorker();
+  assert.equal(worker.autoSwitchResult, null);
+  assert.ok(!worker.failures.some((item) => item.stage === "quota_refresh"));
+  assert.equal(worker.failures.length, 0);
+});
+
+test("the daemon does not toast an HTTP 500 quota miss as a worker failure", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "daemon-quota-500@example.com", "acct-daemon-quota-500", "daemon-quota-500");
+  engine.saveAcct(current);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  engine.saveAutoSwitchCfg({
+    enabled: false,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+    sync_interval_minutes: 60,
+  });
+  const quotaModule = require("../engine/quota");
+  const originalRefresh = quotaModule.refreshQuota;
+  quotaModule.refreshQuota = async () => { throw new Error("HTTP 500 temporarily_unavailable"); };
+  t.after(() => { quotaModule.refreshQuota = originalRefresh; });
+  const worker = await engine.runDaemonWorker();
+  assert.equal(worker.autoSwitchResult, null);
+  assert.ok(!worker.failures.some((item) => item.stage === "quota_refresh"));
+  assert.equal(worker.failures.length, 0);
+});
+
+test("the daemon does not toast a not-JSON quota miss as a worker failure", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "daemon-quota-json@example.com", "acct-daemon-quota-json", "daemon-quota-json");
+  engine.saveAcct(current);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  engine.saveAutoSwitchCfg({
+    enabled: false,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+    sync_interval_minutes: 60,
+  });
+  const quotaModule = require("../engine/quota");
+  const originalRefresh = quotaModule.refreshQuota;
+  quotaModule.refreshQuota = async () => { throw new Error("这次没查清额度，请稍后重试。"); };
+  t.after(() => { quotaModule.refreshQuota = originalRefresh; });
+  const worker = await engine.runDaemonWorker();
+  assert.equal(worker.autoSwitchResult, null);
+  assert.ok(!worker.failures.some((item) => item.stage === "quota_refresh"));
+  assert.equal(worker.failures.length, 0);
+});
+
+test("the daemon does not toast an empty token JSON miss as a worker failure", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "daemon-empty-token@example.com", "acct-daemon-empty-token", "daemon-empty-token");
+  engine.saveAcct(current);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  engine.saveAutoSwitchCfg({
+    enabled: false,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+    sync_interval_minutes: 60,
+  });
+  const quotaModule = require("../engine/quota");
+  const originalRefresh = quotaModule.refreshQuota;
+  quotaModule.refreshQuota = async () => { throw new Error("响应无 access_token"); };
+  t.after(() => { quotaModule.refreshQuota = originalRefresh; });
+  const worker = await engine.runDaemonWorker();
+  assert.equal(worker.autoSwitchResult, null);
+  assert.ok(!worker.failures.some((item) => item.stage === "quota_refresh"));
+  assert.equal(worker.failures.length, 0);
+});
+
+test("the daemon does not toast an HTML token miss as a worker failure", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "daemon-html-token@example.com", "acct-daemon-html-token", "daemon-html-token");
+  engine.saveAcct(current);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  engine.saveAutoSwitchCfg({
+    enabled: false,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+    sync_interval_minutes: 60,
+  });
+  const quotaModule = require("../engine/quota");
+  const originalRefresh = quotaModule.refreshQuota;
+  quotaModule.refreshQuota = async () => { throw new Error("响应不是 JSON"); };
+  t.after(() => { quotaModule.refreshQuota = originalRefresh; });
+  const worker = await engine.runDaemonWorker();
+  assert.equal(worker.autoSwitchResult, null);
+  assert.ok(!worker.failures.some((item) => item.stage === "quota_refresh"));
+  assert.equal(worker.failures.length, 0);
+});
+
+test("the daemon does not toast an HTTP 429 quota miss as a worker failure", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "daemon-quota-429@example.com", "acct-daemon-quota-429", "daemon-quota-429");
+  engine.saveAcct(current);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  engine.saveAutoSwitchCfg({
+    enabled: false,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+    sync_interval_minutes: 60,
+  });
+  const quotaModule = require("../engine/quota");
+  const originalRefresh = quotaModule.refreshQuota;
+  quotaModule.refreshQuota = async () => { throw new Error("HTTP 429"); };
+  t.after(() => { quotaModule.refreshQuota = originalRefresh; });
+  const worker = await engine.runDaemonWorker();
+  assert.equal(worker.autoSwitchResult, null);
+  assert.ok(!worker.failures.some((item) => item.stage === "quota_refresh"));
+  assert.equal(worker.failures.length, 0);
+});
+
+test("the daemon does not toast an undici proxy socket miss as a worker failure", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "daemon-quota-undici@example.com", "acct-daemon-quota-undici", "daemon-quota-undici");
+  engine.saveAcct(current);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  engine.saveAutoSwitchCfg({
+    enabled: false,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+    sync_interval_minutes: 60,
+  });
+  const quotaModule = require("../engine/quota");
+  const originalRefresh = quotaModule.refreshQuota;
+  quotaModule.refreshQuota = async () => {
+    const error = new Error("UND_ERR_SOCKET: other side closed");
+    error.code = "UND_ERR_SOCKET";
+    throw error;
+  };
+  t.after(() => { quotaModule.refreshQuota = originalRefresh; });
+  const worker = await engine.runDaemonWorker();
+  assert.equal(worker.autoSwitchResult, null);
+  assert.ok(!worker.failures.some((item) => item.stage === "quota_refresh"));
+  assert.equal(worker.failures.length, 0);
+});
+
+test("the daemon does not toast a dropped proxy pipe as a worker failure", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "daemon-quota-pipe@example.com", "acct-daemon-quota-pipe", "daemon-quota-pipe");
+  engine.saveAcct(current);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  engine.saveAutoSwitchCfg({
+    enabled: false,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+    sync_interval_minutes: 60,
+  });
+  const quotaModule = require("../engine/quota");
+  const originalRefresh = quotaModule.refreshQuota;
+  quotaModule.refreshQuota = async () => { throw new Error("write EPIPE"); };
+  t.after(() => { quotaModule.refreshQuota = originalRefresh; });
+  const worker = await engine.runDaemonWorker();
+  assert.equal(worker.autoSwitchResult, null);
+  assert.ok(!worker.failures.some((item) => item.stage === "quota_refresh"));
+  assert.equal(worker.failures.length, 0);
+});
+
+test("the daemon does not toast a transient token network miss as a worker failure", async t => {
+  const { engine } = freshEngine(t);
+  const current = await addAccount(engine, "daemon-token-net@example.com", "acct-daemon-token-net", "daemon-token-net");
+  current.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+  engine.saveAcct(current);
+  const index = engine.loadIdx();
+  index.current_account_id = current.id;
+  engine.saveIdx(index);
+  engine.saveAutoSwitchCfg({
+    enabled: false,
+    primary_threshold: 20,
+    secondary_threshold: 30,
+    account_scope_mode: "all",
+    selected_account_ids: [],
+    sync_interval_minutes: 60,
+  });
+  const tokenRefresh = require("../engine/token-refresh");
+  const originalRefresh = tokenRefresh.refreshOneTok;
+  tokenRefresh.refreshOneTok = async () => ({
+    ok: false,
+    error: "网络请求失败 (auth.openai.com)。详情：请求超时",
+  });
+  t.after(() => { tokenRefresh.refreshOneTok = originalRefresh; });
+  const worker = await engine.runDaemonWorker();
+  assert.ok(!worker.failures.some((item) => item.stage === "token_refresh"));
+});
+
+test("the daemon does not toast a transient ban-probe network miss as a worker failure", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "daemon-probe-net@example.com", "acct-daemon-probe-net", "daemon-probe-net");
+  account.requires_reauth = true;
+  account.quota_error = { code: "refresh_token_invalidated", message: "keep me", timestamp: engine.ts() };
+  engine.saveAcct(account);
+  const quotaModule = require("../engine/quota");
+  const originalProbe = quotaModule.probeUsageOnly;
+  quotaModule.probeUsageOnly = async () => {
+    throw new Error("网络请求失败 (chatgpt.com)。详情：请求超时");
+  };
+  t.after(() => { quotaModule.probeUsageOnly = originalProbe; });
+  const worker = await engine.runDaemonWorker();
+  assert.equal(worker.failures.filter((item) => item.stage === "ban_probe").length, 0);
 });
 
 test("auto-switch config still keeps the primary file when the first JSON parse is torn", (t) => {
@@ -8149,7 +8916,7 @@ test("mapLimit caps concurrent mappers", async (t) => {
   assert.equal(max, 3);
 });
 
-test("quota refreshAll skips accounts waiting to retry", async () => {
+test("quota refreshAll still refreshes accounts waiting to retry", async () => {
   const handlers = new Map();
   let quotaRefreshCount = 0;
   const electron = {
@@ -8196,10 +8963,11 @@ test("quota refreshAll skips accounts waiting to retry", async () => {
   registerIpcHandlers(engine, { electron });
   const allQuotas = await handlers.get("quota:refreshAll")({});
   assert.equal(allQuotas.success, true);
-  assert.equal(allQuotas.data[0].skipped, true);
-  assert.equal(allQuotas.data[0].reason, "quota_retry_pending");
+  assert.equal(allQuotas.data[0].id, waiting.id);
+  assert.equal(allQuotas.data[0].skipped, undefined);
+  assert.equal(allQuotas.data[0].quota.hourly_remaining_percentage, 50);
   assert.equal(allQuotas.data[1].id, ready.id);
-  assert.equal(quotaRefreshCount, 1);
+  assert.equal(quotaRefreshCount, 2);
 });
 
 test("desktop snapshot IPC returns public accounts without secrets", async (t) => {

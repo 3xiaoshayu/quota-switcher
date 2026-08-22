@@ -1,9 +1,10 @@
 const { TOKEN_URL, CLIENT_ID } = require("./config");
 const { ts, isTokenExpired, isExpiryStale, jwtExp } = require("./crypto-utils");
-const { httpJson, extractErrorCode } = require("./http-client");
+const { httpJson, extractErrorCode, isTransientNetworkError } = require("./http-client");
 const { saveAcct, loadAcct, listAccts, loadIdx } = require("./storage");
 const { writeAuthJson, writeProjection } = require("./switch");
 const { withAccountLock, mapLimit } = require("./operation-locks");
+const { clearTokenRetry, scheduleTokenRetry, tokenRetryPending } = require("./quota-retry");
 
 const REAUTH_ERROR_CODES = new Set([
   "invalid_grant",
@@ -130,6 +131,9 @@ async function refreshOneTok(acct, options = {}) {
     markRequiresReauth(acct, "missing_refresh_token", "This account has no refresh token.");
     return { ok: false, error: "缺少 refresh_token", revoked: true, reauthRequired: true, code: "missing_refresh_token" };
   }
+  if (tokenRetryPending(acct, force)) {
+    return { ok: false, error: acct.token_retry_error || "HTTP 429", revoked: false };
+  }
   // OAuth 2.0 token endpoints expect form encoding (RFC 6749); this also
   // matches the current official Codex client behavior.
   const body = new URLSearchParams({
@@ -143,6 +147,32 @@ async function refreshOneTok(acct, options = {}) {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       idempotent: false,
     });
+    if (resp.status === 429) {
+      const code = extractErrorCode(resp.body);
+      scheduleTokenRetry(acct, {
+        message: tokenRefreshError(429, code),
+        retryAfter: resp.headers?.["retry-after"] || resp.headers?.["Retry-After"],
+        headers: resp.headers,
+      });
+      saveAcct(acct);
+      return {
+        ok: false,
+        error: tokenRefreshError(429, code),
+        revoked: false,
+        code: code || "http_429",
+      };
+    }
+    if (resp.status >= 500) {
+      const code = extractErrorCode(resp.body);
+      scheduleTokenRetry(acct, { message: tokenRefreshError(resp.status, code), headers: resp.headers });
+      saveAcct(acct);
+      return {
+        ok: false,
+        error: tokenRefreshError(resp.status, code),
+        revoked: false,
+        code: code || `http_${resp.status}`,
+      };
+    }
     if (resp.status >= 400) {
       const code = extractErrorCode(resp.body);
       const revoked = isReauthErrorCode(code) || isReauthErrorText(resp.body);
@@ -157,11 +187,36 @@ async function refreshOneTok(acct, options = {}) {
         detail: resp.body.slice(0, 300),
       };
     }
-    const data = JSON.parse(resp.body);
+    let data;
+    try {
+      data = JSON.parse(resp.body);
+    } catch {
+      scheduleTokenRetry(acct, { message: "响应不是 JSON" });
+      saveAcct(acct);
+      return { ok: false, error: "响应不是 JSON", revoked: false };
+    }
     const idTok = data.id_token || acct.tokens.id_token;
-    const accTok = data.access_token || "";
-    const refTok = data.refresh_token || acct.tokens.refresh_token;
-    if (!accTok) return { ok: false, error: "响应无 access_token", revoked: false };
+    const accTok = String(data.access_token || "").trim();
+    const refTok = String(data.refresh_token || "").trim() || acct.tokens.refresh_token;
+    if (!accTok) {
+      const code = extractErrorCode(resp.body);
+      const revoked = isReauthErrorCode(code) || isReauthErrorText(resp.body);
+      if (revoked) {
+        markRequiresReauth(acct, code, resp.body.slice(0, 300));
+        return {
+          ok: false,
+          skipped: true,
+          reauthRequired: true,
+          error: tokenRefreshError(resp.status, code),
+          revoked: true,
+          code,
+          detail: resp.body.slice(0, 300),
+        };
+      }
+      scheduleTokenRetry(acct, { message: "响应无 access_token" });
+      saveAcct(acct);
+      return { ok: false, error: "响应无 access_token", revoked: false };
+    }
 
     acct.tokens = {
       id_token: String(idTok),
@@ -174,10 +229,15 @@ async function refreshOneTok(acct, options = {}) {
     acct.quota_error = null;
     acct.requires_reauth = false;
     acct.reauth_reason = null;
+    clearTokenRetry(acct);
     saveAcct(acct);
     syncCurrentAuthIfNeeded(acct);
     return { ok: true, skipped: false, gen: acct.token_generation };
   } catch (err) {
+    if (isTransientNetworkError(err)) {
+      scheduleTokenRetry(acct, err);
+      saveAcct(acct);
+    }
     return { ok: false, error: err.message, revoked: false };
   }
 }

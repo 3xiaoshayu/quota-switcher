@@ -1,8 +1,11 @@
 const http = require("node:http");
 const https = require("node:https");
+const zlib = require("node:zlib");
 const { ProxyAgent } = require("proxy-agent");
 const { REFRESH_TIMEOUT } = require("./config");
-const { resolveLiveProxy, invalidateLiveProxy, hostLooksPoisoned, applySignatureToRuntime } = require("./proxy-resolve");
+function proxyResolve() {
+  return require("./proxy-resolve");
+}
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 
@@ -20,6 +23,51 @@ function concatUtf8Capped(chunks, maxBytes = MAX_JSON_BODY_BYTES) {
   for (const chunk of chunks) total += chunk.length;
   if (total > maxBytes) throw tooLargeError();
   return Buffer.concat(chunks).toString("utf8");
+}
+
+function stripUtf8Bom(text) {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
+function looksLikeGzip(buf) {
+  return buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b;
+}
+
+function contentEncoding(headers) {
+  const raw = headers?.["content-encoding"];
+  const first = Array.isArray(raw) ? raw[0] : raw;
+  return String(first || "").toLowerCase().split(",")[0].trim();
+}
+
+function decodeHttpBody(headers, chunks) {
+  const encoding = contentEncoding(headers);
+  const raw = Buffer.concat(chunks);
+  if (raw.length > MAX_JSON_BODY_BYTES) throw tooLargeError();
+  const sniffGzip = (!encoding || encoding === "identity") && looksLikeGzip(raw);
+  if ((!encoding || encoding === "identity") && !sniffGzip) {
+    return stripUtf8Bom(concatUtf8Capped(chunks));
+  }
+  let out = null;
+  try {
+    if (encoding === "gzip" || encoding === "x-gzip" || sniffGzip) {
+      out = zlib.gunzipSync(raw);
+    } else if (encoding === "deflate") {
+      try {
+        out = zlib.inflateSync(raw);
+      } catch {
+        out = zlib.inflateRawSync(raw);
+      }
+    } else {
+      return stripUtf8Bom(concatUtf8Capped(chunks));
+    }
+  } catch (error) {
+    const failed = new Error("响应解压失败");
+    failed.code = "response_decode_failed";
+    failed.cause = error;
+    throw failed;
+  }
+  if (out.length > MAX_JSON_BODY_BYTES) throw tooLargeError();
+  return stripUtf8Bom(out.toString("utf8"));
 }
 
 function delay(ms) {
@@ -47,17 +95,59 @@ function isTransientNetworkError(error) {
     text.includes("econnreset") ||
     text.includes("econnaborted") ||
     text.includes("etimedout") ||
+    text.includes("enotfound") ||
+    text.includes("eai_again") ||
+    text.includes("enetunreach") ||
+    text.includes("ehostunreach") ||
+    text.includes("eaddrnotavail") ||
+    text.includes("enetdown") ||
+    text.includes("ehostdown") ||
+    text.includes("epipe") ||
+    text.includes("und_err") ||
     text.includes("err_connection") ||
     text.includes("err_network") ||
     text.includes("network");
 }
 
-async function withOneRetry(label, task) {
+function isUnreachableProxyError(error) {
+  const text = errorMessage(error).toLowerCase();
+  return text.includes("econnrefused")
+    || text.includes("enotfound")
+    || text.includes("eai_again")
+    || text.includes("enetunreach")
+    || text.includes("ehostunreach")
+    || text.includes("eaddrnotavail")
+    || text.includes("enetdown")
+    || text.includes("ehostdown");
+}
+
+function isProxyGatewayStatus(status) {
+  const code = Number(status);
+  return code === 407 || code === 408 || code === 421 || code === 502 || code === 503 || code === 504
+    || code === 520 || code === 521 || code === 522 || code === 523 || code === 524
+    || code === 525 || code === 526 || code === 527 || code === 530;
+}
+
+function proxyGatewayError(status) {
+  const error = new Error(`HTTP ${status} proxy_gateway`);
+  error.code = "proxy_gateway";
+  error.status = status;
+  return error;
+}
+
+function remainingTimeout(deadline, fallback) {
+  if (!deadline) return fallback;
+  return Math.max(0, deadline - Date.now());
+}
+
+async function withOneRetry(label, task, deadline) {
   try {
     return await task();
   } catch (firstError) {
     if (!isTransientNetworkError(firstError)) throw firstError;
-    await delay(500);
+    const left = remainingTimeout(deadline, 0);
+    if (left < 150) throw firstError;
+    await delay(Math.min(500, Math.max(0, left - 80)));
     try {
       return await task();
     } catch (secondError) {
@@ -112,7 +202,33 @@ function getHttpJsonTransport() {
   return httpJsonTransport;
 }
 
-function nodeHttpJson(url, opts, headers, timeout, signature = null) {
+function isRedirectStatus(status) {
+  const code = Number(status);
+  return code === 301 || code === 302 || code === 303 || code === 307 || code === 308;
+}
+
+function canFollowRedirect(method) {
+  const verb = String(method || "GET").toUpperCase();
+  return verb === "GET" || verb === "HEAD";
+}
+
+function resolveRedirectUrl(currentUrl, location) {
+  const raw = String(location || "").trim();
+  if (!raw) return null;
+  try {
+    const next = new URL(raw, currentUrl);
+    if (next.protocol !== "http:" && next.protocol !== "https:") return null;
+    return next.toString();
+  } catch {
+    return null;
+  }
+}
+
+function nodeHttpJson(url, opts, headers, timeout, signature = null, hops = 0) {
+  if (!(timeout > 0)) {
+    return Promise.reject(new Error("请求超时"));
+  }
+  const startedAt = Date.now();
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const mod = u.protocol === "https:" ? https : http;
@@ -139,10 +255,32 @@ function nodeHttpJson(url, opts, headers, timeout, signature = null) {
       });
       res.on("end", () => {
         try {
-          finish(resolve, { status: res.statusCode, headers: res.headers, body: concatUtf8Capped(chunks) });
+          const status = res.statusCode;
+          const nextUrl = hops < 2 && canFollowRedirect(opts.method) && isRedirectStatus(status)
+            ? resolveRedirectUrl(url, res.headers.location)
+            : null;
+          if (nextUrl && nextUrl !== String(url)) {
+            if (deadlineTimer) clearTimeout(deadlineTimer);
+            if (settled) return;
+            settled = true;
+            const left = timeout - (Date.now() - startedAt);
+            nodeHttpJson(nextUrl, opts, headers, left, signature, hops + 1).then(resolve, reject);
+            return;
+          }
+          finish(resolve, { status, headers: res.headers, body: decodeHttpBody(res.headers, chunks) });
         } catch (error) {
           finish(reject, error);
         }
+      });
+      res.on("error", (error) => finish(reject, error));
+      const dropResponse = () => {
+        const error = new Error("socket hang up");
+        error.code = "ECONNRESET";
+        finish(reject, error);
+      };
+      res.on("aborted", dropResponse);
+      res.on("close", () => {
+        if (!res.complete) dropResponse();
       });
     });
     // Socket idle timeout resets whenever a byte arrives, so a slow trickle
@@ -162,34 +300,63 @@ function nodeHttpJson(url, opts, headers, timeout, signature = null) {
 
 async function httpJsonLocal(url, opts = {}) {
   const headers = Object.assign(
-    { "Content-Type": "application/json", "Accept": "application/json" },
+    { "Content-Type": "application/json", "Accept": "application/json", "Accept-Encoding": "gzip, deflate" },
     opts.headers || {}
   );
   const timeout = opts.timeout || REFRESH_TIMEOUT;
+  const deadline = Date.now() + timeout;
   const idempotent = opts.idempotent !== false;
   const host = (() => { try { return new URL(url).host; } catch { return "unknown"; } })();
-  const signature = await resolveLiveProxy(url);
-  await applySignatureToRuntime(signature, { touchSession: false });
-  if (!signature.proxyUrl && await hostLooksPoisoned(host)) {
+  const proxy = proxyResolve();
+  const signature = await proxy.resolveLiveProxy(url);
+  await proxy.applySignatureToRuntime(signature, { touchSession: false });
+  if (!signature.proxyUrl && await proxy.hostLooksPoisoned(host)) {
     throw new Error(`网络请求失败 (${host})。本机 DNS 异常且没有可用的本地代理。`);
   }
 
   // Never use Chromium net.fetch here. It shares the UI session and a bad
   // Content-Length / hijack page freezes the main window as 未响应.
+  const runWith = async (nextSignature, nextDeadline) => {
+    const result = await nodeHttpJson(
+      url,
+      opts,
+      headers,
+      remainingTimeout(nextDeadline, timeout),
+      nextSignature,
+    );
+    // Clash and other local proxies often answer 502/503/504 (or Cloudflare
+    // 52x) when the upstream path is dead. That is a completed HTTP
+    // response, so the first hop would otherwise stick and never fail
+    // over. Quota GET is safe to replay; a refresh-token POST is not.
+    if (idempotent && nextSignature?.proxyUrl && isProxyGatewayStatus(result.status)) {
+      throw proxyGatewayError(result.status);
+    }
+    return result;
+  };
   const attempts = [];
   try {
-    const runNode = () => nodeHttpJson(url, opts, headers, timeout, signature);
+    const runNode = () => runWith(signature, deadline);
     return idempotent
-      ? await withOneRetry("Node network", runNode)
+      ? await withOneRetry("Node network", runNode, deadline)
       : await runNode();
   } catch (error) {
     attempts.push({ label: "Node", error });
-    invalidateLiveProxy();
-    const retrySignature = await resolveLiveProxy(url);
-    if (idempotent && retrySignature.proxyUrl && retrySignature.proxyUrl !== signature.proxyUrl) {
-      await applySignatureToRuntime(retrySignature, { touchSession: false });
+    if (signature.proxyUrl) proxy.markProxyFailed(signature.proxyUrl);
+    proxy.invalidateLiveProxy();
+    const retrySignature = await proxy.resolveLiveProxy(url);
+    const firstProxy = signature.proxyUrl || "";
+    const nextProxy = retrySignature.proxyUrl || "";
+    const proxyUnreachable = !!firstProxy && isUnreachableProxyError(error);
+    if ((idempotent || proxyUnreachable) && nextProxy !== firstProxy) {
+      await proxy.applySignatureToRuntime(retrySignature, { touchSession: false });
+      // A hung first proxy can consume the whole first budget. The
+      // alternate path (another local proxy, or direct) gets its own.
+      const failoverDeadline = Date.now() + timeout;
       try {
-        return await withOneRetry("Node network", () => nodeHttpJson(url, opts, headers, timeout, retrySignature));
+        const runFailover = () => runWith(retrySignature, failoverDeadline);
+        return idempotent
+          ? await withOneRetry("Node network", runFailover, failoverDeadline)
+          : await runFailover();
       } catch (retryError) {
         attempts.push({ label: "Node-retry", error: retryError });
       }
@@ -222,9 +389,13 @@ function buildCodexHeaders(acct) {
   return headers;
 }
 
+function stripXssiPrefix(text) {
+  return String(text || "").replace(/^\uFEFF/, "").replace(/^\)\]\}',?\s*/, "");
+}
+
 function extractErrorCode(body) {
   try {
-    const v = JSON.parse(body);
+    const v = JSON.parse(stripXssiPrefix(body));
     if (v.detail && typeof v.detail === "object" && v.detail.code) return String(v.detail.code);
     if (v.error && typeof v.error === "object") return v.error.code || null;
     if (v.error && typeof v.error === "string") return v.error;
@@ -240,9 +411,18 @@ module.exports = {
   getHttpJsonTransport,
   buildCodexHeaders,
   extractErrorCode,
+  stripXssiPrefix,
+  contentEncoding,
   MAX_JSON_BODY_BYTES,
   concatUtf8Capped,
+  decodeHttpBody,
   nodeHttpJson,
   getAgentForSignature,
   resetHttpAgentsForTests,
+  isTransientNetworkError,
+  isUnreachableProxyError,
+  isProxyGatewayStatus,
+  isRedirectStatus,
+  resolveRedirectUrl,
+  withOneRetry,
 };

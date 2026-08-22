@@ -31,9 +31,12 @@ const TOKEN_INVALID_CODES = new Set([
 
 const USAGE_LIMITED_CODES = new Set([
   "usage_limit_reached",
+  "insufficient_quota",
+]);
+
+const RATE_LIMIT_CODES = new Set([
   "rate_limit",
   "rate_limit_exceeded",
-  "insufficient_quota",
 ]);
 
 const BANNED_PHRASES = [
@@ -184,8 +187,11 @@ function classifyProbe(input) {
   if (BANNED_CODES.has(code) || phraseHit(haystack, BANNED_PHRASES)) {
     return result(STATUS_BANNED, code || "account_deactivated", httpStatus, MESSAGE_BY_STATUS[STATUS_BANNED]);
   }
-  if (httpStatus === 429 || USAGE_LIMITED_CODES.has(code) || phraseHit(haystack, USAGE_LIMIT_PHRASES)) {
+  if (USAGE_LIMITED_CODES.has(code) || phraseHit(haystack, USAGE_LIMIT_PHRASES)) {
     return result(STATUS_USAGE_LIMITED, code || "usage_limit_reached", httpStatus, MESSAGE_BY_STATUS[STATUS_USAGE_LIMITED]);
+  }
+  if (httpStatus === 429 || RATE_LIMIT_CODES.has(code)) {
+    return result(STATUS_PROBE_FAILED, code || "http_429", httpStatus, MESSAGE_BY_STATUS[STATUS_PROBE_FAILED]);
   }
   if (code === "missing_access_token" || code === "missing_refresh_token") {
     return result(STATUS_PROBE_FAILED, code, httpStatus, "缺少访问令牌，无法刷新额度");
