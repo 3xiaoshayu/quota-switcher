@@ -13,7 +13,7 @@ const requiredFiles = [
   "ASSET_LICENSE.md",
   "THIRD_PARTY_NOTICES.md",
   "docs/images/account-dashboard.png",
-  "docs/images/codex-accounts.png",
+  "docs/images/antigravity-quota.png",
   "docs/images/quota-overview.png",
   "docs/images/auto-switch.png",
   "docs/images/settings.png",

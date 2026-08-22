@@ -37,12 +37,12 @@ Quota Switcher 是 Windows 上 Codex、Cursor、反重力（Antigravity IDE）�
 
 <table>
   <tr>
-    <td align="center"><sub><b>Codex 账号</b></sub></td>
     <td align="center"><sub><b>配额总览</b></sub></td>
+    <td align="center"><sub><b>反重力配额</b></sub></td>
   </tr>
   <tr>
-    <td><img src="docs/images/codex-accounts.png" alt="Codex 账号" /></td>
     <td><img src="docs/images/quota-overview.png" alt="Cursor 配额总览" /></td>
+    <td><img src="docs/images/antigravity-quota.png" alt="反重力配额总览" /></td>
   </tr>
   <tr>
     <td align="center"><sub><b>Codex 自动切号</b></sub></td>

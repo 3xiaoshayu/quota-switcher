@@ -44,12 +44,12 @@ to the tray; it does not quit.
 
 <table>
   <tr>
-    <td align="center"><sub><b>Codex accounts</b></sub></td>
     <td align="center"><sub><b>Quota overview</b></sub></td>
+    <td align="center"><sub><b>Antigravity quotas</b></sub></td>
   </tr>
   <tr>
-    <td><img src="docs/images/codex-accounts.png" alt="Codex accounts" /></td>
     <td><img src="docs/images/quota-overview.png" alt="Cursor quota overview" /></td>
+    <td><img src="docs/images/antigravity-quota.png" alt="Antigravity quota overview" /></td>
   </tr>
   <tr>
     <td align="center"><sub><b>Codex auto-switch</b></sub></td>
