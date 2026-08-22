@@ -10,10 +10,12 @@
 ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4)
 [![License](https://img.shields.io/badge/code-MIT-2f855a)](LICENSE)
 
-[下载安装包](https://github.com/3xiaoshayu/codex-account-manager/releases) ·
+**[下载安装包](https://github.com/3xiaoshayu/codex-account-manager/releases)** ·
 [故障排查](docs/troubleshooting.md) ·
 [隐私说明](docs/privacy.md) ·
 [English](README.en.md)
+
+当前完整版是 **2.0.6**。
 
 </div>
 
@@ -21,37 +23,17 @@
 
 > [!IMPORTANT]
 > 安装包尚未代码签名，Windows 可能提示“未知发布者”。请只从本仓库
-> [Releases](https://github.com/3xiaoshayu/codex-account-manager/releases) 下载，并用同一条 Release 中的 `SHA256SUMS.txt` 核对 SHA-256。
+> [Releases](https://github.com/3xiaoshayu/codex-account-manager/releases) 下载，并用同一条 Release 中的 `SHA256SUMS.txt` 核对 SHA-256。2.0.6 仍未签名。
 
-## 功能
+## 这是什么
 
-- **三个产品，一个窗口。** 侧栏在 Codex、Cursor、Antigravity 之间切换。每个账号一张卡片，剩余额度与套餐状态可直接阅读。
-- **写入官方客户端。** 切换时更新本机官方登录，而不是另开一套云端会话。
-- **Codex 可在后台自动切换。** 额度低于你设定的阈值时按规则换号；关闭窗口后仍继续运行。Cursor 与 Antigravity 支持查看和手动切换，不提供自动切换。
-- **本机优先。** 账号库使用 Windows DPAPI 加密。没有遥测，也没有项目方云服务。
-- **托盘与桌面额度镜。** 关闭到托盘，桌面上放置额度浮窗，并可检查登录有效期。
+Quota Switcher 是 Windows 上 Codex、Cursor、反重力（Antigravity IDE）的本机账号库、额度查看和切号工具。2.0.6 是当前定稿。
 
-切换会先结束对应的官方进程。请先保存工作再切号。本软件不能提高任何官方额度。
-
-Antigravity 目前对接官方 **Antigravity IDE**（导入本机登录、Google 网页授权、切换、刷新额度、浮窗）。不管理旧版 `Antigravity.exe`。额度未查清时，不会显示为封号。
-
-## 与 Cockpit Tools
-
-社区里常被对照的是 [Cockpit Tools](https://github.com/jlcodes99/cockpit-tools)。那是覆盖很多 AI IDE 的通用驾驶舱。Quota Switcher 走另一条路径：把 **Windows 上 Codex、Cursor、Antigravity 的本机账号库、额度与切号** 做成完整产品。相对通用驾驶舱，下面这些是我们专门做深的部分。
-
-**Windows 本机保险柜。** 账号与 token 使用当前 Windows 用户的 DPAPI（Electron `safeStorage`）加密；换 Windows 用户或换电脑，一般解不开。界面只接收账号元数据，token 不会解密进渲染进程。没有遥测，也没有项目方云服务。
-
-**Codex 切号按事务提交。** 切换前先快照官方登录、管理器投影和账号索引；后面任一步失败则整段回滚，而不是先写完 `auth.json` 再设法补救。官方登录与管理器记录不一致时，窗口提供「采用官方账号」或「写回管理账号」，不会静默覆盖。
-
-**Cursor / Antigravity 原地写入官方登录库。** 切号时在 `state.vscdb` 上使用 WAL 与 `BEGIN IMMEDIATE` 原地更新，不再把大型数据库整文件拷来拷去。Cursor 切号会恢复目标账号的资料、团队会话和用量身份，并清掉上一个号留下的团队缓存，避免 Pro 账号停在别人的团队里。
-
-**额度请求不走 Chromium 会话。** 出站 HTTP 由 Node 直连，并按代理签名保持 keep-alive，主窗口不容易因此卡成「未响应」。三家额度按 5 路并发刷新；窗口和桌面额度镜使用快照加补丁更新，而不是每次整页重拉。批量刷新会跳过已经需要重新授权或已封号的账号，避免把注定失败的请求推进队列。
-
-**关窗以后 Codex 仍可自动切换。** 后台按你设定的阈值换号，不依赖窗口一直开着。同一个窗口同时管理 Codex、Cursor 与 Antigravity IDE 的账号卡片、配额总览与桌面额度镜。
+它写入本机官方登录，不能提高任何官方额度，也不能绕过上游限制。
 
 ## 界面
 
-顶图为 Cursor 账号页。关闭按钮将窗口收到托盘，不会退出。
+顶图为 Cursor 账号页。关闭按钮将窗口收到托盘，不会退出。首页截图里的邮箱已打码。
 
 <table>
   <tr>
@@ -70,7 +52,55 @@ Antigravity 目前对接官方 **Antigravity IDE**（导入本机登录、Google
     <td><img src="docs/images/auto-switch.png" alt="Codex 自动切号" /></td>
     <td><img src="docs/images/float-lens.png" alt="桌面额度镜" /></td>
   </tr>
+  <tr>
+    <td align="center"><sub><b>系统设置</b></sub></td>
+    <td align="center"><sub><b>托盘菜单</b></sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/settings.png" alt="系统设置，版本 2.0.6" /></td>
+    <td><img src="docs/images/tray-menu.png" alt="托盘菜单" /></td>
+  </tr>
 </table>
+
+## 功能
+
+- **三个产品，一个窗口。** 侧栏在 Codex、Cursor、Antigravity 之间切换。每个账号一张卡片，剩余额度与套餐状态可直接阅读。
+- **写入官方客户端。** 切换时更新本机官方登录，而不是另开一套云端会话。
+- **仅 Codex 可在后台自动切换。** 额度低于你设定的阈值时按规则换号；关闭窗口后仍继续运行。Cursor 与 Antigravity 支持查看和手动切换，不提供自动切换。
+- **本机保险柜。** 账号库使用当前 Windows 用户的 DPAPI 加密。没有遥测，也没有项目方云服务。
+- **托盘与桌面额度镜。** 关闭到托盘，桌面上放置额度浮窗，并可检查登录有效期。
+
+切换会先结束对应的官方进程。请先保存工作再切号。
+
+Antigravity 目前对接官方 **Antigravity IDE**（导入本机登录、Google 网页授权、切换、刷新额度、浮窗）。不管理旧版 `Antigravity.exe`。额度未查清时，不会显示为封号。
+
+## 和 Cockpit Tools
+
+路径不同。[Cockpit Tools](https://github.com/jlcodes99/cockpit-tools) 是覆盖很多 AI IDE、三套系统的通用驾驶舱。Quota Switcher 把 **Windows 上这三家的本机账号库、额度和切号** 做成完整产品。不是「全面更强」，各做各的。
+
+| | Quota Switcher | Cockpit Tools |
+| --- | --- | --- |
+| 范围 | Windows 上 Codex / Cursor / 反重力 IDE | 十几家产品，Windows / macOS / Linux |
+| 凭证 | 当前用户 DPAPI；列表不解密；token 不出渲染进程 | 按各客户端文件和权限处理 |
+| Codex 切号 | 快照后整段提交，失败回滚；冲突要人点「采用 / 写回」 | 侧重一键切和多开 |
+| Cursor / 反重力 | 原地写 `state.vscdb`（WAL + `BEGIN IMMEDIATE`）；Cursor 清上一号团队缓存 | 另有多开、唤醒 |
+| 额度抖动 | 超时 / 代理 5xx / 空令牌 / 429 显示「额度暂时没刷到，登录还在」；卡片留 leftover；不把 429 当用尽，也不因此自动离开 Codex | 各客户端自己的刷新与展示 |
+| 没有的 | 多开、唤醒、Copilot / Windsurf / Trae 等 | 不是这三家的本机事务切号 |
+| 签名 | 开源包可能未签；只从本仓库 Releases + SHA-256 安装 | 开源包同样可能未签 |
+
+## 做得深的部分
+
+细节见 [架构](docs/architecture.md)。首页只留能对上号的能力。
+
+| 部分 | 做法 |
+| --- | --- |
+| 保险柜 | DPAPI；列表 `secrets: false`；token 不解密进渲染进程 |
+| Codex 事务 | 官方登录 + 投影 + 索引一起快照；任一步失败整段回滚 |
+| 官方登录诚实 | leftover 锁 / 非 JSON 读失败不当冲突；写成功不因随后读锁回滚 |
+| Cursor / 反重力写入 | 原地 SQLite，不是整库拷贝 |
+| 额度 HTTP | Node 直连，不走窗口 Chromium；代理签名 keep-alive；失败代理 60 秒跳过；GET 可换直连，令牌 POST 超时不重放 |
+| 退避 | `quota_next_retry_at` / `token_next_retry_at`；尊重 Retry-After |
+| 后台 | 关窗后 Codex 仍可自动切；worker 挂了 GET 可回主进程，非幂等 POST 不重放 |
 
 ## 安装
 
@@ -102,19 +132,13 @@ Get-FileHash ".\Quota-Switcher-Setup-<版本>-x64.exe" -Algorithm SHA256
 
 官方 Codex 登录与本应用记录不一致时，窗口提供「采用官方账号」或「写回管理账号」。
 
-## 从源码运行
+## 说明
 
-需要 Node.js 22 或更高版本（CI 使用 24 LTS）：
+这是独立的社区项目，与 OpenAI、Anysphere / Cursor、Google 没有隶属或背书关系。OpenAI、Codex、ChatGPT、Cursor、Antigravity 是各自权利人的商标。
 
-```powershell
-git clone https://github.com/3xiaoshayu/codex-account-manager.git
-cd codex-account-manager
-npm ci
-npm test
-npm start
-```
+请只管理你拥有或已被明确授权使用的账号。当前仅支持 Windows x64。自动切号仅适用于 Codex。Antigravity 仅对接官方 IDE。安装包尚未代码签名。
 
-打包：`npm run build:dir` 或 `npm run build:windows`。实现说明见 [架构](docs/architecture.md)。
+代码采用 [MIT License](LICENSE)。图标与安装向导图见 [ASSET_LICENSE.md](ASSET_LICENSE.md)。
 
 ## 文档
 
@@ -129,10 +153,16 @@ npm start
 [贡献](CONTRIBUTING.md) ·
 [发布](docs/releasing.md)
 
-## 说明
+## 从源码运行
 
-这是独立的社区项目，与 OpenAI、Anysphere / Cursor、Google 没有隶属或背书关系。OpenAI、Codex、ChatGPT、Cursor、Antigravity 是各自权利人的商标。
+需要 Node.js 22 或更高版本（CI 使用 24 LTS）：
 
-请只管理你拥有或已被明确授权使用的账号。当前仅支持 Windows x64。自动切号仅适用于 Codex。Antigravity 仅对接官方 IDE。安装包尚未代码签名。
+```powershell
+git clone https://github.com/3xiaoshayu/codex-account-manager.git
+cd codex-account-manager
+npm ci
+npm test
+npm start
+```
 
-代码采用 [MIT License](LICENSE)。图标与安装向导图见 [ASSET_LICENSE.md](ASSET_LICENSE.md)。
+打包：`npm run build:dir` 或 `npm run build:windows`。实现说明见 [架构](docs/architecture.md)。

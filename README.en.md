@@ -11,10 +11,12 @@ current Windows user.
 ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4)
 [![License](https://img.shields.io/badge/code-MIT-2f855a)](LICENSE)
 
-[Download](https://github.com/3xiaoshayu/codex-account-manager/releases) ·
+**[Download](https://github.com/3xiaoshayu/codex-account-manager/releases)** ·
 [Troubleshooting](docs/troubleshooting.en.md) ·
 [Privacy](docs/privacy.en.md) ·
 [简体中文](README.md)
+
+The current complete release is **2.0.6**.
 
 </div>
 
@@ -25,69 +27,21 @@ current Windows user.
 > publisher. Download only from this repository's
 > [Releases](https://github.com/3xiaoshayu/codex-account-manager/releases)
 > page and check the SHA-256 in `SHA256SUMS.txt` on the same release.
+> 2.0.6 is still unsigned.
 
-## Features
+## What this is
 
-- **Three products, one window.** The sidebar switches between Codex, Cursor,
-  and Antigravity. Each account is a card with remaining quota and plan status.
-- **Writes the official client.** A switch updates the local official login.
-  It does not create a separate cloud session.
-- **Codex can auto-switch in the background.** When usage falls below the
-  threshold you set, a worker switches accounts. Closing the window does not
-  stop it. Cursor and Antigravity support viewing and manual switching only.
-- **Local-first.** The account store is encrypted with Windows DPAPI. There is
-  no telemetry and no project-operated cloud.
-- **Tray and desktop quota lens.** Close to the tray, keep a desktop quota
-  window, and check how long the login still lasts.
+Quota Switcher is a Windows-local vault, quota view, and switch tool for
+Codex, Cursor, and Antigravity IDE. 2.0.6 is the current complete product.
 
-A switch closes the matching official process first. Save your work before you
-switch. This app cannot raise anyone's official limits.
-
-Antigravity currently targets official **Antigravity IDE** (local import,
-Google browser sign-in, switch, quota refresh, float window). It does not
-manage legacy `Antigravity.exe`. A failed quota read is not shown as a ban.
-
-## Compared with Cockpit Tools
-
-A common community reference is
-[Cockpit Tools](https://github.com/jlcodes99/cockpit-tools), a general cockpit
-for many AI IDEs. Quota Switcher takes a different path: a complete
-**Windows-local vault, quota view, and switch path** for Codex, Cursor, and
-Antigravity. Relative to a general-purpose cockpit, these are the parts we
-built in depth.
-
-**A Windows vault.** Accounts and tokens are encrypted with current-user DPAPI
-via Electron `safeStorage`. Another Windows user or another PC generally
-cannot decrypt them. The UI receives metadata only; tokens are not decrypted
-into the renderer. There is no telemetry and no project-operated cloud.
-
-**Codex switches as a transaction.** The official login, managed projection,
-and index are snapshotted first. If a later step fails, the whole transaction
-rolls back. It does not write `auth.json` first and try to repair afterwards.
-When official Codex and this app disagree, the window offers **采用官方账号**
-or **写回管理账号**. It does not overwrite in silence.
-
-**Cursor and Antigravity update the official login database in place.** A
-switch uses WAL and `BEGIN IMMEDIATE` on `state.vscdb` instead of copying a
-large file. A Cursor switch restores the target account's profile, team
-session, and usage identity, and clears leftover team cache from the previous
-login so a Pro account is not left on someone else's team.
-
-**Quota HTTP does not use the Chromium session.** Outbound calls go through
-Node keep-alive agents keyed by proxy signature, so the main window is less
-likely to freeze as “未响应”. All three products refresh five at a time. The
-window and desktop lens apply a snapshot plus patches instead of a full
-reload. Batch refresh skips accounts that already need re-auth or are banned,
-instead of queuing requests that will fail.
-
-**Codex auto-switch keeps running after the window is closed.** A background
-worker switches at the threshold you set. The same window holds account cards,
-quota overview, and the desktop lens for Codex, Cursor, and Antigravity IDE.
+It writes the official login on this PC. It cannot raise anyone's official
+limits or bypass upstream restrictions.
 
 ## Interface
 
 The hero image is the Cursor account page. The close button hides the window
-to the tray; it does not quit.
+to the tray; it does not quit. Emails in the homepage screenshots are
+redacted.
 
 <table>
   <tr>
@@ -106,7 +60,69 @@ to the tray; it does not quit.
     <td><img src="docs/images/auto-switch.png" alt="Codex automatic switching" /></td>
     <td><img src="docs/images/float-lens.png" alt="Desktop quota lens" /></td>
   </tr>
+  <tr>
+    <td align="center"><sub><b>Settings</b></sub></td>
+    <td align="center"><sub><b>Tray menu</b></sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/settings.png" alt="Settings, version 2.0.6" /></td>
+    <td><img src="docs/images/tray-menu.png" alt="Tray menu" /></td>
+  </tr>
 </table>
+
+## Features
+
+- **Three products, one window.** The sidebar switches between Codex, Cursor,
+  and Antigravity. Each account is a card with remaining quota and plan status.
+- **Writes the official client.** A switch updates the local official login.
+  It does not create a separate cloud session.
+- **Codex-only background auto-switch.** When usage falls below the threshold
+  you set, a worker switches accounts. Closing the window does not stop it.
+  Cursor and Antigravity support viewing and manual switching only.
+- **Local vault.** The account store is encrypted with current-user Windows
+  DPAPI. There is no telemetry and no project-operated cloud.
+- **Tray and desktop quota lens.** Close to the tray, keep a desktop quota
+  window, and check how long the login still lasts.
+
+A switch closes the matching official process first. Save your work before you
+switch.
+
+Antigravity currently targets official **Antigravity IDE** (local import,
+Google browser sign-in, switch, quota refresh, float window). It does not
+manage legacy `Antigravity.exe`. A failed quota read is not shown as a ban.
+
+## Compared with Cockpit Tools
+
+These are different paths.
+[Cockpit Tools](https://github.com/jlcodes99/cockpit-tools) is a general
+cockpit for many AI IDEs on three operating systems. Quota Switcher is a
+complete **Windows-local vault, quota view, and switch path** for these three
+products. Neither is “strictly better” at everything.
+
+| | Quota Switcher | Cockpit Tools |
+| --- | --- | --- |
+| Scope | Windows Codex / Cursor / Antigravity IDE | Many products on Windows, macOS, and Linux |
+| Credentials | Current-user DPAPI; list calls keep `secrets: false`; tokens never enter the renderer | Per-client files and permissions |
+| Codex switch | Snapshot, commit as one transaction, roll back on failure; conflicts need 采用 / 写回 | One-click switch and multi-instance |
+| Cursor / Antigravity | In-place `state.vscdb` (WAL + `BEGIN IMMEDIATE`); Cursor clears leftover team cache | Also offers multi-instance and wake-up |
+| Quota jitter | Timeout / proxy 5xx / empty token / 429 show “额度暂时没刷到，登录还在”; leftover quota stays on the card; 429 is not treated as used-up and does not auto-leave Codex | Each client’s own refresh and display |
+| Not included | Multi-instance, wake-up, Copilot / Windsurf / Trae, and others | This three-product Windows transaction path |
+| Signing | Open-source builds may be unsigned; install only from this repo’s Releases + SHA-256 | Open-source builds may also be unsigned |
+
+## Where it goes deep
+
+See [Architecture](docs/architecture.md) for the implementation. This page
+only lists the capabilities you can match to the product.
+
+| Area | Behavior |
+| --- | --- |
+| Vault | DPAPI; list calls use `secrets: false`; tokens are not decrypted into the renderer |
+| Codex transaction | Official login, projection, and index are snapshotted together; any later failure rolls the whole step back |
+| Honest official login | A leftover lock or non-JSON read is not treated as a conflict; a successful write is not rolled back because a later read is locked |
+| Cursor / Antigravity writes | In-place SQLite, not a whole-database copy |
+| Quota HTTP | Node, not the window Chromium session; keep-alive agents keyed by proxy signature; a failed proxy is skipped for 60 seconds; GET can fail over to direct; a timed-out token POST is not replayed |
+| Backoff | `quota_next_retry_at` / `token_next_retry_at`; Retry-After is honored |
+| Background | Codex can still auto-switch after the window closes; if the worker is down, GET can fall back in-process; non-idempotent POST is not replayed |
 
 ## Install
 
@@ -145,20 +161,18 @@ encryption will not help if someone already controls this PC. Details are in
 If official Codex and this app disagree, the window offers **采用官方账号**
 (use the official login) or **写回管理账号** (write the managed one back).
 
-## Running from source
+## Notes
 
-Node.js 22 or newer (CI uses 24 LTS):
+This is an independent community project, not affiliated with or endorsed by
+OpenAI, Anysphere / Cursor, or Google. OpenAI, Codex, ChatGPT, Cursor, and
+Antigravity are trademarks of their respective owners.
 
-```powershell
-git clone https://github.com/3xiaoshayu/codex-account-manager.git
-cd codex-account-manager
-npm ci
-npm test
-npm start
-```
+Only manage accounts you own or are clearly allowed to use. Windows x64 only.
+Auto-switch is Codex-only. Antigravity is official IDE only. The installer is
+not code-signed.
 
-Package with `npm run build:dir` or `npm run build:windows`. Implementation
-notes are in [Architecture](docs/architecture.md).
+The code is [MIT](LICENSE). Icon and installer art are covered by
+[ASSET_LICENSE.md](ASSET_LICENSE.md).
 
 ## Docs
 
@@ -173,15 +187,17 @@ For contributors: [Architecture](docs/architecture.md) ·
 [Contributing](CONTRIBUTING.en.md) ·
 [Releasing](docs/releasing.md)
 
-## Notes
+## Running from source
 
-This is an independent community project, not affiliated with or endorsed by
-OpenAI, Anysphere / Cursor, or Google. OpenAI, Codex, ChatGPT, Cursor, and
-Antigravity are trademarks of their respective owners.
+Node.js 22 or newer (CI uses 24 LTS):
 
-Only manage accounts you own or are clearly allowed to use. Windows x64 only.
-Auto-switch is Codex-only. Antigravity is official IDE only. The installer is
-not code-signed yet.
+```powershell
+git clone https://github.com/3xiaoshayu/codex-account-manager.git
+cd codex-account-manager
+npm ci
+npm test
+npm start
+```
 
-The code is [MIT](LICENSE). Icon and installer art are covered by
-[ASSET_LICENSE.md](ASSET_LICENSE.md).
+Package with `npm run build:dir` or `npm run build:windows`. Implementation
+notes are in [Architecture](docs/architecture.md).

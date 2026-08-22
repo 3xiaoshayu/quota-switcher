@@ -4,15 +4,12 @@
 
 ## Windows shows an unknown publisher
 
-Installers are not code-signed yet, so Microsoft Defender SmartScreen may
-display an unknown-publisher warning.
+2.0.6 is still unsigned, so Microsoft Defender SmartScreen may display an
+unknown-publisher warning.
 
 1. Download only from this repository's Releases page.
 2. Compare the installer SHA-256 with `SHA256SUMS.txt`.
 3. Do not run a build received through chat, email, or an unrelated mirror.
-
-This warning can only be removed reliably by signing future releases with a
-trusted Windows code-signing certificate.
 
 ## Codex is reported as not installed
 
@@ -78,10 +75,26 @@ finish. There is no callback URL to paste.
 You can also use **导入本机已登录的 Cursor** instead of opening the browser
 flow.
 
+## Quota says it could not refresh, but the login is still there
+
+When the card or banner says **额度暂时没刷到，登录还在**, the login has not
+dropped. Timeouts, proxy 5xx responses, empty or HTML token bodies, and a
+usage-endpoint 429 all use this line. The app does not ask for re-auth for
+those cases.
+
+- Leftover remaining quota stays on the card. Try again later.
+- A Codex `429 rate_limit` is not used-up quota, and it does not make
+  auto-switch leave the current account.
+- Check whether the proxy, VPN, or TUN mode applies to desktop apps, not
+  only the browser.
+- Check another saved account to distinguish an account-specific response
+  from a network-wide failure.
+
 ## Quota stays unknown
 
 An unknown quota is different from zero quota. Exhausted Cursor usage is shown
-as **已用尽**, not as a missing window.
+as **已用尽**, not as a missing window. A temporary miss keeps leftover
+remaining quota on the card instead of rewriting it to unknown or zero.
 
 - Wait for the background refresh or select **刷新额度** on the card.
 - Confirm the account token is not expired or marked for reauthentication.
@@ -185,4 +198,4 @@ Include:
 - a screenshot when useful.
 
 Do not attach tokens, account files, callback URLs, or authorization headers.
-Emails in screenshots are fine. Use the repository's bug report form.
+Redact emails in screenshots. Use the repository's bug report form.

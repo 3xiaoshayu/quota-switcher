@@ -135,6 +135,50 @@ proxy signature. In a packaged Electron app, HTTP and SQLite reads can run in
 a `utilityProcess` worker; DPAPI and switch transactions stay in the main
 process. If the worker exits, those calls fall back in-process.
 
+## Reliability
+
+These behaviors sit on top of the quota and token flow. They keep a jittery
+network from looking like a used-up account or a broken login.
+
+**Locks and torn writes.** Codex snapshots the official login, the managed
+projection, and the account index before it writes. Any later failure rolls
+the whole transaction back. A leftover file lock or a non-JSON official read
+is not treated as an identity conflict. A write that already succeeded is not
+rolled back because a later inspect is locked. Cursor and Antigravity update
+`state.vscdb` in place with WAL and `BEGIN IMMEDIATE` instead of copying the
+whole database.
+
+**Proxy discovery and failure memory.** Outbound HTTP follows a discovered
+local HTTP or SOCKS proxy and reuses keep-alive Agents keyed by proxy
+signature. A proxy that fails is skipped for about 60 seconds. Idempotent
+GET quota calls can fail over to a direct connection. A token POST that
+times out is not replayed.
+
+**Quota and token backoff.** Accounts record `quota_next_retry_at` and
+`token_next_retry_at`. Refresh skips those rows until the timestamp. Retry-After
+and related reset headers are honored instead of always waiting a fixed
+interval.
+
+**429 is not `usage_limited`.** A Codex `429 rate_limit` means the usage
+endpoint asked the client to slow down. It is not treated as the account
+being used up, and it does not make auto-switch leave the current account.
+The card keeps leftover quota and shows that the login is still present.
+
+**Leftover windows.** When a refresh fails for a timeout, proxy 5xx, empty
+or HTML token body, or a 429 rate limit, the last known remaining quota stays
+on the card. The user-facing line is “额度暂时没刷到，登录还在”. Missing
+windows stay unknown; they are not converted to zero.
+
+**XSSI.** Google responses may start with an XSSI prefix. Token and quota
+parsers strip that prefix before they read JSON, so a prefixed body is not
+treated as a malformed login.
+
+**Worker boundary.** In a packaged build, HTTP and SQLite reads can run in a
+`utilityProcess` worker. DPAPI and switch transactions stay in the main
+process. If the worker exits, GET-style work can fall back in-process. A
+non-idempotent token POST is not replayed from the main process after a
+worker timeout.
+
 ## IPC contract
 
 Renderer calls are defined in `src/preload/preload.js` and handled in
@@ -191,15 +235,7 @@ synthetic or dedicated test accounts.
 
 A common community reference is
 [Cockpit Tools](https://github.com/jlcodes99/cockpit-tools). That project is a
-general cockpit for many AI IDEs. This app focuses on a complete Windows-local
-vault, quota view, and switch path for Codex, Cursor, and Antigravity IDE.
-
-The Codex switch snapshots the official login, managed projection, and index
-first, then rolls the whole transaction back if a later step fails. Official
-login conflicts are resolved in the window, not overwritten in silence.
-Cursor and Antigravity update `state.vscdb` in place (`BEGIN IMMEDIATE`, WAL)
-and restore Cursor profile, team session, and usage identity after a switch.
-Quota HTTP uses Node keep-alive agents keyed by proxy signature, not the
-Chromium session. The renderer receives account metadata only; tokens are not
-decrypted into the UI process. Codex auto-switch continues after the window
-is closed.
+general cockpit for many AI IDEs. This app is the Windows-local vault, quota
+view, and switch path for Codex, Cursor, and Antigravity IDE. The product
+comparison table lives in [README.md](../README.md#和-cockpit-tools) and
+[README.en.md](../README.en.md#compared-with-cockpit-tools).

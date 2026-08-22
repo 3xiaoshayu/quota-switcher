@@ -1,12 +1,12 @@
 name: 功能建议
-description: 提一个具体、能落地的改进。
+description: 功能已齐。只谈本机账号、额度、切号上的真实缺口。
 title: "[建议]: "
 labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
       value: |
-        请说清楚是 Codex、Cursor，还是两个都要用。只谈本机账号、额度、登录和切号，不谈加额度或自建云。
+        2.0.6 已是当前定稿。请说清楚是 Codex、Cursor，还是两个都要用。只谈本机账号、额度、登录和切号上已经碰到的缺口，不谈加额度、自建云，或再加一家产品。
 
   - type: textarea
     id: problem

@@ -37,7 +37,7 @@
 - `%APPDATA%\Cursor\User\globalStorage\state.vscdb`：官方 Cursor 登录
 - `%APPDATA%\Antigravity IDE\User\globalStorage\state.vscdb`：官方 Antigravity 登录
 
-不要把这些目录或文件附到 Issue。截图可以带邮箱。日志里的回调、token、授权头请先抹掉。
+不要把这些目录或文件附到 Issue。截图请打码邮箱。日志里的回调、token、授权头请先抹掉。
 
 ## 边界
 

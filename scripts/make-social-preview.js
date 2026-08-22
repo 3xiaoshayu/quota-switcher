@@ -28,8 +28,8 @@ const iconPath = path.join(root, "resources", "icon.png");
     <div class="copy">
       <img class="icon" src="${iconUri}" alt="">
       <h1>Quota Switcher</h1>
-      <p>在 Windows 上查看并切换 Codex、Cursor 与 Antigravity 账号。凭证只保存在本机。</p>
-      <div class="meta">WINDOWS  ·  LOCAL-FIRST</div>
+      <p>在 Windows 上查看并切换 Codex、Cursor 与 Antigravity 账号。额度与凭证只保存在本机。</p>
+      <div class="meta">WINDOWS  ·  LOCAL-FIRST  ·  2.0.6</div>
     </div>
     <div class="preview"><img src="${dashUri}" alt=""></div>
   </div>

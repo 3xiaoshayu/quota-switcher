@@ -2,8 +2,11 @@
 
 [简体中文](CONTRIBUTING.md)
 
-Contributions are welcome when they keep the project focused, local-first, and
-safe around authentication data.
+The product is feature-complete. Serious bugs, documentation, and translations
+are welcome. Do not open a pull request for a large UI redesign or a new
+product tab without an issue first.
+
+Keep the project local-first and safe around authentication data.
 
 ## Before opening a pull request
 
@@ -49,7 +52,7 @@ release metadata validation.
 - Preserve atomic writes and existing backups around credential state.
 - Do not log tokens, authorization headers, OAuth callbacks, or complete
   account objects.
-- Keep fixtures free of tokens. Live screenshots may show account emails.
+- Keep fixtures free of tokens. Redact emails in public screenshots.
 - Treat missing quota windows as unknown, not zero.
 - Keep Codex and Cursor storage, OAuth, and switch paths separate. Do not scan
   one product's files as the other.

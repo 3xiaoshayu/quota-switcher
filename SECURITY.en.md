@@ -43,8 +43,8 @@ requested and appropriate.
 - `%APPDATA%\Cursor\User\globalStorage\state.vscdb` contains the official Cursor login.
 - `%APPDATA%\Antigravity IDE\User\globalStorage\state.vscdb` contains the official Antigravity login.
 
-Never attach these files or directories to an issue. Emails in screenshots
-are fine. Strip callback URLs, tokens, and authorization headers from logs.
+Never attach these files or directories to an issue. Redact emails in
+screenshots. Strip callback URLs, tokens, and authorization headers from logs.
 
 ## Security boundaries
 
