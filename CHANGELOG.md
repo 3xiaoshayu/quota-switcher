@@ -7,6 +7,20 @@ release is published.
 
 ## Unreleased
 
+## [2.0.6] - 2026-08-22
+
+- Treat temporary quota and token misses (timeouts, proxy 5xx, empty or HTML
+  token bodies, and usage 429 rate_limit) as leftover login instead of asking
+  to reauthorize or marking quota used up.
+- Fail over a hung or gateway-error proxy, a truncated body, and an Antigravity
+  Cloud Code host 500, and honor Retry-After plus x-ratelimit-reset duration
+  headers.
+- Keep leftover quota visible after a temporary miss. Codex auto-switch does
+  not leave the current account just because usage returned 429 rate_limit.
+- Pin Dependabot-related overrides so production audit stays clean. The
+  installer is still unsigned. Download only from GitHub Releases and check
+  SHA-256.
+
 ## [2.0.5] - 2026-08-22
 
 - Keep the official-login banner and toasts honest: leftover file locks are
