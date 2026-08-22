@@ -39,8 +39,10 @@ limits or bypass upstream restrictions.
 
 ## Interface
 
-The hero image is the Cursor account page. The close button hides the window
-to the tray; it does not quit.
+The hero image is Cursor account management. The next eight shots are the
+same 2.0.6 windows: two quota overviews, auto-switch, settings, and four
+desktop quota lenses. The close button hides the window to the tray; it
+does not quit.
 
 <table>
   <tr>
@@ -53,19 +55,27 @@ to the tray; it does not quit.
   </tr>
   <tr>
     <td align="center"><sub><b>Codex auto-switch</b></sub></td>
-    <td align="center"><sub><b>Desktop quota lens</b></sub></td>
+    <td align="center"><sub><b>Settings</b></sub></td>
   </tr>
   <tr>
     <td><img src="docs/images/auto-switch.png" alt="Codex automatic switching" /></td>
-    <td><img src="docs/images/float-lens.png" alt="Desktop quota lens" /></td>
-  </tr>
-  <tr>
-    <td align="center"><sub><b>Settings</b></sub></td>
-    <td align="center"><sub><b>Tray menu</b></sub></td>
-  </tr>
-  <tr>
     <td><img src="docs/images/settings.png" alt="Settings, version 2.0.6" /></td>
-    <td><img src="docs/images/tray-menu.png" alt="Tray menu" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Cursor quota lens</b></sub></td>
+    <td align="center"><sub><b>Cursor lens (needs auth)</b></sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/float-lens.png" alt="Cursor quota lens, in use" /></td>
+    <td><img src="docs/images/float-lens-cursor-reauth.png" alt="Cursor quota lens, needs re-authorization" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Codex quota lens</b></sub></td>
+    <td align="center"><sub><b>Antigravity quota lens</b></sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/float-lens-codex.png" alt="Codex quota lens" /></td>
+    <td><img src="docs/images/float-lens-antigravity.png" alt="Antigravity quota lens" /></td>
   </tr>
 </table>
 

@@ -33,7 +33,7 @@ Quota Switcher 是 Windows 上 Codex、Cursor、反重力（Antigravity IDE）�
 
 ## 界面
 
-顶图为 Cursor 账号页。关闭按钮将窗口收到托盘，不会退出。
+顶图是 Cursor 账号管理。下面 8 张是同一套 2.0.6 窗口：两张配额总览、自动切号、系统设置，以及四张桌面额度镜。关闭按钮将窗口收到托盘，不会退出。
 
 <table>
   <tr>
@@ -46,19 +46,27 @@ Quota Switcher 是 Windows 上 Codex、Cursor、反重力（Antigravity IDE）�
   </tr>
   <tr>
     <td align="center"><sub><b>Codex 自动切号</b></sub></td>
-    <td align="center"><sub><b>桌面额度镜</b></sub></td>
+    <td align="center"><sub><b>系统设置</b></sub></td>
   </tr>
   <tr>
     <td><img src="docs/images/auto-switch.png" alt="Codex 自动切号" /></td>
-    <td><img src="docs/images/float-lens.png" alt="桌面额度镜" /></td>
-  </tr>
-  <tr>
-    <td align="center"><sub><b>系统设置</b></sub></td>
-    <td align="center"><sub><b>托盘菜单</b></sub></td>
-  </tr>
-  <tr>
     <td><img src="docs/images/settings.png" alt="系统设置，版本 2.0.6" /></td>
-    <td><img src="docs/images/tray-menu.png" alt="托盘菜单" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Cursor 额度镜</b></sub></td>
+    <td align="center"><sub><b>Cursor 额度镜（需授权）</b></sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/float-lens.png" alt="Cursor 额度镜，当前在用" /></td>
+    <td><img src="docs/images/float-lens-cursor-reauth.png" alt="Cursor 额度镜，需重新授权" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Codex 额度镜</b></sub></td>
+    <td align="center"><sub><b>反重力额度镜</b></sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/float-lens-codex.png" alt="Codex 额度镜" /></td>
+    <td><img src="docs/images/float-lens-antigravity.png" alt="反重力额度镜" /></td>
   </tr>
 </table>
 
