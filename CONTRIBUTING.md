@@ -14,7 +14,7 @@
 - 不要附 token、回调地址、账号文件或原始日志
 
 安全问题走
-[私下报告](https://github.com/3xiaoshayu/codex-account-manager/security/advisories/new)，
+[私下报告](https://github.com/3xiaoshayu/quota-switcher/security/advisories/new)，
 不要开公开 Issue。
 
 ## 本地怎么跑
@@ -27,8 +27,8 @@
 - 测 Cursor 时，本机有官方 Cursor
 
 ```powershell
-git clone https://github.com/3xiaoshayu/codex-account-manager.git
-cd codex-account-manager
+git clone https://github.com/3xiaoshayu/quota-switcher.git
+cd quota-switcher
 npm ci
 npm test
 npm start
@@ -44,7 +44,7 @@ npm start
 - 改登录数据用结构化接口，不要拿字符串去补
 - 写文件保持原子替换和备份
 - 日志里不要出现 token、授权头、回调或完整账号
-- 测试夹具不要带 token；公开截图请打码邮箱
+- 测试夹具不要带 token；公开截图可以带邮箱
 - 读不到的额度写成未知，不要写成 0
 - Codex 和 Cursor 的存储、登录、切号分开，不要互相扫
 - Cursor 不要用 Codex 的封号状态。自动切号只做 Codex，除非专门设计并写进文档

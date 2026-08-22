@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        不要附带 token、账号文件或授权回调地址。截图请打码邮箱。
+        不要附带 token、账号文件或授权回调地址。截图可以带邮箱。
         安全问题请走私下报告，不要开公开 Issue。
 
   - type: textarea

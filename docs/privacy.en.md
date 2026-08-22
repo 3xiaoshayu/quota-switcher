@@ -27,7 +27,7 @@ backend, telemetry pipeline, advertising service, or cross-device account sync.
 | `%APPDATA%\Antigravity IDE\User\globalStorage\state.vscdb` | Official Antigravity login database written during an Antigravity switch |
 
 The installer and application do not include tokens, logs, or usage snapshots.
-Public README screenshots are redacted. Do not attach live emails.
+Public README screenshots may show live account emails.
 
 ## Token protection
 
@@ -152,6 +152,6 @@ Never attach these files or directories to a GitHub issue:
 - OAuth callback URLs;
 - full application or network logs containing headers.
 
-Redact emails in screenshots. Do not attach tokens or account files. Report
+Emails in screenshots are fine. Do not attach tokens or account files. Report
 suspected credential exposure through
-[GitHub private vulnerability reporting](https://github.com/3xiaoshayu/codex-account-manager/security/advisories/new).
+[GitHub private vulnerability reporting](https://github.com/3xiaoshayu/quota-switcher/security/advisories/new).

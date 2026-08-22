@@ -10,8 +10,8 @@ welcome.
 Use the repository's issue forms for reproducible bugs and real gaps in the
 local account, quota, or switch path:
 
-- [Report a bug](https://github.com/3xiaoshayu/codex-account-manager/issues/new?template=bug_report.yml)
-- [Request a feature](https://github.com/3xiaoshayu/codex-account-manager/issues/new?template=feature_request.yml)
+- [Report a bug](https://github.com/3xiaoshayu/quota-switcher/issues/new?template=bug_report.yml)
+- [Request a feature](https://github.com/3xiaoshayu/quota-switcher/issues/new?template=feature_request.yml)
 
 Before opening an issue:
 
@@ -20,8 +20,8 @@ Before opening an issue:
 3. say whether the issue is Codex, Cursor, or both;
 4. confirm the matching official client is installed when the issue depends on
    switching or local import;
-5. do not attach tokens, auth files, or OAuth callback URLs. Redact emails in
-   screenshots.
+5. do not attach tokens, auth files, or OAuth callback URLs. Emails in
+   screenshots are fine.
 
 This community project is maintained on a best-effort basis and does not
 provide guaranteed response times. See the
@@ -31,7 +31,7 @@ provide guaranteed response times. See the
 
 Do not use a public issue for suspected vulnerabilities or credential
 exposure. Follow [SECURITY.en.md](SECURITY.en.md) and use
-[private vulnerability reporting](https://github.com/3xiaoshayu/codex-account-manager/security/advisories/new).
+[private vulnerability reporting](https://github.com/3xiaoshayu/quota-switcher/security/advisories/new).
 
 ## What not to share
 

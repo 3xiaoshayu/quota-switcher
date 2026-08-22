@@ -198,4 +198,4 @@ Include:
 - a screenshot when useful.
 
 Do not attach tokens, account files, callback URLs, or authorization headers.
-Redact emails in screenshots. Use the repository's bug report form.
+Emails in screenshots are fine. Use the repository's bug report form.

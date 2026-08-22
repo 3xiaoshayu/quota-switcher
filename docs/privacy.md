@@ -25,7 +25,7 @@
 | `%APPDATA%\Cursor\User\globalStorage\state.vscdb` | 切 Cursor 时写入的官方登录库 |
 | `%APPDATA%\Antigravity IDE\User\globalStorage\state.vscdb` | 切 Antigravity 时写入的官方登录库 |
 
-安装包里不带账号和凭证。仓库首页截图已打码邮箱。
+安装包里不带账号和凭证。仓库首页截图是实机画面。
 
 ## 登录怎么保护
 
@@ -115,5 +115,5 @@ Google 第三方登录存在风控讨论。第一期只把本机已登录的官�
 - 授权回调地址
 - 带请求头的完整日志
 
-截图请打码邮箱。不要附 token 或账号文件。凭据泄露请走
-[私下报告](https://github.com/3xiaoshayu/codex-account-manager/security/advisories/new)。
+截图可以带邮箱。不要附 token 或账号文件。凭据泄露请走
+[私下报告](https://github.com/3xiaoshayu/quota-switcher/security/advisories/new)。

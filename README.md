@@ -5,12 +5,12 @@
 在 Windows 上查看并切换 Codex、Cursor 与 Antigravity 账号。
 额度、登录状态与凭证只保存在本机，并使用当前 Windows 用户加密。
 
-[![Release](https://img.shields.io/github/v/release/3xiaoshayu/codex-account-manager?sort=semver&label=release)](https://github.com/3xiaoshayu/codex-account-manager/releases)
-[![CI](https://github.com/3xiaoshayu/codex-account-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/3xiaoshayu/codex-account-manager/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/3xiaoshayu/quota-switcher?sort=semver&label=release)](https://github.com/3xiaoshayu/quota-switcher/releases)
+[![CI](https://github.com/3xiaoshayu/quota-switcher/actions/workflows/ci.yml/badge.svg)](https://github.com/3xiaoshayu/quota-switcher/actions/workflows/ci.yml)
 ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4)
 [![License](https://img.shields.io/badge/code-MIT-2f855a)](LICENSE)
 
-**[下载安装包](https://github.com/3xiaoshayu/codex-account-manager/releases)** ·
+**[下载安装包](https://github.com/3xiaoshayu/quota-switcher/releases)** ·
 [故障排查](docs/troubleshooting.md) ·
 [隐私说明](docs/privacy.md) ·
 [English](README.en.md)
@@ -23,7 +23,7 @@
 
 > [!IMPORTANT]
 > 安装包尚未代码签名，Windows 可能提示“未知发布者”。请只从本仓库
-> [Releases](https://github.com/3xiaoshayu/codex-account-manager/releases) 下载，并用同一条 Release 中的 `SHA256SUMS.txt` 核对 SHA-256。2.0.6 仍未签名。
+> [Releases](https://github.com/3xiaoshayu/quota-switcher/releases) 下载，并用同一条 Release 中的 `SHA256SUMS.txt` 核对 SHA-256。2.0.6 仍未签名。
 
 ## 这是什么
 
@@ -33,7 +33,7 @@ Quota Switcher 是 Windows 上 Codex、Cursor、反重力（Antigravity IDE）�
 
 ## 界面
 
-顶图为 Cursor 账号页。关闭按钮将窗口收到托盘，不会退出。首页截图里的邮箱已打码。
+顶图为 Cursor 账号页。关闭按钮将窗口收到托盘，不会退出。
 
 <table>
   <tr>
@@ -106,7 +106,7 @@ Antigravity 目前对接官方 **Antigravity IDE**（导入本机登录、Google
 
 Windows 10 / 11（x64）。管理 Codex 需要微软商店中的官方 Codex，管理 Cursor 需要官方 Cursor，管理 Antigravity 需要官方 Antigravity IDE。可以只使用其中一部分。
 
-1. 打开 [Releases](https://github.com/3xiaoshayu/codex-account-manager/releases)，下载 `Quota-Switcher-Setup-<版本>-x64.exe`
+1. 打开 [Releases](https://github.com/3xiaoshayu/quota-switcher/releases)，下载 `Quota-Switcher-Setup-<版本>-x64.exe`
 2. 安装并打开
 3. 在侧栏选择产品，使用「导入本机已登录」或「打开网页授权」
 4. 返回窗口后即可看到账号卡片与额度
@@ -158,8 +158,8 @@ Get-FileHash ".\Quota-Switcher-Setup-<版本>-x64.exe" -Algorithm SHA256
 需要 Node.js 22 或更高版本（CI 使用 24 LTS）：
 
 ```powershell
-git clone https://github.com/3xiaoshayu/codex-account-manager.git
-cd codex-account-manager
+git clone https://github.com/3xiaoshayu/quota-switcher.git
+cd quota-switcher
 npm ci
 npm test
 npm start

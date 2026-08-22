@@ -18,7 +18,7 @@ Keep the project local-first and safe around authentication data.
 - Never include tokens, callback URLs, account files, or raw logs.
 
 Security vulnerabilities must be reported through
-[private vulnerability reporting](https://github.com/3xiaoshayu/codex-account-manager/security/advisories/new),
+[private vulnerability reporting](https://github.com/3xiaoshayu/quota-switcher/security/advisories/new),
 not a public issue.
 
 ## Development setup
@@ -31,8 +31,8 @@ Requirements:
 - official Cursor for Cursor integration checks.
 
 ```powershell
-git clone https://github.com/3xiaoshayu/codex-account-manager.git
-cd codex-account-manager
+git clone https://github.com/3xiaoshayu/quota-switcher.git
+cd quota-switcher
 npm ci
 npm test
 npm start
@@ -52,7 +52,7 @@ release metadata validation.
 - Preserve atomic writes and existing backups around credential state.
 - Do not log tokens, authorization headers, OAuth callbacks, or complete
   account objects.
-- Keep fixtures free of tokens. Redact emails in public screenshots.
+- Keep fixtures free of tokens. Live screenshots may show account emails.
 - Treat missing quota windows as unknown, not zero.
 - Keep Codex and Cursor storage, OAuth, and switch paths separate. Do not scan
   one product's files as the other.

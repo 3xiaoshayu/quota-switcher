@@ -1,11 +1,11 @@
 blank_issues_enabled: false
 contact_links:
   - name: 安全问题
-    url: https://github.com/3xiaoshayu/codex-account-manager/security/advisories/new
+    url: https://github.com/3xiaoshayu/quota-switcher/security/advisories/new
     about: 凭据泄露或安全问题请私下说，不要开公开 Issue。
   - name: 故障排查
-    url: https://github.com/3xiaoshayu/codex-account-manager/blob/main/docs/troubleshooting.md
+    url: https://github.com/3xiaoshayu/quota-switcher/blob/main/docs/troubleshooting.md
     about: 安装、额度、登录和切号的常见情况。
   - name: 隐私说明
-    url: https://github.com/3xiaoshayu/codex-account-manager/blob/main/docs/privacy.md
-    about: 账号存在哪、会访问哪些网站。截图请打码邮箱。
+    url: https://github.com/3xiaoshayu/quota-switcher/blob/main/docs/privacy.md
+    about: 账号存在哪、会访问哪些网站、截图可以带邮箱。

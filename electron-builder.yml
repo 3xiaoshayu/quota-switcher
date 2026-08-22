@@ -51,7 +51,7 @@ nsis:
 publish:
   provider: github
   owner: 3xiaoshayu
-  repo: codex-account-manager
+  repo: quota-switcher
 
 files:
   - src/**/*

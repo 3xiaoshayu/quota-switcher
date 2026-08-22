@@ -2,7 +2,7 @@
 
 const APP_DISPLAY_NAME = "Quota Switcher";
 const APP_GITHUB_OWNER = "3xiaoshayu";
-const APP_GITHUB_REPO = "codex-account-manager";
+const APP_GITHUB_REPO = "quota-switcher";
 const APP_GITHUB_URL = `https://github.com/${APP_GITHUB_OWNER}/${APP_GITHUB_REPO}`;
 
 function isThisAppPath(exePath) {

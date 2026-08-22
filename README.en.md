@@ -6,12 +6,12 @@ View and switch Codex, Cursor, and Antigravity accounts on Windows.
 Quotas, logins, and credentials stay on this PC and are encrypted for the
 current Windows user.
 
-[![Release](https://img.shields.io/github/v/release/3xiaoshayu/codex-account-manager?sort=semver&label=release)](https://github.com/3xiaoshayu/codex-account-manager/releases)
-[![CI](https://github.com/3xiaoshayu/codex-account-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/3xiaoshayu/codex-account-manager/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/3xiaoshayu/quota-switcher?sort=semver&label=release)](https://github.com/3xiaoshayu/quota-switcher/releases)
+[![CI](https://github.com/3xiaoshayu/quota-switcher/actions/workflows/ci.yml/badge.svg)](https://github.com/3xiaoshayu/quota-switcher/actions/workflows/ci.yml)
 ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4)
 [![License](https://img.shields.io/badge/code-MIT-2f855a)](LICENSE)
 
-**[Download](https://github.com/3xiaoshayu/codex-account-manager/releases)** ·
+**[Download](https://github.com/3xiaoshayu/quota-switcher/releases)** ·
 [Troubleshooting](docs/troubleshooting.en.md) ·
 [Privacy](docs/privacy.en.md) ·
 [简体中文](README.md)
@@ -25,7 +25,7 @@ The current complete release is **2.0.6**.
 > [!IMPORTANT]
 > The installer is not code-signed. Windows may warn about an unknown
 > publisher. Download only from this repository's
-> [Releases](https://github.com/3xiaoshayu/codex-account-manager/releases)
+> [Releases](https://github.com/3xiaoshayu/quota-switcher/releases)
 > page and check the SHA-256 in `SHA256SUMS.txt` on the same release.
 > 2.0.6 is still unsigned.
 
@@ -40,8 +40,7 @@ limits or bypass upstream restrictions.
 ## Interface
 
 The hero image is the Cursor account page. The close button hides the window
-to the tray; it does not quit. Emails in the homepage screenshots are
-redacted.
+to the tray; it does not quit.
 
 <table>
   <tr>
@@ -130,7 +129,7 @@ Windows 10 or 11 (x64). Codex needs the official Microsoft Store Codex app.
 Cursor needs official Cursor. Antigravity needs official Antigravity IDE. Any
 subset can be used on its own.
 
-1. Open [Releases](https://github.com/3xiaoshayu/codex-account-manager/releases) and download `Quota-Switcher-Setup-<version>-x64.exe`
+1. Open [Releases](https://github.com/3xiaoshayu/quota-switcher/releases) and download `Quota-Switcher-Setup-<version>-x64.exe`
 2. Install and open it
 3. Choose a product in the sidebar, then **导入本机已登录** or **打开网页授权**
 4. Account cards and quotas appear when you return
@@ -192,8 +191,8 @@ For contributors: [Architecture](docs/architecture.md) ·
 Node.js 22 or newer (CI uses 24 LTS):
 
 ```powershell
-git clone https://github.com/3xiaoshayu/codex-account-manager.git
-cd codex-account-manager
+git clone https://github.com/3xiaoshayu/quota-switcher.git
+cd quota-switcher
 npm ci
 npm test
 npm start

@@ -27,13 +27,13 @@
   },
   "author": "WangJin",
   "license": "MIT",
-  "homepage": "https://github.com/3xiaoshayu/codex-account-manager#readme",
+  "homepage": "https://github.com/3xiaoshayu/quota-switcher#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/3xiaoshayu/codex-account-manager.git"
+    "url": "git+https://github.com/3xiaoshayu/quota-switcher.git"
   },
   "bugs": {
-    "url": "https://github.com/3xiaoshayu/codex-account-manager/issues"
+    "url": "https://github.com/3xiaoshayu/quota-switcher/issues"
   },
   "keywords": [
     "quota-switcher",
@@ -72,6 +72,7 @@
   },
   "dependencies": {
     "electron-updater": "^6.6.2",
+    "playwright-core": "^1.55.0",
     "proxy-agent": "^6.5.0",
     "proxy-from-env": "^1.1.0"
   },
