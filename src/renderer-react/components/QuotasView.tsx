@@ -391,7 +391,7 @@ export default function QuotasView({
               <div className="flex items-center gap-3 mt-6 pt-4 border-t border-sep" id={`quota-actions-row-${account.id}`}>
                 {needsReauth ? (
                 <motion.button
-                  onClick={() => void onReauthorizeAccount?.(account.id)}
+                  onClick={() => void Promise.resolve(onReauthorizeAccount?.(account.id)).catch(() => {})}
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.96 }}
                   transition={{ type: 'spring', stiffness: 400, damping: 20 }}

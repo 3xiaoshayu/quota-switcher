@@ -267,6 +267,14 @@ async function runDaemonWorker(options = {}) {
       if (latestIndex.current_account_id === current.id && canMirrorOfficialAuth(latestAuthState)) {
         try {
           if (isCancelled()) return;
+          if (latestAuthState.vaultMatchesOfficial === true) {
+            // Official Codex already holds these tokens. Rewriting auth.json
+            // (plus its .bak) every minute only churns a sensitive file and
+            // pokes the Codex file watcher; refresh only our own projection
+            // when it drifted.
+            if (latestAuthState.projectionMatchesOfficial !== true) writeProjection(current);
+            return;
+          }
           const authValue = writeAuthJson(current);
           if (isCancelled()) return;
           writeProjection(current, authValue);

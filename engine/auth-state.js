@@ -297,6 +297,10 @@ function inspectAuthState(options = {}) {
       // Identity-only alignment must not push stale vault tokens over a
       // Codex-app rotation.
       safeToMirrorOfficial: true,
+      // When the vault already holds the official tokens there is nothing to
+      // mirror; callers can skip rewriting auth.json on every tick.
+      vaultMatchesOfficial: accountAligned,
+      projectionMatchesOfficial: projectionAligned,
     });
   }
 

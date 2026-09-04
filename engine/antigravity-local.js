@@ -1,5 +1,5 @@
 const { ts, sha256hex, buildAntigravityId } = require("./crypto-utils");
-const { getAntigravityRuntime } = require("./antigravity-runtime");
+const { getAntigravityRuntime, usesWindowsSystemCredential } = require("./antigravity-runtime");
 const { readAntigravityAuth, hasPendingWal } = require("./antigravity-db");
 const { readWindowsAntigravityCredential } = require("./antigravity-credential");
 const { fetchGoogleUserInfo } = require("./antigravity-token");
@@ -138,16 +138,32 @@ async function resolveEmail(accessToken, fallback) {
   }
 }
 
+// The Hub build keeps its login in Windows Credential Manager; the IDE build
+// keeps it in state.vscdb. Reading the credential store for an IDE install
+// costs a PowerShell + Add-Type spawn on every sync and can even follow a
+// stale Hub credential instead of the login the IDE is actually using.
+function officialLoginMayUseCredential(runtime) {
+  const exePath = typeof runtime.exePath === "function" ? runtime.exePath() : null;
+  if (!exePath) return true;
+  return usesWindowsSystemCredential(exePath);
+}
+
+async function readCredentialIfRelevant(runtime) {
+  if (!officialLoginMayUseCredential(runtime)) return null;
+  try {
+    return typeof runtime.readSystemCredential === "function"
+      ? await runtime.readSystemCredential(runtime.execFile)
+      : await readWindowsAntigravityCredential(runtime.execFile);
+  } catch {
+    return null;
+  }
+}
+
 async function importLocalAntigravityAccount() {
   const runtime = getAntigravityRuntime();
   const dbPath = runtime.vscdbPath();
   let stalePossible = hasPendingWal(dbPath);
-  let credential = null;
-  try {
-    credential = await readWindowsAntigravityCredential(runtime.execFile);
-  } catch {
-    credential = null;
-  }
+  const credential = await readCredentialIfRelevant(runtime);
   let local = null;
   try {
     local = await readAntigravityAuth(dbPath);
@@ -182,14 +198,7 @@ let officialSyncInFlight = null;
 async function syncCurrentAntigravityFromOfficialUncached() {
   const existing = currentAntigravityAcct();
   const runtime = getAntigravityRuntime();
-  let credential = null;
-  try {
-    credential = typeof runtime.readSystemCredential === "function"
-      ? await runtime.readSystemCredential(runtime.execFile)
-      : await readWindowsAntigravityCredential(runtime.execFile);
-  } catch {
-    credential = null;
-  }
+  const credential = await readCredentialIfRelevant(runtime);
   const dbPath = runtime.vscdbPath();
   let local = null;
   try {
@@ -243,6 +252,7 @@ function resetOfficialSyncCacheForTests() {
 module.exports = {
   refreshFingerprint,
   usableEmail,
+  officialLoginMayUseCredential,
   sameAntigravityIdentity,
   accountFromAntigravityTokens,
   upsertAntigravityAccount,

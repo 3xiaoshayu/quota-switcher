@@ -507,13 +507,21 @@ export default function FloatLens() {
     void refreshViewed(true);
   }, [refreshViewed, viewed]);
 
+  // The interval must keep its cadence across list reloads: `viewed` is a new
+  // object after every daemon tick or account update, and re-arming the timer
+  // on each of those would keep resetting the 60 s countdown before it fires.
+  const refreshViewedRef = useRef(refreshViewed);
   useEffect(() => {
-    if (!viewed) return undefined;
+    refreshViewedRef.current = refreshViewed;
+  }, [refreshViewed]);
+  const viewedAccountId = viewed?.id ?? null;
+  useEffect(() => {
+    if (!viewedAccountId) return undefined;
     const timer = window.setInterval(() => {
-      void refreshViewed(true);
+      void refreshViewedRef.current(true);
     }, SILENT_REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [refreshViewed, viewed]);
+  }, [viewedAccountId]);
 
   useEffect(() => {
     const lens = lensRef.current;

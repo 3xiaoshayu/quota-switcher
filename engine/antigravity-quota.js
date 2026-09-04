@@ -1,6 +1,6 @@
 const { ANTIGRAVITY_CLOUDCODE_URL, ANTIGRAVITY_CLOUDCODE_DAILY_URL, REFRESH_TIMEOUT } = require("./config");
 const { ts } = require("./crypto-utils");
-const { extractErrorCode, stripXssiPrefix } = require("./http-client");
+const { extractErrorCode, stripXssiPrefix, looksLikeHtmlResponse } = require("./http-client");
 const { getAntigravityRuntime } = require("./antigravity-runtime");
 const { saveAntigravityAcct, upsertAntigravityIndex } = require("./antigravity-storage");
 const { refreshAntigravityToken, markAntigravityReauth, antigravityAccessExpired } = require("./antigravity-token");
@@ -517,6 +517,7 @@ function isCloudCodeHostFailoverStatus(status) {
   const code = Number(status);
   return code === 404
     || code === 408
+    || code === 429
     || code === 500
     || code === 502
     || code === 503
@@ -667,6 +668,14 @@ async function refreshAntigravityQuota(account, options = {}) {
       metadata: cloudCodeMetadata(),
       mode: "FULL_ELIGIBILITY_CHECK",
     }, postOpts({ userAgent: LOAD_CODE_ASSIST_USER_AGENT }));
+    if ((assistResponse.status === 401 || assistResponse.status === 403) && looksLikeHtmlResponse(assistResponse.body, assistResponse.headers)) {
+      throw Object.assign(new Error("这次没查清额度，请稍后重试。"), {
+        code: "probe_failed",
+        httpStatus: assistResponse.status,
+        headers: assistResponse.headers || {},
+        retryAfter: assistResponse.headers?.["retry-after"] || assistResponse.headers?.["Retry-After"],
+      });
+    }
     if (assistResponse.status === 401 || assistResponse.status === 403) {
       markAntigravityReauth(account, "Google 登录已失效，请重新授权");
       const authError = new Error("Google 登录已失效，请重新授权");

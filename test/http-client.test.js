@@ -410,6 +410,7 @@ test("a proxy 502 on quota GET failovers to direct", async () => {
     assert.equal(isProxyGatewayStatus(407), true);
     assert.equal(isProxyGatewayStatus(408), true);
     assert.equal(isProxyGatewayStatus(421), true);
+    assert.equal(isProxyGatewayStatus(429), true);
     assert.equal(isProxyGatewayStatus(520), true);
     assert.equal(isProxyGatewayStatus(530), true);
     assert.equal(isProxyGatewayStatus(500), false);
@@ -510,6 +511,53 @@ test("a proxy 408 on quota GET failovers to direct", async () => {
     const result = await httpJsonLocal(`http://127.0.0.1:${goodPort}/quota`, { timeout: 800 });
     assert.equal(result.status, 200);
     assert.match(result.body, /"remaining":9/);
+    assert.equal(proxy.isProxyRecentlyFailed(badProxy), true);
+    assert.ok(looks >= 2);
+  } finally {
+    proxy.resolveLiveProxy = originalResolve;
+    proxy.hostLooksPoisoned = originalPoison;
+    proxy.applySignatureToRuntime = originalApply;
+    proxy.invalidateLiveProxy = originalInvalidate;
+    proxy.resetFailedProxiesForTests();
+    resetHttpAgentsForTests();
+    await closeServer(bad);
+    await closeServer(good);
+  }
+});
+
+test("a proxy 429 on quota GET failovers to direct", async () => {
+  const proxy = require("../engine/proxy-resolve");
+  const originalResolve = proxy.resolveLiveProxy;
+  const originalPoison = proxy.hostLooksPoisoned;
+  const originalApply = proxy.applySignatureToRuntime;
+  const originalInvalidate = proxy.invalidateLiveProxy;
+  const bad = http.createServer((_req, res) => {
+    res.writeHead(429, { "content-type": "text/plain", "retry-after": "30" });
+    res.end("Too Many Requests");
+  });
+  const badPort = await listen(bad);
+  const good = http.createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ remaining: 13 }));
+  });
+  const goodPort = await listen(good);
+  const badProxy = `http://127.0.0.1:${badPort}`;
+  let looks = 0;
+  proxy.resolveLiveProxy = async () => {
+    looks += 1;
+    if (proxy.isProxyRecentlyFailed(badProxy) || looks > 1) {
+      return { source: "direct", proxyUrl: "", probed: false };
+    }
+    return { source: "test", proxyUrl: badProxy, probed: false };
+  };
+  proxy.hostLooksPoisoned = async () => false;
+  proxy.applySignatureToRuntime = async (signature) => signature;
+  proxy.invalidateLiveProxy = () => {};
+  proxy.resetFailedProxiesForTests();
+  try {
+    const result = await httpJsonLocal(`http://127.0.0.1:${goodPort}/quota`, { timeout: 800 });
+    assert.equal(result.status, 200);
+    assert.match(result.body, /"remaining":13/);
     assert.equal(proxy.isProxyRecentlyFailed(badProxy), true);
     assert.ok(looks >= 2);
   } finally {
@@ -653,6 +701,56 @@ test("a proxy 524 on quota GET failovers to direct", async () => {
     assert.match(result.body, /"remaining":7/);
     assert.equal(proxy.isProxyRecentlyFailed(badProxy), true);
     assert.ok(looks >= 2);
+  } finally {
+    proxy.resolveLiveProxy = originalResolve;
+    proxy.hostLooksPoisoned = originalPoison;
+    proxy.applySignatureToRuntime = originalApply;
+    proxy.invalidateLiveProxy = originalInvalidate;
+    proxy.resetFailedProxiesForTests();
+    resetHttpAgentsForTests();
+    await closeServer(bad);
+    await closeServer(good);
+  }
+});
+
+test("a proxy 429 on token POST does not replay", async () => {
+  const proxy = require("../engine/proxy-resolve");
+  const originalResolve = proxy.resolveLiveProxy;
+  const originalPoison = proxy.hostLooksPoisoned;
+  const originalApply = proxy.applySignatureToRuntime;
+  const originalInvalidate = proxy.invalidateLiveProxy;
+  const bad = http.createServer((_req, res) => {
+    res.writeHead(429, { "content-type": "text/plain" });
+    res.end("Too Many Requests");
+  });
+  const badPort = await listen(bad);
+  let posts = 0;
+  const good = http.createServer((req, res) => {
+    if (req.method === "POST") posts += 1;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ access_token: "should-not" }));
+  });
+  const goodPort = await listen(good);
+  let looks = 0;
+  proxy.resolveLiveProxy = async () => {
+    looks += 1;
+    if (looks === 1) return { source: "test", proxyUrl: `http://127.0.0.1:${badPort}`, probed: false };
+    return { source: "direct", proxyUrl: "", probed: false };
+  };
+  proxy.hostLooksPoisoned = async () => false;
+  proxy.applySignatureToRuntime = async (signature) => signature;
+  proxy.invalidateLiveProxy = () => {};
+  proxy.resetFailedProxiesForTests();
+  try {
+    const result = await httpJsonLocal(`http://127.0.0.1:${goodPort}/token`, {
+      method: "POST",
+      body: "grant_type=refresh_token",
+      timeout: 800,
+      idempotent: false,
+    });
+    assert.equal(result.status, 429);
+    assert.equal(posts, 0);
+    assert.equal(looks, 1);
   } finally {
     proxy.resolveLiveProxy = originalResolve;
     proxy.hostLooksPoisoned = originalPoison;
@@ -1056,6 +1154,97 @@ test("a truncated quota body fails before the full timeout", async () => {
   } finally {
     resetHttpAgentsForTests();
     await closeServer(bad);
+  }
+});
+
+test("a cross-origin redirect drops the bearer and account headers", async () => {
+  const { headersForRedirect } = require("../engine/http-client");
+  const headers = {
+    Authorization: "Bearer secret",
+    "ChatGPT-Account-Id": "acct",
+    Cookie: "WorkosCursorSessionToken=x",
+    Accept: "application/json",
+  };
+  const sameOrigin = headersForRedirect(headers, "https://chatgpt.com/a", "https://chatgpt.com/b?x=1");
+  assert.equal(sameOrigin.Authorization, "Bearer secret");
+  assert.equal(sameOrigin["ChatGPT-Account-Id"], "acct");
+  const crossOrigin = headersForRedirect(headers, "https://chatgpt.com/a", "https://evil.example/b");
+  assert.equal(crossOrigin.Authorization, undefined);
+  assert.equal(crossOrigin["ChatGPT-Account-Id"], undefined);
+  assert.equal(crossOrigin.Cookie, undefined);
+  assert.equal(crossOrigin.Accept, "application/json");
+  const otherPort = headersForRedirect(headers, "http://127.0.0.1:1000/a", "http://127.0.0.1:2000/a");
+  assert.equal(otherPort.Authorization, undefined);
+
+  const seen = [];
+  const target = http.createServer((req, res) => {
+    seen.push({ authorization: req.headers.authorization || null, accept: req.headers.accept || null });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+  });
+  const targetPort = await listen(target);
+  const hop = http.createServer((_req, res) => {
+    res.writeHead(302, { location: `http://127.0.0.1:${targetPort}/usage` });
+    res.end();
+  });
+  const hopPort = await listen(hop);
+  try {
+    const result = await nodeHttpJson(`http://127.0.0.1:${hopPort}/quota`, {}, {
+      Authorization: "Bearer secret",
+      Accept: "application/json",
+    }, 800);
+    assert.equal(result.status, 200);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].authorization, null, "bearer must not follow a redirect to another origin");
+    assert.equal(seen[0].accept, "application/json");
+  } finally {
+    resetHttpAgentsForTests();
+    await closeServer(hop);
+    await closeServer(target);
+  }
+});
+
+test("a redirect from https to plain http is not followed", () => {
+  assert.equal(resolveRedirectUrl("https://chatgpt.com/quota", "http://chatgpt.com/quota"), null);
+  assert.equal(resolveRedirectUrl("https://chatgpt.com/quota", "https://chatgpt.com/usage"), "https://chatgpt.com/usage");
+  assert.equal(resolveRedirectUrl("http://127.0.0.1:1/quota", "http://127.0.0.1:2/usage"), "http://127.0.0.1:2/usage");
+  assert.equal(resolveRedirectUrl("https://chatgpt.com/quota", "ftp://chatgpt.com/usage"), null);
+});
+
+test("POST bodies are sent with an exact Content-Length instead of chunked", async () => {
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      seen.push({
+        contentLength: req.headers["content-length"] || null,
+        transferEncoding: req.headers["transfer-encoding"] || null,
+        body,
+      });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("{}");
+    });
+  });
+  const port = await listen(server);
+  try {
+    const form = "grant_type=refresh_token&refresh_token=abc";
+    await nodeHttpJson(`http://127.0.0.1:${port}/token`, { method: "POST", body: form }, {
+      "Content-Type": "application/x-www-form-urlencoded",
+    }, 800);
+    await nodeHttpJson(`http://127.0.0.1:${port}/meta`, { method: "POST", body: { email: "中文@example.com" } }, {
+      "Content-Type": "application/json",
+    }, 800);
+    assert.equal(seen.length, 2);
+    assert.equal(seen[0].transferEncoding, null);
+    assert.equal(seen[0].contentLength, String(Buffer.byteLength(form)));
+    assert.equal(seen[0].body, form);
+    assert.equal(seen[1].transferEncoding, null);
+    assert.equal(seen[1].contentLength, String(Buffer.byteLength(JSON.stringify({ email: "中文@example.com" }))));
+    assert.equal(JSON.parse(seen[1].body).email, "中文@example.com");
+  } finally {
+    resetHttpAgentsForTests();
+    await closeServer(server);
   }
 });
 

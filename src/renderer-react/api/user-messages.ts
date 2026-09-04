@@ -18,6 +18,8 @@ const RULES: Array<{ test: RegExp; to: string }> = [
   { test: /Official Codex authentication changed/i, to: '官方 Codex 登录状态已变更' },
   { test: /Automatic quota sync is paused/i, to: '请先处理官方登录后再自动同步额度' },
   { test: /^auth_conflict$/i, to: '官方登录了另一个账号' },
+  { test: /^conflict$/i, to: '官方登录了另一个账号' },
+  { test: /^unknown$/i, to: '无法确认官方登录状态，自动同步已暂停' },
   { test: /^missing_official_auth$/i, to: '官方 Codex 已退出' },
   { test: /^unsupported_official_auth$/i, to: '官方登录无法由本管理器接管' },
   { test: /^unmanaged_official_auth$/i, to: '官方 Codex 已登录，尚未纳入管理' },

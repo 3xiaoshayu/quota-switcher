@@ -123,7 +123,7 @@ function isUnreachableProxyError(error) {
 
 function isProxyGatewayStatus(status) {
   const code = Number(status);
-  return code === 407 || code === 408 || code === 421 || code === 502 || code === 503 || code === 504
+  return code === 407 || code === 408 || code === 421 || code === 429 || code === 502 || code === 503 || code === 504
     || code === 520 || code === 521 || code === 522 || code === 523 || code === 524
     || code === 525 || code === 526 || code === 527 || code === 530;
 }
@@ -216,12 +216,47 @@ function resolveRedirectUrl(currentUrl, location) {
   const raw = String(location || "").trim();
   if (!raw) return null;
   try {
+    const current = new URL(currentUrl);
     const next = new URL(raw, currentUrl);
     if (next.protocol !== "http:" && next.protocol !== "https:") return null;
+    // A redirect off TLS would replay the bearer token in clear text.
+    if (current.protocol === "https:" && next.protocol === "http:") return null;
     return next.toString();
   } catch {
     return null;
   }
+}
+
+const CREDENTIAL_HEADER_NAMES = new Set(["authorization", "cookie", "chatgpt-account-id", "proxy-authorization"]);
+
+function sameOrigin(leftUrl, rightUrl) {
+  try {
+    return new URL(leftUrl).origin === new URL(rightUrl).origin;
+  } catch {
+    return false;
+  }
+}
+
+// Credentials are scoped to the origin that issued them. A redirect to another
+// host must not carry the ChatGPT / Cursor / Google bearer along with it.
+function headersForRedirect(headers, fromUrl, toUrl) {
+  if (sameOrigin(fromUrl, toUrl)) return headers;
+  const stripped = {};
+  for (const [name, value] of Object.entries(headers || {})) {
+    if (CREDENTIAL_HEADER_NAMES.has(String(name).toLowerCase())) continue;
+    stripped[name] = value;
+  }
+  return stripped;
+}
+
+function serializeBody(body) {
+  if (body == null || body === "") return null;
+  return Buffer.from(typeof body === "string" ? body : JSON.stringify(body), "utf8");
+}
+
+function hasHeader(headers, wanted) {
+  const name = String(wanted).toLowerCase();
+  return Object.keys(headers || {}).some((key) => String(key).toLowerCase() === name);
 }
 
 function nodeHttpJson(url, opts, headers, timeout, signature = null, hops = 0) {
@@ -233,6 +268,12 @@ function nodeHttpJson(url, opts, headers, timeout, signature = null, hops = 0) {
     const u = new URL(url);
     const mod = u.protocol === "https:" ? https : http;
     const agent = getAgentForSignature(signature, u.protocol);
+    const payload = serializeBody(opts.body);
+    // Node would otherwise send the body chunked; some token endpoints and
+    // local proxies answer 411 to that. Declare the exact length instead.
+    const requestHeaders = payload && !hasHeader(headers, "content-length") && !hasHeader(headers, "transfer-encoding")
+      ? { ...headers, "Content-Length": String(payload.length) }
+      : headers;
     let settled = false;
     let deadlineTimer = null;
     const finish = (fn, value) => {
@@ -241,7 +282,7 @@ function nodeHttpJson(url, opts, headers, timeout, signature = null, hops = 0) {
       if (deadlineTimer) clearTimeout(deadlineTimer);
       fn(value);
     };
-    const req = mod.request(url, { method: opts.method || "GET", headers, timeout, agent }, (res) => {
+    const req = mod.request(url, { method: opts.method || "GET", headers: requestHeaders, timeout, agent }, (res) => {
       const chunks = [];
       let total = 0;
       res.on("data", (chunk) => {
@@ -264,7 +305,7 @@ function nodeHttpJson(url, opts, headers, timeout, signature = null, hops = 0) {
             if (settled) return;
             settled = true;
             const left = timeout - (Date.now() - startedAt);
-            nodeHttpJson(nextUrl, opts, headers, left, signature, hops + 1).then(resolve, reject);
+            nodeHttpJson(nextUrl, opts, headersForRedirect(headers, url, nextUrl), left, signature, hops + 1).then(resolve, reject);
             return;
           }
           finish(resolve, { status, headers: res.headers, body: decodeHttpBody(res.headers, chunks) });
@@ -293,8 +334,8 @@ function nodeHttpJson(url, opts, headers, timeout, signature = null, hops = 0) {
     }
     req.on("timeout", () => { req.destroy(); finish(reject, new Error("请求超时")); });
     req.on("error", (error) => finish(reject, error));
-    if (opts.body) req.write(typeof opts.body === "string" ? opts.body : JSON.stringify(opts.body));
-    req.end();
+    if (payload) req.end(payload);
+    else req.end();
   });
 }
 
@@ -324,10 +365,11 @@ async function httpJsonLocal(url, opts = {}) {
       remainingTimeout(nextDeadline, timeout),
       nextSignature,
     );
-    // Clash and other local proxies often answer 502/503/504 (or Cloudflare
-    // 52x) when the upstream path is dead. That is a completed HTTP
-    // response, so the first hop would otherwise stick and never fail
-    // over. Quota GET is safe to replay; a refresh-token POST is not.
+    // Clash and other local proxies often answer 429/502/503/504 (or
+    // Cloudflare 52x) when the upstream path is dead or the proxy itself
+    // is rate-limiting. That is a completed HTTP response, so the first
+    // hop would otherwise stick and never fail over. Quota GET is safe
+    // to replay; a refresh-token POST is not.
     if (idempotent && nextSignature?.proxyUrl && isProxyGatewayStatus(result.status)) {
       throw proxyGatewayError(result.status);
     }
@@ -393,6 +435,17 @@ function stripXssiPrefix(text) {
   return String(text || "").replace(/^\uFEFF/, "").replace(/^\)\]\}',?\s*/, "");
 }
 
+// A 401/403 whose body is a web page did not come from the API: it is a
+// Cloudflare challenge, a captive portal, or a local proxy's block page.
+// Treating it as "token revoked" would demand a fresh login for nothing.
+function looksLikeHtmlResponse(body, headers) {
+  const raw = headers?.["content-type"];
+  const contentType = String(Array.isArray(raw) ? raw[0] : raw || "").toLowerCase();
+  if (contentType.includes("text/html") || contentType.includes("application/xhtml")) return true;
+  const text = String(body || "").trimStart().slice(0, 64).toLowerCase();
+  return text.startsWith("<!doctype") || text.startsWith("<html") || text.startsWith("<head") || text.startsWith("<body");
+}
+
 function extractErrorCode(body) {
   try {
     const v = JSON.parse(stripXssiPrefix(body));
@@ -412,6 +465,7 @@ module.exports = {
   buildCodexHeaders,
   extractErrorCode,
   stripXssiPrefix,
+  looksLikeHtmlResponse,
   contentEncoding,
   MAX_JSON_BODY_BYTES,
   concatUtf8Capped,
@@ -424,5 +478,6 @@ module.exports = {
   isProxyGatewayStatus,
   isRedirectStatus,
   resolveRedirectUrl,
+  headersForRedirect,
   withOneRetry,
 };

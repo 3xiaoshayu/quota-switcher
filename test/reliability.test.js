@@ -1692,6 +1692,88 @@ test("the daemon does not overwrite an official Codex token rotation", async t =
   assert.equal(engine.loadAcct(account.id).tokens.access_token, account.tokens.access_token);
 });
 
+test("the daemon leaves official auth.json alone when the vault already holds the same tokens", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "daemon-quiet@example.com", "acct-daemon-quiet", "daemon-quiet");
+  account.quota = {
+    hourly_remaining_percentage: 80,
+    hourly_window_present: true,
+    weekly_window_present: false,
+  };
+  account.usage_updated_at = engine.ts();
+  engine.saveAcct(account);
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(account);
+  engine.writeProjection(account, auth);
+  const config = require("../engine/config");
+  const authPath = path.join(config.CODEX_DIR, "auth.json");
+  const before = fs.readFileSync(authPath, "utf8");
+  const beforeStat = fs.statSync(authPath);
+  const quotaModule = require("../engine/quota");
+  const originalFetch = quotaModule.fetchQuotaWithTokenRepair;
+  quotaModule.fetchQuotaWithTokenRepair = async () => ({
+    hourly_remaining_percentage: 80,
+    hourly_window_present: true,
+    weekly_remaining_percentage: null,
+    weekly_window_present: false,
+  });
+  t.after(() => { quotaModule.fetchQuotaWithTokenRepair = originalFetch; });
+  await new Promise((resolve) => setTimeout(resolve, 15));
+
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.pausedReason, null);
+  assert.equal(result.failures.length, 0);
+  assert.equal(fs.readFileSync(authPath, "utf8"), before, "no rewrite when nothing changed");
+  assert.equal(fs.statSync(authPath).mtimeMs, beforeStat.mtimeMs);
+});
+
+test("the daemon still mirrors vault tokens that official Codex does not have yet", async t => {
+  const { engine } = freshEngine(t);
+  const account = await addAccount(engine, "daemon-mirror@example.com", "acct-daemon-mirror", "daemon-mirror");
+  account.quota = {
+    hourly_remaining_percentage: 80,
+    hourly_window_present: true,
+    weekly_window_present: false,
+  };
+  account.usage_updated_at = engine.ts();
+  engine.saveAcct(account);
+  const index = engine.loadIdx();
+  index.current_account_id = account.id;
+  engine.saveIdx(index);
+  const auth = engine.writeAuthJson(account);
+  engine.writeProjection(account, auth);
+
+  // A refresh that never reached official auth.json: the vault moves on while
+  // the projection still matches what official holds.
+  const rotated = tokens("daemon-mirror@example.com", "acct-daemon-mirror", "daemon-mirror-new");
+  const stored = engine.loadAcct(account.id);
+  stored.tokens = { ...rotated, account_id: "acct-daemon-mirror" };
+  stored.token_generation = Number(stored.token_generation || 0) + 1;
+  engine.saveAcct(stored);
+
+  const config = require("../engine/config");
+  const authPath = path.join(config.CODEX_DIR, "auth.json");
+  const quotaModule = require("../engine/quota");
+  const originalFetch = quotaModule.fetchQuotaWithTokenRepair;
+  quotaModule.fetchQuotaWithTokenRepair = async () => ({
+    hourly_remaining_percentage: 80,
+    hourly_window_present: true,
+    weekly_remaining_percentage: null,
+    weekly_window_present: false,
+  });
+  t.after(() => { quotaModule.fetchQuotaWithTokenRepair = originalFetch; });
+  const result = await engine.runDaemonWorker();
+  assert.equal(result.pausedReason, null);
+  assert.equal(result.failures.length, 0);
+  assert.equal(JSON.parse(fs.readFileSync(authPath, "utf8")).tokens.access_token, rotated.access_token);
+  const after = engine.inspectAuthState({ migrateProjection: false });
+  assert.equal(after.status, "aligned");
+  assert.equal(after.vaultMatchesOfficial, true);
+  assert.equal(after.projectionMatchesOfficial, true);
+});
+
 test("token refresh still mirrors official auth when the projection matches", async t => {
   const { engine } = freshEngine(t);
   const account = await addAccount(engine, "refresh-mirror@example.com", "acct-refresh-mirror", "refresh-mirror");

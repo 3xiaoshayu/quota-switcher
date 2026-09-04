@@ -1183,6 +1183,9 @@ test("user-facing messages stay in Chinese", () => {
   );
   assert.equal(toUserMessage("Official Codex authentication is missing."), "官方 Codex 当前没有登录");
   assert.equal(toUserMessage("auth_conflict"), "官方登录了另一个账号");
+  // The auth:conflict broadcast carries the raw inspect status, not the daemon reason.
+  assert.equal(toUserMessage("conflict"), "官方登录了另一个账号");
+  assert.equal(toUserMessage("unknown"), "无法确认官方登录状态，自动同步已暂停");
   assert.equal(toUserMessage("missing_official_auth"), "官方 Codex 已退出");
   assert.equal(toUserMessage("current_changed"), "当前账号已变化，本次未切");
   assert.equal(toUserMessage("current_quota_refresh_failed"), "当前账号额度刷新失败，本次未切");

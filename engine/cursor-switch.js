@@ -245,9 +245,10 @@ async function doCursorSwitch(account) {
           logError(`Cursor account index rollback failed: ${describeCaughtError(restoreError)}`);
         }
       }
-    } else {
-      relaunchIfPossible(runtime, launchPath);
     }
+    // The official window was closed for the write. Whether or not anything
+    // was written, the user gets their editor back on the previous login.
+    relaunchIfPossible(runtime, launchPath);
     throw error;
   }
 }

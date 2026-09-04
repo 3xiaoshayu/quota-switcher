@@ -1,9 +1,5 @@
 const cp = require("node:child_process");
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
 
-const { writeFileWithRetry, unlinkIfPresent } = require("./atomic-file");
 const { logWarn } = require("./logger");
 
 const CREDENTIAL_TARGET = "gemini:antigravity";
@@ -77,10 +73,10 @@ public class AgCredWrite {
   }
 }
 "@
-$path = $env:AG_CRED_FILE
-if (-not $path) { throw "AG_CRED_FILE is missing" }
-$json = [IO.File]::ReadAllText($path)
-$bytes = [Text.Encoding]::UTF8.GetBytes($json)
+$encoded = $env:AG_CRED_B64
+if (-not $encoded) { throw "AG_CRED_B64 is missing" }
+$bytes = [Convert]::FromBase64String($encoded)
+if ($bytes.Length -le 0) { throw "AG_CRED_B64 is empty" }
 $ptr = [Runtime.InteropServices.Marshal]::AllocHGlobal($bytes.Length)
 try {
   [Runtime.InteropServices.Marshal]::Copy($bytes, 0, $ptr, $bytes.Length)
@@ -233,26 +229,21 @@ async function readWindowsAntigravityCredential(runCommand) {
   return parseCredentialBlob(stdout);
 }
 
+// The payload carries the refresh token, so it never touches the disk: it is
+// handed to PowerShell through the child's environment and decoded there.
+// A temp file would outlive a crash in %TEMP% in clear text.
+function encodeCredentialPayloadForEnv(payload) {
+  return Buffer.from(String(payload), "utf8").toString("base64");
+}
+
 async function writeWindowsAntigravityCredential(account, runCommand) {
   if (process.platform !== "win32") return true;
   const payload = buildAntigravityCredentialPayload(account);
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ag-cred-"));
-  const filePath = path.join(dir, "payload.json");
-  writeFileWithRetry(filePath, payload, "utf8");
-  try {
-    const descriptor = fs.openSync(filePath, "r+");
-    try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
-  } catch {}
-  try {
-    await runPowerShell(WRITE_SCRIPT, runCommand, {
-      timeout: 8000,
-      env: { ...process.env, AG_CRED_FILE: filePath },
-    });
-    return true;
-  } finally {
-    try { unlinkIfPresent(filePath); } catch {}
-    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
-  }
+  await runPowerShell(WRITE_SCRIPT, runCommand, {
+    timeout: 8000,
+    env: { ...process.env, AG_CRED_B64: encodeCredentialPayloadForEnv(payload) },
+  });
+  return true;
 }
 
 async function deleteWindowsAntigravityCredential(runCommand) {
@@ -275,8 +266,10 @@ async function restoreWindowsAntigravityCredential(snapshot, runCommand) {
 module.exports = {
   CREDENTIAL_TARGET,
   READ_SCRIPT,
+  WRITE_SCRIPT,
   parseCredentialBlob,
   buildAntigravityCredentialPayload,
+  encodeCredentialPayloadForEnv,
   readWindowsAntigravityCredential,
   writeWindowsAntigravityCredential,
   deleteWindowsAntigravityCredential,

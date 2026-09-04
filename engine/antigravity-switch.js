@@ -252,9 +252,10 @@ async function doAntigravitySwitch(account) {
           logError(`Antigravity account index rollback failed: ${describeCaughtError(restoreError)}`);
         }
       }
-    } else {
-      relaunchIfPossible(runtime, launchPath, launchOptions);
     }
+    // The official window was closed for the write. Whether or not anything
+    // was written, the user gets their IDE back on the previous login.
+    relaunchIfPossible(runtime, launchPath, launchOptions);
     throw error;
   }
 }

@@ -16,6 +16,87 @@ const {
   readWindowsInternetProxy,
 } = require("../engine/proxy-resolve");
 
+test("a direct answer is remembered so a proxy-less PC does not re-probe every request", async () => {
+  const proxy = require("../engine/proxy-resolve");
+  let discoveries = 0;
+  let probes = 0;
+  proxy.invalidateLiveProxy();
+  proxy.resetFailedProxiesForTests();
+  proxy.setProxyDiscoveryForTests({
+    collectCandidates: async () => {
+      discoveries += 1;
+      return [{ source: "portScan", proxyUrl: "http://127.0.0.1:65530" }];
+    },
+    probeProxyUrl: async () => {
+      probes += 1;
+      return false;
+    },
+    hostLooksPoisoned: async () => false,
+    readPacRule: async () => "",
+  });
+  try {
+    const first = await proxy.resolveLiveProxy("https://chatgpt.com/backend-api/wham/usage");
+    const second = await proxy.resolveLiveProxy("https://chatgpt.com/backend-api/wham/usage");
+    const third = await proxy.resolveLiveProxy("https://chatgpt.com/other");
+    assert.equal(first.source, "direct");
+    assert.equal(first.proxyUrl, "");
+    assert.equal(second, first, "the second call must come from the cache");
+    assert.equal(third, first, "the cache is per destination host, not per path");
+    assert.equal(discoveries, 1);
+    const probesAfterFirst = probes;
+
+    // Another host still gets its own discovery pass.
+    const other = await proxy.resolveLiveProxy("https://cursor.com/api/usage-summary");
+    assert.equal(other.source, "direct");
+    assert.equal(discoveries, 2);
+
+    // A failed request invalidates the cache so a newly started proxy is found.
+    proxy.invalidateLiveProxy();
+    proxy.setProxyDiscoveryForTests({
+      collectCandidates: async () => {
+        discoveries += 1;
+        return [{ source: "portScan", proxyUrl: "http://127.0.0.1:10808" }];
+      },
+      probeProxyUrl: async () => true,
+      hostLooksPoisoned: async () => false,
+      readPacRule: async () => "",
+    });
+    const found = await proxy.resolveLiveProxy("https://chatgpt.com/backend-api/wham/usage");
+    assert.equal(found.proxyUrl, "http://127.0.0.1:10808");
+    assert.equal(discoveries, 3);
+    assert.ok(probes >= probesAfterFirst);
+  } finally {
+    proxy.setProxyDiscoveryForTests(null);
+    proxy.invalidateLiveProxy();
+    proxy.resetFailedProxiesForTests();
+  }
+});
+
+test("a poisoned host without a proxy is not cached as direct", async () => {
+  const proxy = require("../engine/proxy-resolve");
+  let discoveries = 0;
+  proxy.invalidateLiveProxy();
+  proxy.setProxyDiscoveryForTests({
+    collectCandidates: async () => {
+      discoveries += 1;
+      return [];
+    },
+    probeProxyUrl: async () => false,
+    hostLooksPoisoned: async () => true,
+    readPacRule: async () => "",
+  });
+  try {
+    const first = await proxy.resolveLiveProxy("https://chatgpt.com/");
+    const second = await proxy.resolveLiveProxy("https://chatgpt.com/");
+    assert.equal(first.source, "none");
+    assert.equal(second.source, "none");
+    assert.equal(discoveries, 2, "a blocked host keeps looking for a proxy");
+  } finally {
+    proxy.setProxyDiscoveryForTests(null);
+    proxy.invalidateLiveProxy();
+  }
+});
+
 test("a proxy that just failed HTTP is remembered so resolve can skip it", () => {
   resetFailedProxiesForTests();
   markProxyFailed("http://127.0.0.1:7890");

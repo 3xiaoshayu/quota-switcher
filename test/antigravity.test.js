@@ -577,6 +577,44 @@ test("antigravity switch rolls back when the written login does not match the ta
   assert.equal(engine.currentAntigravityAcct().id, created.account.id);
 });
 
+test("antigravity switch relaunches the IDE on the previous login after a post-write rollback", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "ag-state.vscdb");
+  const exePath = path.join(root, "Antigravity IDE.exe");
+  fs.writeFileSync(exePath, "fake");
+  await engine.writeAntigravityAuth(dbPath, {
+    access_token: "ya29.keep",
+    refresh_token: "1//keep",
+    expiry_timestamp: 10,
+  });
+  const created = await engine.upsertAntigravityAccount({
+    email: "ag-relaunch@example.com",
+    access_token: "ya29.ag-relaunch",
+    refresh_token: "1//ag-relaunch",
+    expiry_timestamp: 99,
+  });
+  const launched = [];
+  engine.setAntigravityRuntimeForTests({
+    vscdbPath: () => dbPath,
+    exePath: () => exePath,
+    listProcesses: async () => [],
+    launch: (target) => launched.push(target),
+    sleep: async () => {},
+  });
+  const agDb = require("../engine/antigravity-db");
+  const originalRead = agDb.readAntigravityAuth;
+  agDb.readAntigravityAuth = async () => ({ access_token: "ya29.wrong" });
+  t.after(() => { agDb.readAntigravityAuth = originalRead; });
+  await assert.rejects(
+    () => engine.doAntigravitySwitch(engine.loadAntigravityAcct(created.account.id)),
+    /核对失败/,
+  );
+  agDb.readAntigravityAuth = originalRead;
+  const stored = await engine.readAntigravityAuth(dbPath);
+  assert.equal(stored.access_token, "ya29.keep");
+  assert.deepEqual(launched, [exePath], "the closed IDE must come back after the rollback");
+});
+
 test("antigravity switch does not roll back when leftover lock blocks post-write read", async (t) => {
   const { engine, root } = freshEngine(t);
   const dbPath = path.join(root, "ag-state.vscdb");
@@ -979,6 +1017,44 @@ test("antigravity quota falls over to the second Cloud Code host after HTTP 520"
   assert.ok(hosts.some((host) => host === "cloudcode-pa.googleapis.com"));
 });
 
+test("antigravity quota falls over to the second Cloud Code host after HTTP 429", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "failover-429@example.com",
+    access_token: "ya29.failover-429",
+    refresh_token: "1//failover-429",
+    expiry_timestamp: Math.floor(Date.now() / 1000) + 3600,
+  });
+  const hosts = [];
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async (url) => {
+      const host = new URL(url).host;
+      hosts.push(host);
+      if (host.startsWith("daily-") && String(url).includes("loadCodeAssist")) {
+        return { status: 429, headers: { "retry-after": "45" }, body: "rate_limit" };
+      }
+      if (String(url).includes("loadCodeAssist")) {
+        return {
+          status: 200,
+          body: JSON.stringify({
+            allowedTiers: [{ id: "free-tier", name: "Free", isDefault: true }],
+          }),
+        };
+      }
+      return { status: 200, body: "{}" };
+    },
+  });
+  await engine.refreshAntigravityQuota(engine.loadAntigravityAcct(created.account.id), { force: true });
+  const latest = engine.loadAntigravityAcct(created.account.id);
+  assert.equal(latest.quota.tier, "free-tier");
+  assert.equal(latest.quota_error, null);
+  assert.equal(latest.requires_reauth, false);
+  assert.equal(latest.tokens.access_token, "ya29.failover-429");
+  assert.ok(hosts.some((host) => host.startsWith("daily-")));
+  assert.ok(hosts.some((host) => host === "cloudcode-pa.googleapis.com"));
+});
+
 test("antigravity quota falls over to the second Cloud Code host after HTTP 500", async (t) => {
   const { engine } = freshEngine(t);
   const created = await engine.upsertAntigravityAccount({
@@ -1124,6 +1200,66 @@ test("antigravity leftover usage 401 backs off instead of retrying every minute"
   assert.equal(usageCalls, afterFail);
 });
 
+test("antigravity usage 403 with a challenge page is a temporary miss, not a lost login", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "challenge@example.com",
+    access_token: "ya29.challenge",
+    refresh_token: "1//challenge",
+    expiry_timestamp: Math.floor(Date.now() / 1000) + 3600,
+    quota: { tier: "FREE", gemini_weekly_remaining: 72, gemini_five_hour_remaining: 88 },
+    usage_updated_at: Math.floor(Date.now() / 1000) - 120,
+  });
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async () => ({
+      status: 403,
+      headers: { "content-type": "text/html; charset=UTF-8" },
+      body: "<!DOCTYPE html><html><head><title>Just a moment...</title></head><body>Checking your browser</body></html>",
+    }),
+  });
+  await assert.rejects(
+    () => engine.refreshAntigravityQuota(engine.loadAntigravityAcct(created.account.id), { force: true }),
+    /没查清/,
+  );
+  const failed = engine.loadAntigravityAcct(created.account.id);
+  assert.equal(failed.requires_reauth, false, "a web page is not a revoked Google login");
+  assert.equal(failed.quota_error.code, "probe_failed");
+  assert.equal(failed.quota.gemini_weekly_remaining, 72, "leftover quota stays visible");
+  assert.ok(Number(failed.quota_next_retry_at) > Math.floor(Date.now() / 1000));
+});
+
+test("antigravity token refresh 403 with a challenge page schedules a retry instead of reauth", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertAntigravityAccount({
+    email: "token-challenge@example.com",
+    access_token: "ya29.token-challenge",
+    refresh_token: "1//token-challenge",
+    expiry_timestamp: Math.floor(Date.now() / 1000) - 30,
+  });
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async () => ({
+      status: 403,
+      headers: { "content-type": "text/html" },
+      body: "<html><body>Access denied by proxy</body></html>",
+    }),
+  });
+  const result = await engine.refreshAntigravityToken(engine.loadAntigravityAcct(created.account.id), { force: true });
+  assert.equal(result.ok, false);
+  assert.equal(!!result.reauthRequired, false);
+  const account = engine.loadAntigravityAcct(created.account.id);
+  assert.equal(account.requires_reauth, false);
+  assert.ok(Number(account.token_next_retry_at) > Math.floor(Date.now() / 1000));
+
+  engine.setAntigravityRuntimeForTests({
+    oauthClient: () => ({ clientId: "id", clientSecret: "secret" }),
+    httpJson: async () => ({ status: 400, body: JSON.stringify({ error: "invalid_grant" }) }),
+  });
+  const revoked = await engine.refreshAntigravityToken(engine.loadAntigravityAcct(created.account.id), { force: true });
+  assert.equal(revoked.reauthRequired, true, "a real invalid_grant still means reauth");
+});
+
 test("antigravity quota refresh backs off when an expired token cannot be refreshed", async (t) => {
   const { engine } = freshEngine(t);
   const created = await engine.upsertAntigravityAccount({
@@ -1221,6 +1357,78 @@ test("antigravity sync marks current from official refresh fingerprint", async (
   const current = await engine.syncCurrentAntigravityFromOfficial();
   assert.equal(current.id, second.account.id);
   assert.notEqual(current.id, first.account.id);
+});
+
+test("antigravity sync for the IDE build reads state.vscdb and skips the Credential Manager spawn", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const first = await engine.upsertAntigravityAccount({
+    email: "ide-one@example.com",
+    access_token: "ya29.ide-one",
+    refresh_token: "1//ide-one",
+  });
+  const second = await engine.upsertAntigravityAccount({
+    email: "ide-two@example.com",
+    access_token: "ya29.ide-two",
+    refresh_token: "1//ide-two",
+  });
+  const dbPath = path.join(root, "ide-sync.vscdb");
+  await engine.writeAntigravityAuth(dbPath, {
+    access_token: "ya29.ide-two",
+    refresh_token: "1//ide-two",
+    expiry_timestamp: 99,
+  });
+  const ideExe = path.join(root, "Programs", "Antigravity IDE", "Antigravity IDE.exe");
+  let credentialReads = 0;
+  engine.setAntigravityRuntimeForTests({
+    vscdbPath: () => dbPath,
+    exePath: () => ideExe,
+    readSystemCredential: async () => {
+      credentialReads += 1;
+      // A stale Hub credential must not outrank the IDE's own login.
+      return { access_token: "ya29.ide-one", refresh_token: "1//ide-one", email: "ide-one@example.com" };
+    },
+    execFile: async () => {
+      credentialReads += 1;
+      return { stdout: "" };
+    },
+  });
+  engine.setCurrentAntigravityAccountId(first.account.id);
+  const current = await engine.syncCurrentAntigravityFromOfficial({ force: true });
+  assert.equal(current.id, second.account.id);
+  assert.equal(credentialReads, 0, "an IDE install never needs the PowerShell credential read");
+
+  const { officialLoginMayUseCredential } = require("../engine/antigravity-local");
+  assert.equal(officialLoginMayUseCredential({ exePath: () => ideExe }), false);
+  assert.equal(officialLoginMayUseCredential({ exePath: () => path.join(root, "Programs", "antigravity", "Antigravity.exe") }), true);
+  assert.equal(officialLoginMayUseCredential({ exePath: () => null }), true);
+});
+
+test("antigravity sync for the Hub build still follows the Windows credential", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const first = await engine.upsertAntigravityAccount({
+    email: "hub-one@example.com",
+    access_token: "ya29.hub-one",
+    refresh_token: "1//hub-one",
+  });
+  const second = await engine.upsertAntigravityAccount({
+    email: "hub-two@example.com",
+    access_token: "ya29.hub-two",
+    refresh_token: "1//hub-two",
+  });
+  const hubExe = path.join(root, "Programs", "antigravity", "Antigravity.exe");
+  let credentialReads = 0;
+  engine.setAntigravityRuntimeForTests({
+    vscdbPath: () => path.join(root, "missing-hub.vscdb"),
+    exePath: () => hubExe,
+    readSystemCredential: async () => {
+      credentialReads += 1;
+      return { access_token: "ya29.hub-two", refresh_token: "1//hub-two", email: "hub-two@example.com" };
+    },
+  });
+  engine.setCurrentAntigravityAccountId(first.account.id);
+  const current = await engine.syncCurrentAntigravityFromOfficial({ force: true });
+  assert.equal(current.id, second.account.id);
+  assert.equal(credentialReads, 1);
 });
 
 test("antigravity import keeps existing email when official store has no mailbox", async (t) => {
@@ -2147,86 +2355,55 @@ test("antigravity hub credential payload uses consumer auth_method", () => {
 test("antigravity credential write overwrites without deleting first", async () => {
   const { writeWindowsAntigravityCredential } = require("../engine/antigravity-credential");
   let script = "";
-  let fsyncedBeforeRead = false;
-  const originalFsync = fs.fsyncSync;
-  let fsyncs = 0;
-  fs.fsyncSync = (fd) => {
-    fsyncs += 1;
-    return originalFsync(fd);
-  };
+  const ok = await writeWindowsAntigravityCredential({
+    tokens: { access_token: "ya29.overwrite", refresh_token: "1//overwrite" },
+  }, async (_file, args) => {
+    script = String(args[args.indexOf("-Command") + 1] || "");
+    return { stdout: "", stderr: "" };
+  });
+  assert.equal(ok, true);
+  assert.match(script, /CredWrite/);
+  assert.doesNotMatch(script, /CredDelete\(/);
+});
+
+test("antigravity credential payload reaches PowerShell without touching the disk", async () => {
+  const {
+    writeWindowsAntigravityCredential,
+    buildAntigravityCredentialPayload,
+    WRITE_SCRIPT,
+  } = require("../engine/antigravity-credential");
+  const account = { tokens: { access_token: "ya29.mem", refresh_token: "1//mem-秘密", expiry_timestamp: 1_800_000_000 } };
+  const originalWrite = fs.writeFileSync;
+  const originalOpen = fs.openSync;
+  const originalMkdtemp = fs.mkdtempSync;
+  const touched = [];
+  fs.writeFileSync = (file, ...rest) => { touched.push(String(file)); return originalWrite(file, ...rest); };
+  fs.openSync = (file, ...rest) => { touched.push(String(file)); return originalOpen(file, ...rest); };
+  fs.mkdtempSync = (prefix, ...rest) => { touched.push(String(prefix)); return originalMkdtemp(prefix, ...rest); };
+  let seenEnv = null;
+  let script = "";
   try {
-    const ok = await writeWindowsAntigravityCredential({
-      tokens: { access_token: "ya29.overwrite", refresh_token: "1//overwrite" },
-    }, async (_file, args) => {
-      fsyncedBeforeRead = fsyncs >= 1;
+    const ok = await writeWindowsAntigravityCredential(account, async (_file, args, options) => {
+      seenEnv = options?.env || null;
       script = String(args[args.indexOf("-Command") + 1] || "");
       return { stdout: "", stderr: "" };
     });
     assert.equal(ok, true);
-    assert.equal(fsyncedBeforeRead, true);
-    assert.match(script, /CredWrite/);
-    assert.doesNotMatch(script, /CredDelete\(/);
   } finally {
-    fs.fsyncSync = originalFsync;
+    fs.writeFileSync = originalWrite;
+    fs.openSync = originalOpen;
+    fs.mkdtempSync = originalMkdtemp;
   }
-});
-
-test("antigravity credential writes retry when the temp payload is locked", async (t) => {
-  const { writeWindowsAntigravityCredential } = require("../engine/antigravity-credential");
-  const originalWrite = fs.writeFileSync;
-  let failures = 0;
-  fs.writeFileSync = (file, content, encoding) => {
-    if (String(file).endsWith("payload.json") && failures < 2) {
-      failures += 1;
-      const error = new Error("EPERM: operation not permitted");
-      error.code = "EPERM";
-      throw error;
-    }
-    return originalWrite(file, content, encoding);
-  };
-  t.after(() => { fs.writeFileSync = originalWrite; });
-  const ok = await writeWindowsAntigravityCredential({
-    tokens: { access_token: "ya29.retry", refresh_token: "1//retry" },
-  }, async () => ({ stdout: "", stderr: "" }));
-  assert.equal(ok, true);
-  assert.equal(failures, 2);
-});
-
-test("antigravity credential cleanup retries a locked temp payload", async (t) => {
-  const { writeWindowsAntigravityCredential } = require("../engine/antigravity-credential");
-  const originalUnlink = fs.unlinkSync;
-  const originalRm = fs.rmSync;
-  let unlinkFailures = 0;
-  let leftoverDir = null;
-  fs.unlinkSync = (file) => {
-    if (String(file).endsWith("payload.json") && unlinkFailures < 2) {
-      leftoverDir = path.dirname(String(file));
-      unlinkFailures += 1;
-      const error = new Error("EPERM: operation not permitted");
-      error.code = "EPERM";
-      throw error;
-    }
-    return originalUnlink(file);
-  };
-  fs.rmSync = (dir, options) => {
-    if (fs.existsSync(path.join(String(dir), "payload.json"))) {
-      const error = new Error("ENOTEMPTY: directory not empty");
-      error.code = "ENOTEMPTY";
-      throw error;
-    }
-    return originalRm(dir, options);
-  };
-  t.after(() => {
-    fs.unlinkSync = originalUnlink;
-    fs.rmSync = originalRm;
-  });
-  const ok = await writeWindowsAntigravityCredential({
-    tokens: { access_token: "ya29.clean", refresh_token: "1//clean" },
-  }, async () => ({ stdout: "", stderr: "" }));
-  assert.equal(ok, true);
-  assert.equal(unlinkFailures, 2);
-  assert.ok(leftoverDir);
-  assert.equal(fs.existsSync(path.join(leftoverDir, "payload.json")), false);
+  assert.deepEqual(touched.filter((item) => /ag-cred|payload\.json/i.test(item)), [], "the token must not be written to %TEMP%");
+  assert.ok(seenEnv, "PowerShell must receive an environment");
+  assert.equal(seenEnv.AG_CRED_FILE, undefined);
+  const decoded = Buffer.from(String(seenEnv.AG_CRED_B64 || ""), "base64").toString("utf8");
+  assert.equal(decoded, buildAntigravityCredentialPayload(account));
+  assert.equal(JSON.parse(decoded).token.refresh_token, "1//mem-秘密");
+  assert.match(script, /AG_CRED_B64/);
+  assert.match(script, /FromBase64String/);
+  assert.doesNotMatch(script, /ReadAllText|AG_CRED_FILE/);
+  assert.match(WRITE_SCRIPT, /CredWrite/);
 });
 
 test("antigravity launch starts Hub through the Windows shell with user-data-dir", () => {

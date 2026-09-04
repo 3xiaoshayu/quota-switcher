@@ -5,6 +5,7 @@ const { statSyncWithRetry, pathExists, unlinkIfPresent, readdirSyncWithRetry, mk
 const LOG_DIR = path.join(DATA_DIR, "logs");
 const RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
 let initialized = false;
+let lastCleanupDate = null;
 
 function maskEmail(email) {
   const [local, domain] = String(email).split("@");
@@ -23,14 +24,18 @@ function sanitizeMessage(value) {
   return text;
 }
 
-function currentLogPath() {
-  const date = new Date().toISOString().slice(0, 10);
-  return path.join(LOG_DIR, `app-${date}.log`);
+function logDate(now = new Date()) {
+  return now.toISOString().slice(0, 10);
 }
 
-function cleanupLogs() {
+function currentLogPath(now = new Date()) {
+  return path.join(LOG_DIR, `app-${logDate(now)}.log`);
+}
+
+function cleanupLogs(now = Date.now()) {
+  lastCleanupDate = logDate(new Date(now));
   if (!pathExists(LOG_DIR)) return;
-  const cutoff = Date.now() - RETENTION_MS;
+  const cutoff = now - RETENTION_MS;
   for (const name of readdirSyncWithRetry(LOG_DIR)) {
     if (!/^app-\d{4}-\d{2}-\d{2}\.log$/.test(name)) continue;
     const filePath = path.join(LOG_DIR, name);
@@ -47,11 +52,20 @@ function initLogger() {
   initialized = true;
 }
 
+// The app lives in the tray for days. Prune again when the log file rolls to
+// a new date instead of only at startup, so retention actually holds.
+function pruneOnDateRollover(now) {
+  if (lastCleanupDate === logDate(now)) return;
+  try { cleanupLogs(now.getTime()); } catch {}
+}
+
 function write(level, message) {
   try {
     initLogger();
-    const line = `${new Date().toISOString()} ${level.toUpperCase()} ${sanitizeMessage(message)}\n`;
-    appendFileWithRetry(currentLogPath(), line, "utf8");
+    const now = new Date();
+    pruneOnDateRollover(now);
+    const line = `${now.toISOString()} ${level.toUpperCase()} ${sanitizeMessage(message)}\n`;
+    appendFileWithRetry(currentLogPath(now), line, "utf8");
   } catch {}
 }
 
@@ -63,6 +77,8 @@ function getLogDir() { initLogger(); return LOG_DIR; }
 module.exports = {
   initLogger,
   cleanupLogs,
+  pruneOnDateRollover,
+  RETENTION_MS,
   sanitizeMessage,
   logInfo,
   logWarn,

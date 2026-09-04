@@ -187,6 +187,18 @@ function DashboardApp() {
   const authStateRef = useRef<DesktopAuthState>(authState);
   const configSaveQueue = useRef<Promise<unknown>>(Promise.resolve());
   const configSaveRevision = useRef(0);
+  // User-initiated config saves still in flight. While one is pending, a
+  // snapshot that started before the click must not put the old config back.
+  const configSavesPending = useRef(0);
+
+  // Every auth-state write goes through the same busy-placeholder filter as a
+  // snapshot, so a lock-busy "unknown" from a daemon tick or an OAuth result
+  // cannot wipe a real conflict banner or lift the auto-sync gate.
+  const applyAuthState = useCallback((incoming: DesktopAuthState | null | undefined) => {
+    const next = resolveAuthStateAfterSnapshot(incoming, authStateRef.current);
+    setAuthState(next);
+    authStateRef.current = next;
+  }, []);
   
   const selectedAccountIdsRef = useRef<string[]>(selectedAccountIds);
 
@@ -384,16 +396,17 @@ function DashboardApp() {
   const applyDashboardState = useCallback((snapshot: Awaited<ReturnType<typeof desktopApi.loadDashboardState>>) => {
     setCodexAccounts(snapshot.accounts);
     accountsRef.current = isManagedProduct(productRef.current) ? accountsRef.current : snapshot.accounts;
-    const prunedSelected = snapshot.config.account_scope_mode === 'selected'
-      ? pruneAutoSwitchAccountIds(snapshot.config.selected_account_ids || [], snapshot.accounts)
+    const baseConfig = configSavesPending.current > 0 ? autoSwitchConfigRef.current : snapshot.config;
+    const prunedSelected = baseConfig.account_scope_mode === 'selected'
+      ? pruneAutoSwitchAccountIds(baseConfig.selected_account_ids || [], snapshot.accounts)
       : snapshot.accounts.filter(canJoinAutoSwitch).map((account) => account.id);
-    let nextConfig = snapshot.config;
+    let nextConfig = baseConfig;
     if (
-      snapshot.config.account_scope_mode === 'selected'
-      && !selectedAccountIdsEqual(snapshot.config.selected_account_ids || [], prunedSelected)
+      baseConfig.account_scope_mode === 'selected'
+      && !selectedAccountIdsEqual(baseConfig.selected_account_ids || [], prunedSelected)
     ) {
       nextConfig = {
-        ...snapshot.config,
+        ...baseConfig,
         selected_account_ids: prunedSelected,
       };
       const revision = configSaveRevision.current;
@@ -410,9 +423,7 @@ function DashboardApp() {
     setAppInfo(snapshot.appInfo);
     setCodexStatus(snapshot.codexStatus);
     setUpdateStatus(snapshot.updateStatus);
-    const nextAuth = resolveAuthStateAfterSnapshot(snapshot.authState, authStateRef.current);
-    setAuthState(nextAuth);
-    authStateRef.current = nextAuth;
+    applyAuthState(snapshot.authState);
     const incomingOAuth = snapshot.oauthStatus;
     const localOAuth = oauthStatusRef.current;
     const nextOAuth = localOAuth?.pending && !incomingOAuth.pending && incomingOAuth.status === 'idle'
@@ -442,11 +453,19 @@ function DashboardApp() {
     });
     setSelectedAccountIds(prunedSelected);
     selectedAccountIdsRef.current = prunedSelected;
-  }, [persistProduct]);
+  }, [applyAuthState, persistProduct]);
 
-  const loadDashboardState = useCallback(async (showLoading = false, options?: { skipOfficialSync?: boolean }) => {
-    if (!desktopBridgeAvailable) return null;
-    const seq = ++dashboardLoadSeqRef.current;
+  type DashboardLoadResult = Awaited<ReturnType<typeof desktopApi.loadDashboardState>> & {
+    cursorAccounts: AccountQuota[];
+    antigravityAccounts: AccountQuota[];
+  };
+  const latestDashboardLoadRef = useRef<Promise<DashboardLoadResult | null> | null>(null);
+
+  const loadDashboardStateOnce = useCallback(async (
+    seq: number,
+    showLoading: boolean,
+    options?: { skipOfficialSync?: boolean },
+  ): Promise<DashboardLoadResult | null> => {
     if (showLoading && !hasLoadedDashboard.current) {
       setDashboardLoadState('loading');
       setDashboardLoadError(null);
@@ -510,6 +529,32 @@ function DashboardApp() {
       return null;
     }
   }, [addLogEntry, addToast, applyAntigravityState, applyCursorState, applyDashboardState]);
+
+  const loadDashboardState = useCallback(async (
+    showLoading = false,
+    options?: { skipOfficialSync?: boolean },
+  ): Promise<DashboardLoadResult | null> => {
+    if (!desktopBridgeAvailable) return null;
+    const seq = ++dashboardLoadSeqRef.current;
+    const run = loadDashboardStateOnce(seq, showLoading, options);
+    latestDashboardLoadRef.current = run;
+    const result = await run;
+    if (result !== null || seq === dashboardLoadSeqRef.current) return result;
+    // A newer load (typically the 150 ms patch reload that follows this
+    // operation's own quota:updated event) took over and applied the fresher
+    // snapshot. Callers that read the snapshot for their toast must see that
+    // result instead of a null that looks like "still updating". Follow the
+    // chain until a load actually finished or nothing newer exists.
+    let latest = latestDashboardLoadRef.current;
+    while (latest && latest !== run) {
+      const outcome = await latest;
+      if (outcome !== null) return outcome;
+      const newer = latestDashboardLoadRef.current;
+      if (newer === latest) return null;
+      latest = newer;
+    }
+    return null;
+  }, [loadDashboardStateOnce]);
 
   const queueQuotaAutoSync = useCallback((candidateAccounts: AccountQuota[]) => {
     if (!desktopBridgeAvailable || quotaAutoSyncPromise.current) return;
@@ -621,10 +666,7 @@ function DashboardApp() {
 
     const unsubscribe = desktopApi.subscribe({
       onDaemonTick: (payload) => {
-        if (payload?.result?.authState) {
-          setAuthState(payload.result.authState);
-          authStateRef.current = payload.result.authState;
-        }
+        if (payload?.result?.authState) applyAuthState(payload.result.authState);
         loadDashboardState(false).then((snapshot) => {
           if (!disposed && snapshot) queueQuotaAutoSync(snapshot.accounts);
         });
@@ -635,10 +677,7 @@ function DashboardApp() {
         addLogEntry(text, 'error', 'codex');
       },
       onAutoSwitch: (result) => {
-        if (result?.authState) {
-          setAuthState(result.authState);
-          authStateRef.current = result.authState;
-        }
+        if (result?.authState) applyAuthState(result.authState);
         if (result?.switched) {
           setSessionSwitchCount(count => count + 1);
           if (result.to?.id) applyCurrentAccountBadge('codex', result.to.id);
@@ -651,8 +690,7 @@ function DashboardApp() {
         setSettings(prev => ({ ...prev, latestStatus: latestStatusForUi(status), updateChannel: updateChannelForUi(status) }));
       },
       onAuthConflict: (state) => {
-        setAuthState(state);
-        authStateRef.current = state;
+        applyAuthState(state);
         const raw = state.status && state.status !== 'aligned'
           ? state.status
           : (state.message || '官方 Codex 登录状态已变更。');
@@ -672,7 +710,7 @@ function DashboardApp() {
       window.clearInterval(syncTimer);
       unsubscribe();
     };
-  }, [addLogEntry, addToast, applyCurrentAccountBadge, loadDashboardState, queueQuotaAutoSync]);
+  }, [addLogEntry, addToast, applyAuthState, applyCurrentAccountBadge, loadDashboardState, queueQuotaAutoSync]);
 
   const reportOAuthFinished = useCallback((status: DesktopOAuthStatus, source: ProductKind | 'auto' = 'auto') => {
     if (status.pending) return;
@@ -704,10 +742,7 @@ function DashboardApp() {
       return;
     }
     if (status.status !== 'completed') return;
-    if (result?.authState) {
-      setAuthState(result.authState);
-      authStateRef.current = result.authState;
-    }
+    if (result?.authState) applyAuthState(result.authState);
     if (result?.mismatch) {
       if (kind === 'codex' && result?.accountId && result?.switched !== false) {
         applyCurrentAccountBadge('codex', result.accountId);
@@ -744,7 +779,7 @@ function DashboardApp() {
         .catch(() => {})
         .then(() => loadDashboardState(false));
     }
-  }, [addLogEntry, addToast, applyCurrentAccountBadge, loadDashboardState]);
+  }, [addLogEntry, addToast, applyAuthState, applyCurrentAccountBadge, loadDashboardState]);
 
   const oauthStatusFor = (kind: ProductKind) => {
     if (kind === 'antigravity') return antigravityOAuthStatusRef.current;
@@ -752,7 +787,19 @@ function DashboardApp() {
     return oauthStatusRef.current;
   };
 
-  const anyOAuthPending = () => !!oauthStatusFor(productRef.current)?.pending;
+  // The engine allows one browser authorization at a time across all three
+  // products, so the guard has to look at all three as well.
+  const anyOAuthPending = () => !!oauthStatusFor('codex')?.pending
+    || !!oauthStatusFor('cursor')?.pending
+    || !!oauthStatusFor('antigravity')?.pending;
+
+  // After the add/reauth call rejected, a settled "completed" status can only
+  // belong to an earlier flow; re-reporting it would toast a stale account.
+  const oauthStatusEndedThisFlow = (status: DesktopOAuthStatus | null | undefined) => !!status
+    && !status.pending
+    && status.status !== 'completed'
+    && status.status !== 'idle'
+    && status.status !== 'pending';
 
   const markOAuthPending = useCallback((targetAccountId: string | null) => {
     dashboardLoadSeqRef.current += 1;
@@ -1166,10 +1213,7 @@ function DashboardApp() {
       addLogEntry('正在为新账号打开授权。', 'info', kind);
       try {
         const added = await actions.addAccount(kind) as { authState?: DesktopAuthState };
-        if (kind === 'codex' && added?.authState) {
-          setAuthState(added.authState);
-          authStateRef.current = added.authState;
-        }
+        if (kind === 'codex' && added?.authState) applyAuthState(added.authState);
         const snapshot = await loadDashboardState(false);
         if (snapshot && !isManagedProduct(kind)) queueQuotaAutoSync(snapshot.accounts);
         if (productRef.current !== kind) return;
@@ -1179,8 +1223,8 @@ function DashboardApp() {
         if (snapshot && !isManagedProduct(kind)) queueQuotaAutoSync(snapshot.accounts);
         if (productRef.current !== kind) throw error;
         const finished = await actions.oauthStatus(kind).catch(() => snapshot?.oauthStatus || null);
-        if (finished && !finished.pending) {
-          reportOAuthFinished(finished, kind);
+        if (oauthStatusEndedThisFlow(finished)) {
+          reportOAuthFinished(finished as DesktopOAuthStatus, kind);
         } else {
           const message = toUserMessage(error instanceof Error ? error.message : String(error));
           addToast(message, 'error', kind);
@@ -1209,10 +1253,7 @@ function DashboardApp() {
     addLogEntry('正在打开重新授权。', 'info', kind);
     try {
       const result = await actions.reauthorize(kind, id) as { account?: { id?: string; email?: string }; mismatch?: boolean; targetAccountId?: string | null; authState?: DesktopAuthState };
-      if (kind === 'codex' && result?.authState) {
-        setAuthState(result.authState);
-        authStateRef.current = result.authState;
-      }
+      if (kind === 'codex' && result?.authState) applyAuthState(result.authState);
       const snapshot = await loadDashboardState(false);
       if (snapshot && !isManagedProduct(kind)) queueQuotaAutoSync(snapshot.accounts);
       if (productRef.current !== kind) return;
@@ -1243,8 +1284,8 @@ function DashboardApp() {
       const finished = isManagedProduct(kind)
         ? await actions.oauthStatus(kind).catch(() => null)
         : snapshot?.oauthStatus;
-      if (finished && !finished.pending) {
-        reportOAuthFinished(finished, kind);
+      if (oauthStatusEndedThisFlow(finished)) {
+        reportOAuthFinished(finished as DesktopOAuthStatus, kind);
       } else {
         const message = toUserMessage(error instanceof Error ? error.message : String(error));
         addToast(message, 'error', kind);
@@ -1267,10 +1308,7 @@ function DashboardApp() {
   const handleCompleteOAuthManually = async (callbackUrl: string) => {
     try {
       const completed = await desktopApi.completeOAuthManually(callbackUrl);
-      if (completed?.authState) {
-        setAuthState(completed.authState);
-        authStateRef.current = completed.authState;
-      }
+      if (completed?.authState) applyAuthState(completed.authState);
     } finally {
       const status = await desktopApi.getOAuthStatus();
       setOAuthStatus(status);
@@ -1284,17 +1322,11 @@ function DashboardApp() {
     try {
       if (action === 'adopt') {
         const account = await desktopApi.adoptOfficialAccount() as { email?: string; authState?: DesktopAuthState };
-        if (account?.authState) {
-          setAuthState(account.authState);
-          authStateRef.current = account.authState;
-        }
+        if (account?.authState) applyAuthState(account.authState);
         addToast(`已采用官方 Codex 账号：${account.email}`, 'success', 'codex');
       } else {
         const result = await desktopApi.reapplyManagedAccount(authState.currentAccountId || null) as { authState?: DesktopAuthState };
-        if (result?.authState) {
-          setAuthState(result.authState);
-          authStateRef.current = result.authState;
-        }
+        if (result?.authState) applyAuthState(result.authState);
         addToast('管理账号已重新应用到官方 Codex。', 'success', 'codex');
       }
       const snapshot = await loadDashboardState(false);
@@ -1364,10 +1396,7 @@ function DashboardApp() {
       );
       try {
         const result = await runAccountOperation(id, () => actions.switchAccount(kind, id, isCurrent)) as { launched?: boolean; launchError?: string | null; authState?: DesktopAuthState } | undefined;
-        if (result?.authState) {
-          setAuthState(result.authState);
-          authStateRef.current = result.authState;
-        }
+        if (result?.authState) applyAuthState(result.authState);
         setSessionSwitchCount(count => count + 1);
         applyCurrentAccountBadge(kind, id);
         const snapshot = await loadDashboardState(false, { skipOfficialSync: true });
@@ -1505,13 +1534,16 @@ function DashboardApp() {
       .catch(() => {})
       .then(() => desktopApi.saveAutoSwitchConfig(prunedConfig));
     configSaveQueue.current = saveOperation.catch(() => {});
+    configSavesPending.current += 1;
     try {
       await saveOperation;
+      configSavesPending.current -= 1;
       if (revision === configSaveRevision.current) {
         await loadDashboardState(false);
       }
       return true;
     } catch (error) {
+      configSavesPending.current -= 1;
       const message = toUserMessage(error instanceof Error ? error.message : String(error));
       addToast(message, 'error', 'codex');
       addLogEntry(message, 'error', 'codex');
@@ -1721,10 +1753,7 @@ function DashboardApp() {
   const handleRunAutoSwitchTick = async () => {
     if (!desktopBridgeAvailable) return;
     const result = await desktopApi.runAutoSwitchTick();
-    if (result?.authState) {
-      setAuthState(result.authState);
-      authStateRef.current = result.authState;
-    }
+    if (result?.authState) applyAuthState(result.authState);
     const snapshot = await loadDashboardState(false);
     if (snapshot) queueQuotaAutoSync(snapshot.accounts);
     if (result?.switched) {

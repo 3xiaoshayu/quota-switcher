@@ -1,3 +1,4 @@
+const os = require("node:os");
 const path = require("node:path");
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -10,7 +11,11 @@ const REFRESH_MINUTES = 1;
 const TOKEN_SKEW_SEC = 300;
 const REFRESH_TIMEOUT = 25000;
 
-const HOME = process.env.USERPROFILE || "";
+// Without a home the data path would become a relative ".codex-switch" next
+// to whatever the current directory happens to be.
+const HOME = process.env.USERPROFILE || (() => {
+  try { return os.homedir(); } catch { return ""; }
+})();
 
 // Official Codex honors the CODEX_HOME environment variable; strip quotes that
 // setx/shell usage may leave around the value.

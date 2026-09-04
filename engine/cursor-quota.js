@@ -1,6 +1,6 @@
 const { CURSOR_USAGE_URL } = require("./config");
 const { ts, extractCursorWorkosUserId, isTokenExpired } = require("./crypto-utils");
-const { extractErrorCode } = require("./http-client");
+const { extractErrorCode, looksLikeHtmlResponse } = require("./http-client");
 const { getCursorRuntime } = require("./cursor-runtime");
 const { saveCursorAcct, upsertCursorIndex } = require("./cursor-storage");
 const { refreshCursorToken, markCursorReauth } = require("./cursor-token");
@@ -169,6 +169,14 @@ async function refreshCursorQuota(account, options = {}) {
 
   try {
     const response = await fetchCursorUsage(account);
+    if ((response.status === 401 || response.status === 403) && looksLikeHtmlResponse(response.body, response.headers)) {
+      throw Object.assign(new Error("这次没查清额度，请稍后重试。"), {
+        code: "probe_failed",
+        httpStatus: response.status,
+        headers: response.headers || {},
+        retryAfter: response.headers?.["retry-after"] || response.headers?.["Retry-After"],
+      });
+    }
     if (response.status === 401 || response.status === 403) {
       markCursorReauth(account, "Cursor 会话已过期或未认证，请重新授权");
       const authError = new Error("Cursor 会话已过期或未认证，请重新授权");

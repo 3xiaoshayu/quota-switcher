@@ -135,16 +135,30 @@ function cancelCursorOAuth() {
 async function pollForTokens(pending) {
   const runtime = getCursorRuntime();
   const url = `${CURSOR_POLL_URL}?uuid=${encodeURIComponent(pending.uuid)}&verifier=${encodeURIComponent(pending.verifier)}`;
+  let networkMisses = 0;
   for (let attempt = 0; attempt < POLL_MAX_TRIES; attempt += 1) {
     if (!active || active.settled || active.pending !== pending) {
       const error = new Error("OAuth authorization was cancelled");
       error.code = "oauth_cancelled";
       throw error;
     }
-    const response = await runtime.httpJson(url, {
-      method: "GET",
-      headers: { Accept: "application/json" },
-    });
+    let response;
+    try {
+      response = await runtime.httpJson(url, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+      });
+    } catch (error) {
+      // The user is still in the browser. One dropped poll (proxy blip, DNS
+      // hiccup) must not throw the whole login away; the session timer still
+      // bounds the wait.
+      networkMisses += 1;
+      if (networkMisses === 1) {
+        logWarn(`Cursor OAuth poll hit a network miss; keeping the session: ${error.message}`);
+      }
+      await runtime.sleep(POLL_INTERVAL_MS);
+      continue;
+    }
     if (response.status === 404) {
       await runtime.sleep(POLL_INTERVAL_MS);
       continue;

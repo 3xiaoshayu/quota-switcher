@@ -1,6 +1,6 @@
 const { ANTIGRAVITY_TOKEN_URL, TOKEN_SKEW_SEC } = require("./config");
 const { ts, isExpiryStale } = require("./crypto-utils");
-const { extractErrorCode, isTransientNetworkError, stripXssiPrefix } = require("./http-client");
+const { extractErrorCode, isTransientNetworkError, stripXssiPrefix, looksLikeHtmlResponse } = require("./http-client");
 const { getAntigravityRuntime } = require("./antigravity-runtime");
 const { listOfficialOauthClients } = require("./antigravity-oauth-client");
 const { listAntigravityAccts, loadAntigravityAcct, saveAntigravityAcct, upsertAntigravityIndex } = require("./antigravity-storage");
@@ -174,6 +174,12 @@ async function refreshAntigravityToken(account, options = {}) {
     saveAntigravityAcct(account);
     upsertAntigravityIndex(account);
     return { ok: false, error: "HTTP 429" };
+  }
+  if ((response.status === 401 || response.status === 403) && looksLikeHtmlResponse(response.body, response.headers)) {
+    scheduleTokenRetry(account, { message: `HTTP ${response.status}`, headers: response.headers });
+    saveAntigravityAcct(account);
+    upsertAntigravityIndex(account);
+    return { ok: false, error: `Token refresh failed: HTTP ${response.status}` };
   }
   if (response.status === 400 || response.status === 401 || response.status === 403) {
     const invalid = /invalid_grant|invalid_client|unauthorized/i.test(String(payload.error || payload.error_description || response.body || ""));

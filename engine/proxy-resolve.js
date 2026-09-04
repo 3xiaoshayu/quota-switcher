@@ -21,9 +21,29 @@ const inheritedProxyEnv = Object.fromEntries(
 
 let liveSignature = null;
 const liveByHost = new Map();
+// A "no proxy" answer is also a discovery result. Without remembering it,
+// every quota request on a proxy-less PC re-runs the registry reads, the DNS
+// check, the PAC lookup, and ten local port probes.
+const DIRECT_CACHE_MS = 30_000;
+const directByHost = new Map();
 let appliedProxyUrl = undefined;
 const FAILED_PROXY_MS = 60_000;
 const failedProxies = new Map();
+
+function cachedDirectSignature(destHost, now = Date.now()) {
+  const hit = directByHost.get(destHost);
+  if (!hit) return null;
+  if (now >= hit.until) {
+    directByHost.delete(destHost);
+    return null;
+  }
+  return hit.signature;
+}
+
+function rememberDirectSignature(destHost, signature, now = Date.now()) {
+  directByHost.set(destHost, { signature, until: now + DIRECT_CACHE_MS });
+  return signature;
+}
 
 function markProxyFailed(proxyUrl) {
   const url = String(proxyUrl || "").trim();
@@ -451,37 +471,53 @@ function logProxySignature(signature) {
   } catch {}
 }
 
+const defaultDiscovery = {
+  collectCandidates: (url, extras) => collectCandidates(url, extras),
+  probeProxyUrl: (proxyUrl, destHost) => probeProxyUrl(proxyUrl, destHost),
+  hostLooksPoisoned: (host) => hostLooksPoisoned(host),
+  readPacRule: (url) => readPacRule(url),
+};
+let discovery = { ...defaultDiscovery };
+
+function setProxyDiscoveryForTests(next = null) {
+  discovery = next ? { ...defaultDiscovery, ...next } : { ...defaultDiscovery };
+}
+
 async function resolveLiveProxy(url = "https://chatgpt.com/") {
   const destHost = (() => { try { return new URL(url).hostname; } catch { return "chatgpt.com"; } })();
   const cached = liveByHost.get(destHost);
   if (cached?.proxyUrl && !isProxyRecentlyFailed(cached.proxyUrl)) return cached;
-  if (liveSignature?.proxyUrl && !isProxyRecentlyFailed(liveSignature.proxyUrl) && await probeProxyUrl(liveSignature.proxyUrl, destHost)) {
+  const cachedDirect = cachedDirectSignature(destHost);
+  if (cachedDirect) return cachedDirect;
+  if (liveSignature?.proxyUrl && !isProxyRecentlyFailed(liveSignature.proxyUrl) && await discovery.probeProxyUrl(liveSignature.proxyUrl, destHost)) {
     liveByHost.set(destHost, liveSignature);
     return liveSignature;
   }
 
-  const poisoned = await hostLooksPoisoned(destHost);
-  const candidates = await collectCandidates(url, { pacRule: await readPacRule(url) });
+  const poisoned = await discovery.hostLooksPoisoned(destHost);
+  const candidates = await discovery.collectCandidates(url, { pacRule: await discovery.readPacRule(url) });
 
   for (const candidate of candidates) {
     if (isProxyRecentlyFailed(candidate.proxyUrl)) continue;
-    if (await probeProxyUrl(candidate.proxyUrl, destHost)) {
+    if (await discovery.probeProxyUrl(candidate.proxyUrl, destHost)) {
       liveSignature = { ...candidate, probed: true };
       liveByHost.set(destHost, liveSignature);
+      directByHost.delete(destHost);
       persistLastGood(liveSignature);
       return liveSignature;
     }
     const socksUrl = socksFallbackUrl(candidate.proxyUrl);
-    if (socksUrl && socksUrl !== candidate.proxyUrl && !isProxyRecentlyFailed(socksUrl) && await probeProxyUrl(socksUrl, destHost)) {
+    if (socksUrl && socksUrl !== candidate.proxyUrl && !isProxyRecentlyFailed(socksUrl) && await discovery.probeProxyUrl(socksUrl, destHost)) {
       liveSignature = { source: candidate.source, proxyUrl: socksUrl, probed: true };
       liveByHost.set(destHost, liveSignature);
+      directByHost.delete(destHost);
       persistLastGood(liveSignature);
       return liveSignature;
     }
   }
 
   if (!poisoned) {
-    return { source: "direct", proxyUrl: "", probed: false };
+    return rememberDirectSignature(destHost, { source: "direct", proxyUrl: "", probed: false });
   }
   return { source: "none", proxyUrl: "", probed: false };
 }
@@ -489,6 +525,7 @@ async function resolveLiveProxy(url = "https://chatgpt.com/") {
 function invalidateLiveProxy() {
   liveSignature = null;
   liveByHost.clear();
+  directByHost.clear();
   appliedProxyUrl = undefined;
 }
 
@@ -570,6 +607,8 @@ module.exports = {
   hostLooksPoisoned,
   resolveLiveProxy,
   invalidateLiveProxy,
+  setProxyDiscoveryForTests,
+  DIRECT_CACHE_MS,
   discoverProxyForUrl,
   applyAppProxy,
   markProxyFailed,

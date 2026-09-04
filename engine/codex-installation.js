@@ -5,6 +5,10 @@ const DETECT_TIMEOUT_MS = 4000;
 let cachedStatus = null;
 let cachedAt = 0;
 const CACHE_MS = 60 * 1000;
+// A PowerShell hiccup (slow start, AV scan) is not "Codex is not installed".
+// Keep that answer only briefly so the next switch or auto-switch tick
+// re-checks instead of failing for a whole minute.
+const FAILURE_CACHE_MS = 5 * 1000;
 
 function emptyStatus(extra) {
   return {
@@ -42,9 +46,18 @@ function remember(status) {
   return status;
 }
 
-function getCachedStatus() {
-  if (cachedStatus && (Date.now() - cachedAt) < CACHE_MS) return cachedStatus;
+function cacheWindowFor(status) {
+  return status?.reason === "detection-failed" ? FAILURE_CACHE_MS : CACHE_MS;
+}
+
+function getCachedStatus(now = Date.now()) {
+  if (cachedStatus && (now - cachedAt) < cacheWindowFor(cachedStatus)) return cachedStatus;
   return null;
+}
+
+function resetCodexInstallationCacheForTests() {
+  cachedStatus = null;
+  cachedAt = 0;
 }
 
 function runPowerShell(script) {
@@ -138,4 +151,9 @@ module.exports = {
   getCodexInstallationStatusAsync,
   assertOfficialCodexInstalled,
   assertOfficialCodexInstalledAsync,
+  parseStartAppsOutput,
+  cacheWindowFor,
+  resetCodexInstallationCacheForTests,
+  CACHE_MS,
+  FAILURE_CACHE_MS,
 };

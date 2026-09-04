@@ -1721,6 +1721,43 @@ test("cursor switch rolls back index when post-write work fails", async (t) => {
   assert.equal(engine.currentCursorAcct().id, first.account.id);
 });
 
+test("cursor switch relaunches Cursor on the previous login after a post-write rollback", async (t) => {
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "cursor-state.vscdb");
+  const exePath = path.join(root, "Cursor.exe");
+  fs.writeFileSync(exePath, "fake");
+  await engine.writeCursorAuth(dbPath, {
+    "cursorAuth/accessToken": "old-token",
+    "cursorAuth/cachedEmail": "old@example.com",
+  });
+  const next = await engine.upsertCursorAccount({
+    email: "fail@example.com",
+    auth_id: "user_fail",
+    access_token: cursorToken("fail@example.com", "fail"),
+    refresh_token: "refresh-fail",
+  });
+  const launched = [];
+  engine.setCursorRuntimeForTests({
+    vscdbPath: () => dbPath,
+    cursorExePath: () => exePath,
+    listProcesses: async () => [{ name: "Cursor.exe", pid: 424242, executablePath: exePath }],
+    gracefulClose: async () => true,
+    forceClose: async () => true,
+    launch: (target) => launched.push(target),
+    sleep: async () => {},
+    afterSwitchMetaWrite: async () => {
+      throw new Error("post-write failed");
+    },
+  });
+  await assert.rejects(
+    () => engine.doCursorSwitch(engine.loadCursorAcct(next.account.id)),
+    /post-write failed/,
+  );
+  const values = await engine.readCursorAuth(dbPath, { copyFirst: false });
+  assert.equal(values["cursorAuth/cachedEmail"], "old@example.com");
+  assert.deepEqual(launched, [exePath], "the closed editor must come back after the rollback");
+});
+
 test("codex storage rejects cursor ids even if a file is planted in the Codex directory", async (t) => {
   const { engine, root } = freshEngine(t);
   const plantedId = "cursor_plantedaccount00000000000000";
@@ -1794,6 +1831,36 @@ test("cursor oauth poll upserts account without touching Codex", async (t) => {
   assert.equal(engine.listCursorAccts().length, 1);
   assert.equal(engine.listAccts().length, 0);
   assert.equal(engine.currentCursorAcct(), null);
+});
+
+test("cursor oauth poll survives a dropped network round while the user is still in the browser", async (t) => {
+  const { engine } = freshEngine(t);
+  let polls = 0;
+  engine.setCursorRuntimeForTests({
+    openUrl: async () => {},
+    sleep: async () => {},
+    httpJson: async (url) => {
+      if (String(url).includes("/auth/poll")) {
+        polls += 1;
+        if (polls === 1) return { status: 404, body: "" };
+        if (polls === 2) throw Object.assign(new Error("网络请求失败 (api2.cursor.sh)。详情：Node: ECONNRESET"), { code: "ECONNRESET" });
+        if (polls === 3) throw new Error("请求超时");
+        return {
+          status: 200,
+          body: JSON.stringify({
+            accessToken: cursorToken("resilient@example.com", "resilient"),
+            refreshToken: "refresh-resilient",
+            authId: "resilient@example.com",
+          }),
+        };
+      }
+      return { status: 200, body: "{}" };
+    },
+  });
+  const result = await engine.cursorLoginFlow();
+  assert.equal(result.account.email, "resilient@example.com");
+  assert.equal(polls, 4);
+  assert.equal(engine.getCursorOAuthStatus().status, "completed");
 });
 
 test("cursor quota refresh without a usage cookie does not mark reauth", async (t) => {
@@ -1952,6 +2019,77 @@ test("cursor leftover usage 401 backs off instead of retrying every minute", asy
     (error) => error.code === "quota_retry_pending",
   );
   assert.equal(usageCalls, 1);
+});
+
+test("cursor usage 403 with a challenge page is a temporary miss, not a lost login", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertCursorAccount({
+    email: "challenge@example.com",
+    auth_id: "user_challenge",
+    access_token: cursorToken("challenge@example.com", "challenge"),
+    refresh_token: "refresh-challenge",
+    quota: { plan_remaining_percentage: 61, auto_remaining_percentage: 61, api_remaining_percentage: 90 },
+    usage_updated_at: Math.floor(Date.now() / 1000) - 120,
+  });
+  engine.setCursorRuntimeForTests({
+    httpJson: async (url) => {
+      if (String(url).includes("usage-summary")) {
+        return {
+          status: 403,
+          headers: { "content-type": "text/html; charset=UTF-8", "retry-after": "30" },
+          body: "<!DOCTYPE html><html><head><title>Just a moment...</title></head><body>Checking your browser</body></html>",
+        };
+      }
+      return { status: 200, body: "{}" };
+    },
+  });
+  await assert.rejects(
+    () => engine.refreshCursorQuota(engine.loadCursorAcct(created.account.id), { force: true }),
+    /没查清/,
+  );
+  const failed = engine.loadCursorAcct(created.account.id);
+  assert.equal(failed.requires_reauth, false, "a web page is not a revoked session");
+  assert.equal(failed.quota_error.code, "probe_failed");
+  assert.equal(failed.quota.plan_remaining_percentage, 61, "leftover quota stays visible");
+  assert.ok(Number(failed.quota_next_retry_at) > Math.floor(Date.now() / 1000));
+});
+
+test("cursor token refresh 403 with a challenge page schedules a retry instead of reauth", async (t) => {
+  const { engine } = freshEngine(t);
+  const created = await engine.upsertCursorAccount({
+    email: "token-challenge@example.com",
+    auth_id: "user_token_challenge",
+    access_token: jwt({
+      email: "token-challenge@example.com",
+      sub: "user_token_challenge",
+      exp: Math.floor(Date.now() / 1000) - 30,
+    }),
+    refresh_token: "refresh-token-challenge",
+  });
+  engine.setCursorRuntimeForTests({
+    httpJson: async (url) => {
+      if (String(url).includes("/oauth/token")) {
+        return {
+          status: 403,
+          headers: { "content-type": "text/html" },
+          body: "<html><body>Access denied by proxy</body></html>",
+        };
+      }
+      throw new Error("usage must not run without a token");
+    },
+  });
+  const result = await engine.refreshCursorToken(engine.loadCursorAcct(created.account.id), { force: true });
+  assert.equal(result.ok, false);
+  assert.equal(!!result.reauthRequired, false);
+  const account = engine.loadCursorAcct(created.account.id);
+  assert.equal(account.requires_reauth, false);
+  assert.ok(Number(account.token_next_retry_at) > Math.floor(Date.now() / 1000));
+
+  engine.setCursorRuntimeForTests({
+    httpJson: async () => ({ status: 401, body: JSON.stringify({ error: "invalid_token" }) }),
+  });
+  const revoked = await engine.refreshCursorToken(engine.loadCursorAcct(created.account.id), { force: true });
+  assert.equal(revoked.reauthRequired, true, "a real JSON 401 still means reauth");
 });
 
 test("cursor quota refresh backs off when an expired token cannot be refreshed", async (t) => {

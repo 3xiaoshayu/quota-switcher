@@ -1,6 +1,6 @@
 const { CURSOR_TOKEN_URL, CURSOR_CLIENT_ID, CURSOR_META_URL } = require("./config");
 const { ts, jwtPayload, isTokenExpired, isExpiryStale } = require("./crypto-utils");
-const { extractErrorCode, isTransientNetworkError } = require("./http-client");
+const { extractErrorCode, isTransientNetworkError, looksLikeHtmlResponse } = require("./http-client");
 const { getCursorRuntime } = require("./cursor-runtime");
 const { listCursorAccts, loadCursorAcct, saveCursorAcct, upsertCursorIndex } = require("./cursor-storage");
 const { withAccountLock, mapLimit } = require("./operation-locks");
@@ -107,6 +107,12 @@ async function refreshCursorToken(account, options = {}) {
     saveCursorAcct(account);
     upsertCursorIndex(account);
     return { ok: false, error: "HTTP 429" };
+  }
+  if ((response.status === 401 || response.status === 403) && looksLikeHtmlResponse(response.body, response.headers)) {
+    scheduleTokenRetry(account, { message: `HTTP ${response.status}`, headers: response.headers });
+    saveCursorAcct(account);
+    upsertCursorIndex(account);
+    return { ok: false, error: `Token refresh failed: HTTP ${response.status}` };
   }
   if (response.status === 401 || response.status === 403 || payload.shouldLogout === true) {
     markCursorReauth(account, "Cursor refresh token 已失效，请重新授权");
