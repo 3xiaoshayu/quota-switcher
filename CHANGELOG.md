@@ -7,6 +7,41 @@ release is published.
 
 ## Unreleased
 
+## [2.0.7] - 2026-09-05
+
+- Stop sending the ChatGPT, Cursor, or Google bearer along when a quota or
+  token request is redirected to another host, and never follow a redirect
+  from https to plain http. POST bodies now carry an exact Content-Length.
+- Remember a "no proxy" discovery for 30 seconds per host, so a PC without a
+  local proxy no longer re-reads the registry, DNS, PAC, and ten local ports
+  on every quota request.
+- A 401/403 whose body is a web page (Cloudflare challenge, proxy block page)
+  is a temporary miss for Cursor and Antigravity quota and token refresh, not
+  a lost login.
+- After a Cursor or Antigravity switch rolls back, the official IDE is
+  relaunched on the previous login instead of staying closed.
+- A dropped network round while the Cursor browser login is still open no
+  longer aborts the whole authorization.
+- A failed Store Codex detection is only remembered for five seconds so the
+  next switch re-checks instead of failing for a minute.
+- The Antigravity Hub credential payload is handed to PowerShell through the
+  environment; no plaintext token file is written to %TEMP% any more. The
+  IDE build no longer spawns the Credential Manager read on every sync.
+- The daemon no longer rewrites official `auth.json` every minute when the
+  vault already holds the same tokens.
+- Log retention is pruned on date rollover, not only at startup.
+- Window fixes: the 官方登录了另一个账号 toast shows the right copy for the
+  raw `conflict` status; a lock-busy daemon tick cannot hide a real conflict
+  banner or lift the quota auto-sync gate; refresh and reauth feedback reads
+  the fresher snapshot instead of "列表还在更新"; one browser authorization
+  guard covers all three products; the desktop lens keeps its 60-second
+  silent refresh cadence across list updates; an in-flight auto-switch config
+  save is not reverted by an older snapshot.
+- `playwright-core` is a dev dependency again and the lockfile is back in
+  sync, so `npm ci` works on a fresh clone.
+- The installer is still unsigned. Download only from GitHub Releases and
+  check SHA-256.
+
 ## [2.0.6] - 2026-08-22
 
 - Treat temporary quota and token misses (timeouts, proxy 5xx, empty or HTML

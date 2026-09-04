@@ -15,7 +15,7 @@
 [隐私说明](docs/privacy.md) ·
 [English](README.en.md)
 
-当前完整版是 **2.0.6**。
+当前完整版是 **2.0.7**。
 
 </div>
 
@@ -23,17 +23,17 @@
 
 > [!IMPORTANT]
 > 安装包尚未代码签名，Windows 可能提示“未知发布者”。请只从本仓库
-> [Releases](https://github.com/3xiaoshayu/quota-switcher/releases) 下载，并用同一条 Release 中的 `SHA256SUMS.txt` 核对 SHA-256。2.0.6 仍未签名。
+> [Releases](https://github.com/3xiaoshayu/quota-switcher/releases) 下载，并用同一条 Release 中的 `SHA256SUMS.txt` 核对 SHA-256。2.0.7 仍未签名。
 
 ## 这是什么
 
-Quota Switcher 是 Windows 上 Codex、Cursor、反重力（Antigravity IDE）的本机账号库、额度查看和切号工具。2.0.6 是当前定稿。
+Quota Switcher 是 Windows 上 Codex、Cursor、反重力（Antigravity IDE）的本机账号库、额度查看和切号工具。2.0.7 是当前定稿。
 
 它写入本机官方登录，不能提高任何官方额度，也不能绕过上游限制。
 
 ## 界面
 
-顶图是 Cursor 账号管理。下面 8 张是同一套 2.0.6 窗口：两张配额总览、自动切号、系统设置，以及四张桌面额度镜。关闭按钮将窗口收到托盘，不会退出。
+顶图是 Cursor 账号管理。下面 8 张是同一套窗口（2.0.6 实拍，2.0.7 界面未变）：两张配额总览、自动切号、系统设置，以及四张桌面额度镜。关闭按钮将窗口收到托盘，不会退出。
 
 <table>
   <tr>

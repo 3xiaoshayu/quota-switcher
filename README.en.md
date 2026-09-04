@@ -16,7 +16,7 @@ current Windows user.
 [Privacy](docs/privacy.en.md) ·
 [简体中文](README.md)
 
-The current complete release is **2.0.6**.
+The current complete release is **2.0.7**.
 
 </div>
 
@@ -27,12 +27,12 @@ The current complete release is **2.0.6**.
 > publisher. Download only from this repository's
 > [Releases](https://github.com/3xiaoshayu/quota-switcher/releases)
 > page and check the SHA-256 in `SHA256SUMS.txt` on the same release.
-> 2.0.6 is still unsigned.
+> 2.0.7 is still unsigned.
 
 ## What this is
 
 Quota Switcher is a Windows-local vault, quota view, and switch tool for
-Codex, Cursor, and Antigravity IDE. 2.0.6 is the current complete product.
+Codex, Cursor, and Antigravity IDE. 2.0.7 is the current complete product.
 
 It writes the official login on this PC. It cannot raise anyone's official
 limits or bypass upstream restrictions.
@@ -40,9 +40,9 @@ limits or bypass upstream restrictions.
 ## Interface
 
 The hero image is Cursor account management. The next eight shots are the
-same 2.0.6 windows: two quota overviews, auto-switch, settings, and four
-desktop quota lenses. The close button hides the window to the tray; it
-does not quit.
+same windows (captured on 2.0.6; the 2.0.7 interface is unchanged): two quota
+overviews, auto-switch, settings, and four desktop quota lenses. The close
+button hides the window to the tray; it does not quit.
 
 <table>
   <tr>

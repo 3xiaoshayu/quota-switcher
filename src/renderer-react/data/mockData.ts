@@ -283,7 +283,7 @@ export const INITIAL_SETTINGS: SystemSettings = {
   cursorDetected: true,
   antigravityDetected: true,
   updateChannel: 'Stable Channel',
-  version: '2.0.1',
+  version: '2.0.7',
   latestStatus: 'Up to date',
 };
 
