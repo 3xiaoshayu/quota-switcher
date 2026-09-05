@@ -3,17 +3,14 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
-const ts = require("typescript");
 const { readRendererLogicSource } = require("./helpers/renderer-source");
+const { transpileTs } = require("./helpers/transpile-ts");
 
 const projectRoot = path.resolve(__dirname, "..");
 const rendererApi = path.join(projectRoot, "src", "renderer-react", "api");
 
 function compileTs(sourcePath) {
-  const source = fs.readFileSync(sourcePath, "utf8");
-  return ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
-  }).outputText;
+  return transpileTs(fs.readFileSync(sourcePath, "utf8"), { filename: sourcePath });
 }
 
 function loadUserMessages() {

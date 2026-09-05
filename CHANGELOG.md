@@ -17,6 +17,11 @@ release is published.
   Node security fixes. `npm audit` is clean again: the `fast-uri` override was
   pinning a vulnerable release, and the remaining override pins are now
   same-major minimums so future audit fixes are not blocked.
+- Build toolchain: Vite 8 (Rolldown) with `@vitejs/plugin-react` 6, and
+  TypeScript 7 (the native compiler). TypeScript 7 no longer exposes the
+  in-process `transpileModule` API, so the tests that load renderer modules
+  into a `vm` sandbox now lower TypeScript with esbuild
+  (`test/helpers/transpile-ts.js`); type checking is unchanged.
 
 ## [2.0.10] - 2026-09-05
 

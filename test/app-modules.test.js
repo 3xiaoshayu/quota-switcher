@@ -6,16 +6,14 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
-const ts = require("typescript");
+const { transpileTs } = require("./helpers/transpile-ts");
 
 const projectRoot = path.resolve(__dirname, "..");
 const appDir = path.join(projectRoot, "src", "renderer-react", "app");
 
 function loadTs(file, requireMap = {}) {
   const sourcePath = path.join(appDir, file);
-  const compiled = ts.transpileModule(fs.readFileSync(sourcePath, "utf8"), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
-  }).outputText;
+  const compiled = transpileTs(fs.readFileSync(sourcePath, "utf8"), { filename: sourcePath });
   const module = { exports: {} };
   vm.runInNewContext(compiled, {
     module,

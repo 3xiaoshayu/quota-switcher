@@ -3,19 +3,13 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const { readRendererLogicSource, readRendererFile } = require("./helpers/renderer-source");
+const { transpileTs } = require("./helpers/transpile-ts");
 const vm = require("node:vm");
-const ts = require("typescript");
 
 const projectRoot = path.resolve(__dirname, "..");
 
 function compileTs(sourcePath) {
-  const source = fs.readFileSync(sourcePath, "utf8");
-  return ts.transpileModule(source, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2020,
-    },
-  }).outputText;
+  return transpileTs(fs.readFileSync(sourcePath, "utf8"), { filename: sourcePath });
 }
 
 function loadUserMessages() {
@@ -989,17 +983,7 @@ test("notification badge counts unread warnings and errors until the feed is ope
 });
 
 test("user-facing messages stay in Chinese", () => {
-  const sourcePath = path.join(projectRoot, "src", "renderer-react", "api", "user-messages.ts");
-  const source = fs.readFileSync(sourcePath, "utf8");
-  const compiled = ts.transpileModule(source, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2020,
-    },
-  }).outputText;
-  const module = { exports: {} };
-  vm.runInNewContext(compiled, { module, exports: module.exports }, { filename: sourcePath });
-  const { toUserMessage, toCursorUserMessage, toAntigravityUserMessage, logTypeLabel } = module.exports;
+  const { toUserMessage, toCursorUserMessage, toAntigravityUserMessage, logTypeLabel } = loadUserMessages();
 
   assert.equal(
     toUserMessage("The target account requires reauthorization before it can be switched to"),
