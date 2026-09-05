@@ -1,3 +1,4 @@
+const { codedError } = require("./errors");
 const http = require("node:http");
 const { b64url } = require("./crypto-utils");
 const {
@@ -39,6 +40,8 @@ function setStatus(status, patch = {}) {
   lastStatus = {
     status,
     message: patch.message || null,
+    // Stable identifier the window translates first; the message is diagnostic.
+    code: patch.code || null,
     targetAccountId: patch.targetAccountId ?? active?.pending?.targetAccountId ?? null,
     result: patch.result ? publicAccountResult(patch.result) : null,
     callbackPort: patch.callbackPort ?? active?.pending?.callbackPort ?? ANTIGRAVITY_CALLBACK_PORT,
@@ -74,7 +77,7 @@ function loadPending() {
     const pending = JSON.parse(unprotectData(envelope.protected_payload));
     if (!pending.expiresAt || pending.expiresAt <= Date.now()) {
       clearPendingFile();
-      setStatus("expired", { message: "The pending OAuth authorization expired." });
+      setStatus("expired", { code: "oauth_expired", message: "The pending OAuth authorization expired." });
       return null;
     }
     return pending;
@@ -120,6 +123,7 @@ function settleActive(error, result) {
   active = null;
   if (error) {
     setStatus(error.code === "oauth_cancelled" ? "cancelled" : "error", {
+      code: error.code || "oauth_failed",
       message: error.message,
       targetAccountId,
     });
@@ -336,10 +340,10 @@ async function runPendingFlow(pending) {
 
 async function antigravityLoginFlow(options = {}) {
   if (getOAuthStatus().pending || getCursorOAuthStatus().pending) {
-    throw new Error("authorization is already in progress");
+    throw codedError("oauth_in_progress", "authorization is already in progress");
   }
   if (active && !active.settled) {
-    throw new Error("authorization is already in progress");
+    throw codedError("oauth_in_progress", "authorization is already in progress");
   }
   const now = Date.now();
   const pending = {
@@ -356,7 +360,7 @@ async function antigravityLoginFlow(options = {}) {
 function discardPendingAntigravityOAuth(reason) {
   if (active && !active.settled) return cancelAntigravityOAuth();
   clearPendingFile();
-  setStatus("expired", { message: reason || "The pending OAuth authorization expired." });
+  setStatus("expired", { code: "oauth_expired", message: reason || "The pending OAuth authorization expired." });
   return true;
 }
 

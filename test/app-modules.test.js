@@ -157,12 +157,13 @@ test("App no longer inlines the extracted pieces", () => {
 
 const desktopStub = {
   clampSyncIntervalMinutes: (value) => Math.min(60, Math.max(1, Math.round(Number(value) || 1))),
+  daemonErrorCopy: (payload) => `failures:${payload.failures.map((item) => item.code || item.message).join("+")}`,
   formatDateTime: (value) => `at:${value}`,
   isManagedProductAccount: (account) => /^(cursor|antigravity)_/.test(String(account.id)),
   needsQuotaAutoSync: (account, staleMs) => account.stale === true && staleMs > 0,
   quotaAutoSyncStaleMs: (_account, minutes) => (minutes ?? 10) * 60_000,
 };
-const messagesStub = { toUserMessage: (raw) => `msg:${raw}` };
+const messagesStub = { toUserMessage: (raw) => (raw && typeof raw === "object" ? `code:${raw.code}` : `msg:${raw}`) };
 
 function loadSnapshotModule() {
   return loadTs("snapshot.ts", {
@@ -212,6 +213,14 @@ test("daemon state keeps the interval just chosen while its save is in flight", 
   });
   const inFlight = daemonStateFromSnapshot(snapshot, { saveInFlight: true, localConfig: { enabled: true, sync_interval_minutes: 30 } });
   assert.equal(inFlight.syncInterval, 30, "the snapshot's stale interval must not flash back during a save");
+  // A coded last error translates by code; per-account failures win over the joined string.
+  const coded = daemonStateFromSnapshot({ ...snapshot, daemonLastErrorCode: "account_index_invalid" }, { saveInFlight: false, localConfig: { enabled: true } });
+  assert.equal(coded.lastError, "code:account_index_invalid");
+  const perAccount = daemonStateFromSnapshot({
+    ...snapshot,
+    daemonLastFailures: [{ email: "a@b", code: "token_refresh_failed", message: "x" }, { email: null, message: "plain" }],
+  }, { saveInFlight: false, localConfig: { enabled: true } });
+  assert.equal(perAccount.lastError, "failures:token_refresh_failed+plain");
   const stopped = daemonStateFromSnapshot({ daemonRunning: false, daemonSyncInterval: 5 }, { saveInFlight: false, localConfig: { enabled: false } });
   assert.equal(stopped.status, "Stopped");
   assert.equal(stopped.lastChecked, "");
@@ -310,6 +319,9 @@ test("a finished authorization is turned into the right notices and follow-ups",
   sameShape(failed.notices, [{ level: "warning", message: "msg:boom" }]);
   const expired = planOAuthFinish("codex", { status: "expired", pending: false });
   sameShape(expired.notices, [{ level: "warning", message: "msg:授权未完成。" }]);
+  // A coded status hands the code and the message to the translator together.
+  const coded = planOAuthFinish("codex", { status: "expired", pending: false, code: "oauth_expired", message: "The pending OAuth authorization expired." });
+  sameShape(coded.notices, [{ level: "warning", message: "code:oauth_expired" }]);
 
   // A mismatch on Codex still badges the account the engine switched to.
   const mismatch = planOAuthFinish("codex", {

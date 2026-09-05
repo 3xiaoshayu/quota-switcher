@@ -1,3 +1,4 @@
+const { codedError } = require("./errors");
 const fs = require("node:fs");
 const { hasPendingWalFile } = require("./atomic-file");
 const {
@@ -68,7 +69,7 @@ async function readAntigravityAuth(dbPath, options = {}) {
 }
 
 async function writeAntigravityAuth(dbPath, token, options = {}) {
-  if (!dbPath) throw new Error("Antigravity state.vscdb path is required");
+  if (!dbPath) throw codedError("vscdb_path_missing", "Antigravity state.vscdb path is required");
   await withVscdb(dbPath, {
     labels: SQLITE_LABELS,
     timeout: options.timeout ?? getSqliteNativeTiming().switchTimeoutMs,

@@ -1,3 +1,4 @@
+const { codedError } = require("./errors");
 const { hasPendingWalFile, pathExists } = require("./atomic-file");
 const {
   withVscdb,
@@ -184,7 +185,7 @@ function writeAuthKeysToDb(db, incoming) {
 }
 
 async function writeCursorAuth(dbPath, values, options = {}) {
-  if (!dbPath) throw new Error("Cursor state.vscdb path is required");
+  if (!dbPath) throw codedError("vscdb_path_missing", "Cursor state.vscdb path is required");
   await withVscdb(dbPath, {
     labels: SQLITE_LABELS,
     timeout: options.timeout ?? getSqliteNativeTiming().switchTimeoutMs,
@@ -203,7 +204,7 @@ async function writeCursorAuth(dbPath, values, options = {}) {
 }
 
 async function applyOfficialCursorSwitch(dbPath, options = {}) {
-  if (!dbPath) throw new Error("Cursor state.vscdb path is required");
+  if (!dbPath) throw codedError("vscdb_path_missing", "Cursor state.vscdb path is required");
   const buildWrite = typeof options.buildWrite === "function"
     ? options.buildWrite
     : () => ({ values: options.values || {}, session: options.session });

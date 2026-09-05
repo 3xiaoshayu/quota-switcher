@@ -1,3 +1,4 @@
+const { codedError } = require("./errors");
 const { ts } = require("./crypto-utils");
 const { pathExists } = require("./atomic-file");
 const { getCursorRuntime, firstExistingCursorExe } = require("./cursor-runtime");
@@ -156,11 +157,11 @@ function relaunchIfPossible(runtime, launchPath) {
 
 async function doCursorSwitch(account) {
   if (!account?.id || !String(account.id).startsWith("cursor_")) {
-    throw new Error("The target account is not a Cursor account");
+    throw codedError("account_product_mismatch", "The target account is not a Cursor account");
   }
-  if (!account.tokens?.access_token) throw new Error("The target account is incomplete");
+  if (!account.tokens?.access_token) throw codedError("account_incomplete", "The target account is incomplete");
   if (account.requires_reauth) {
-    throw new Error("The target account requires reauthorization before it can be switched to");
+    throw codedError("reauthorization_required", "The target account requires reauthorization before it can be switched to");
   }
 
   const currentId = loadCursorIdx().current_cursor_account_id;

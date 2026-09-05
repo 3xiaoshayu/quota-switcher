@@ -1,3 +1,4 @@
+const { codedError } = require("./errors");
 const path = require("node:path");
 const http = require("node:http");
 const cp = require("node:child_process");
@@ -38,6 +39,7 @@ function publicAccountResult(result) {
     updated: !!result.updated,
     switched: !!result.switched,
     switchError: result.switchError || null,
+    switchErrorCode: result.switchErrorCode || null,
     authState: result.authState || null,
   };
 }
@@ -46,6 +48,8 @@ function setStatus(status, patch = {}) {
   lastStatus = {
     status,
     message: patch.message || null,
+    // Stable identifier the window translates first; the message is diagnostic.
+    code: patch.code || null,
     targetAccountId: patch.targetAccountId ?? active?.pending?.targetAccountId ?? null,
     result: patch.result ? publicAccountResult(patch.result) : null,
   };
@@ -114,6 +118,7 @@ async function switchCodexAfterOAuth(result) {
   } catch (error) {
     result.switched = false;
     result.switchError = error.message || String(error);
+    result.switchErrorCode = typeof error.code === "string" ? error.code : null;
     attachInspectedAuthState(result);
     logWarn(`OAuth account saved but Codex switch failed: ${result.switchError}`);
   }
@@ -180,7 +185,7 @@ function loadPending() {
     const pending = JSON.parse(unprotectData(envelope.protected_payload));
     if (!pending.expiresAt || pending.expiresAt <= Date.now()) {
       clearPendingFile();
-      setStatus("expired", { message: "The pending OAuth authorization expired." });
+      setStatus("expired", { code: "oauth_expired", message: "The pending OAuth authorization expired." });
       return null;
     }
     return pending;
@@ -190,7 +195,7 @@ function loadPending() {
     if (!(error instanceof SyntaxError)) return null;
     clearPendingFile();
     logError(`Could not restore the pending OAuth authorization: ${error.message}`);
-    setStatus("error", { message: "The pending OAuth authorization could not be restored." });
+    setStatus("error", { code: "oauth_restore_failed", message: "The pending OAuth authorization could not be restored." });
     return null;
   }
 }
@@ -257,7 +262,7 @@ async function exchangeCode(pending, code) {
   });
   if (response.status >= 400) {
     const codeValue = extractErrorCode(response.body);
-    throw new Error(`OAuth token exchange failed: HTTP ${response.status}${codeValue ? ` ${codeValue}` : ""}`);
+    throw codedError("oauth_exchange_failed", `OAuth token exchange failed: HTTP ${response.status}${codeValue ? ` ${codeValue}` : ""}`);
   }
   const payload = JSON.parse(response.body);
   const tokens = {
@@ -265,13 +270,13 @@ async function exchangeCode(pending, code) {
     access_token: String(payload.access_token || ""),
     refresh_token: payload.refresh_token ? String(payload.refresh_token) : null,
   };
-  if (!tokens.access_token) throw new Error("OAuth response did not contain an access token");
+  if (!tokens.access_token) throw codedError("oauth_missing_access_token", "OAuth response did not contain an access token");
   return tokens;
 }
 
 function accountFromTokens(tokens, existing = null) {
   const payload = jwtPayload(tokens.id_token) || jwtPayload(tokens.access_token);
-  if (!payload) throw new Error("The OAuth identity token could not be parsed");
+  if (!payload) throw codedError("oauth_identity_unreadable", "The OAuth identity token could not be parsed");
   const auth = payload["https://api.openai.com/auth"] || {};
   // Keep known identity/profile fields when the new token carries thinner
   // claims; losing account_id would break the ChatGPT-Account-Id header.
@@ -433,6 +438,7 @@ function settleActive(error, result) {
 
   if (error) {
     setStatus(error.code === "oauth_cancelled" ? "cancelled" : "error", {
+      code: error.code || "oauth_failed",
       message: error.message,
       targetAccountId,
     });
@@ -468,9 +474,9 @@ async function handleAuthorizationCode(pending, code) {
 }
 
 function startPendingSession(pending, options = {}) {
-  if (active && !active.settled) throw new Error("An OAuth authorization is already in progress");
+  if (active && !active.settled) throw codedError("oauth_in_progress", "An OAuth authorization is already in progress");
   persistPending(pending);
-  setStatus("pending", { targetAccountId: pending.targetAccountId, message: "Waiting for browser authorization." });
+  setStatus("pending", { code: "oauth_waiting", targetAccountId: pending.targetAccountId, message: "Waiting for browser authorization." });
 
   const completion = new Promise((resolve, reject) => {
     const server = http.createServer((request, response) => {
@@ -537,7 +543,7 @@ function startPendingSession(pending, options = {}) {
 function oauthLoginFlow(options = {}) {
   const { getCursorOAuthStatus } = require("./cursor-oauth");
   if (getCursorOAuthStatus().pending) {
-    throw new Error("authorization is already in progress");
+    throw codedError("oauth_in_progress", "authorization is already in progress");
   }
   return startPendingSession(buildPending(options), {
     openBrowser: options.openBrowser !== false,
@@ -556,7 +562,7 @@ function restorePendingOAuth() {
 function cancelOAuth() {
   if (!active || active.settled) {
     clearPendingFile();
-    setStatus("cancelled", { message: "No OAuth authorization is pending." });
+    setStatus("cancelled", { code: "oauth_not_pending", message: "No OAuth authorization is pending." });
     return false;
   }
   const error = new Error("OAuth authorization was cancelled");
@@ -566,17 +572,17 @@ function cancelOAuth() {
 }
 
 async function completeOAuthManually(callbackUrl) {
-  if (!active || active.settled) throw new Error("No OAuth authorization is pending");
+  if (!active || active.settled) throw codedError("oauth_not_pending", "No OAuth authorization is pending");
   const session = active;
   let url;
   try {
     url = new URL(String(callbackUrl || ""));
   } catch {
-    throw new Error("Enter the complete OAuth callback URL");
+    throw codedError("oauth_callback_invalid", "Enter the complete OAuth callback URL");
   }
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
-  if (!code || state !== session.pending.state) throw new Error("The callback URL is missing code or has an invalid state");
+  if (!code || state !== session.pending.state) throw codedError("oauth_callback_invalid", "The callback URL is missing code or has an invalid state");
   void handleAuthorizationCode(session.pending, code);
   return session.completion;
 }

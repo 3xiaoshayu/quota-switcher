@@ -1,9 +1,11 @@
 import {
   clampSyncIntervalMinutes,
+  daemonErrorCopy,
   formatDateTime,
   isManagedProductAccount,
   needsQuotaAutoSync,
   quotaAutoSyncStaleMs,
+  type DaemonFailure,
 } from '../api/desktop';
 import { toUserMessage } from '../api/user-messages';
 import type {
@@ -49,7 +51,18 @@ interface DaemonSnapshotFields {
   daemonLastRunAt?: string | number | null;
   daemonLastSuccessAt?: string | number | null;
   daemonLastError?: string | null;
+  daemonLastErrorCode?: string | null;
+  daemonLastFailures?: DaemonFailure[];
   daemonPausedReason?: string | null;
+}
+
+function daemonLastErrorCopy(snapshot: DaemonSnapshotFields): string | null {
+  const failures = snapshot.daemonLastFailures?.filter((item) => item && (item.code || item.message)) || [];
+  if (failures.length) return daemonErrorCopy({ failures });
+  if (!snapshot.daemonLastError) return null;
+  return toUserMessage(snapshot.daemonLastErrorCode
+    ? { code: snapshot.daemonLastErrorCode, message: snapshot.daemonLastError }
+    : snapshot.daemonLastError);
 }
 
 // While a user-initiated config save is in flight, the interval shown must be
@@ -65,7 +78,7 @@ export function daemonStateFromSnapshot(
       : snapshot.daemonSyncInterval,
     lastChecked: snapshot.daemonLastRunAt ? formatDateTime(snapshot.daemonLastRunAt) : '',
     lastSuccessAt: snapshot.daemonLastSuccessAt ?? null,
-    lastError: snapshot.daemonLastError ? toUserMessage(snapshot.daemonLastError) : null,
+    lastError: daemonLastErrorCopy(snapshot),
     pausedReason: snapshot.daemonPausedReason ? toUserMessage(snapshot.daemonPausedReason) : null,
   };
 }

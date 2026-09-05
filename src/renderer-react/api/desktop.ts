@@ -107,6 +107,8 @@ type DesktopDaemonStatus = {
   lastRunAt?: string | number | null;
   lastSuccessAt?: string | number | null;
   lastError?: string | null;
+  lastErrorCode?: string | null;
+  lastFailures?: DaemonFailure[];
   pausedReason?: string | null;
 };
 
@@ -281,7 +283,7 @@ interface DesktopBridge {
   stopDaemon: () => Promise<ApiResponse<string>>;
   getDaemonStatus: () => Promise<ApiResponse<DesktopDaemonStatus>>;
   onDaemonTick?: (cb: (payload: unknown) => void) => () => void;
-  onDaemonError?: (cb: (payload: { message?: string }) => void) => () => void;
+  onDaemonError?: (cb: (payload: DaemonErrorPayload) => void) => () => void;
   onUpdateStatus?: (cb: (payload: DesktopUpdateStatus) => void) => () => void;
   onAuthConflict?: (cb: (payload: DesktopAuthState) => void) => () => void;
   onQuotaUpdated?: (cb: (payload: { product?: ProductKind; account?: DesktopAccount | null; quota?: DesktopQuota | null }) => void) => () => void;
@@ -311,6 +313,8 @@ export interface DashboardState {
   daemonLastSuccessAt?: string | number | null;
   daemonLastRunAt?: string | number | null;
   daemonLastError?: string | null;
+  daemonLastErrorCode?: string | null;
+  daemonLastFailures?: DaemonFailure[];
   daemonPausedReason?: string | null;
 }
 
@@ -333,6 +337,35 @@ function bridge(): DesktopBridge {
     throw new Error('Desktop bridge is not available. Start the app through Electron.');
   }
   return api;
+}
+
+// One entry per account or stage that failed inside a daemon tick.
+export interface DaemonFailure {
+  stage?: string;
+  email?: string | null;
+  code?: string | null;
+  message?: string;
+}
+
+export interface DaemonErrorPayload {
+  message?: string;
+  code?: string | null;
+  failures?: DaemonFailure[];
+}
+
+// A daemon tick can fail in several places at once; each failure is translated
+// by its own code so the toast never has to parse a joined English string.
+export function daemonErrorCopy(payload: DaemonErrorPayload | undefined): string {
+  const failures = payload?.failures?.filter((item) => item && (item.code || item.message)) || [];
+  if (failures.length) {
+    const lines = failures.map((item) => {
+      const text = toUserMessage(item.code ? { code: item.code, message: item.message || '' } : (item.message || ''));
+      return item.email ? `${item.email}：${text}` : text;
+    });
+    return [...new Set(lines)].join('；');
+  }
+  if (payload?.code) return toUserMessage({ code: payload.code, message: payload.message || '' });
+  return toUserMessage(payload?.message || 'Daemon error');
 }
 
 export function expectData<T>(response: ApiResponse<T>, label: string): T {
@@ -483,6 +516,8 @@ function dashboardFromSnapshot(data: DesktopSnapshotPayload): DashboardState {
     daemonLastSuccessAt: daemon?.lastSuccessAt || null,
     daemonLastRunAt: daemon?.lastRunAt || null,
     daemonLastError: daemon?.lastError || null,
+    daemonLastErrorCode: daemon?.lastErrorCode || null,
+    daemonLastFailures: daemon?.lastFailures || [],
     daemonPausedReason: daemon?.pausedReason || null,
   };
 }
@@ -1102,7 +1137,7 @@ export function mapAccountForUi(
   const hourlyPresent = !hasPresence || account.quota?.hourly_window_present === true;
   const weeklyPresent = !hasPresence || account.quota?.weekly_window_present === true;
   const quotaError = account.quota_error?.message || account.quota_error?.code
-    ? toUserMessage(account.quota_error?.message || account.quota_error?.code)
+    ? toUserMessage({ code: account.quota_error?.code, message: account.quota_error?.message })
     : null;
   const status = statusForUi(account);
   const tokenStatus = account.token_status || {};
@@ -1181,7 +1216,7 @@ export function mapCursorAccountForUi(
   currentAccount: DesktopAccount | null,
 ): AccountQuota {
   const quotaError = account.quota_error?.message || account.quota_error?.code
-    ? toCursorUserMessage(account.quota_error?.message || account.quota_error?.code)
+    ? toCursorUserMessage({ code: account.quota_error?.code, message: account.quota_error?.message })
     : null;
   const status = cursorStatusForUi(account);
   const tokenStatus = account.token_status || {};
@@ -1295,7 +1330,7 @@ export function mapAntigravityAccountForUi(
   currentAccount: DesktopAccount | null,
 ): AccountQuota {
   const quotaError = account.quota_error?.message || account.quota_error?.code
-    ? toAntigravityUserMessage(account.quota_error?.message || account.quota_error?.code)
+    ? toAntigravityUserMessage({ code: account.quota_error?.code, message: account.quota_error?.message })
     : null;
   const status = antigravityStatusForUi(account);
   const tokenStatus = account.token_status || {};
@@ -1777,6 +1812,8 @@ export const desktopApi = {
       daemonLastSuccessAt: daemon?.lastSuccessAt || null,
       daemonLastRunAt: daemon?.lastRunAt || null,
       daemonLastError: daemon?.lastError || null,
+      daemonLastErrorCode: daemon?.lastErrorCode || null,
+      daemonLastFailures: daemon?.lastFailures || [],
       daemonPausedReason: daemon?.pausedReason || null,
     };
   },
@@ -2102,7 +2139,7 @@ export const desktopApi = {
     if (!api) return () => {};
     const cleanups = [
       api.onDaemonTick?.((payload) => events.onDaemonTick?.(payload as { result?: { authState?: DesktopAuthState } } | undefined)),
-      api.onDaemonError?.((payload) => events.onDaemonError?.(toUserMessage(payload?.message || 'Daemon error'))),
+      api.onDaemonError?.((payload) => events.onDaemonError?.(daemonErrorCopy(payload))),
       api.onUpdateStatus?.((payload) => events.onUpdateStatus?.(payload)),
       api.onAuthConflict?.((payload) => events.onAuthConflict?.(payload)),
       api.onFloatProduct?.((product) => events.onFloatProduct?.(product)),

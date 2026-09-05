@@ -64,7 +64,10 @@ export function planOAuthFinish(kind: ProductKind, status: DesktopOAuthStatus): 
     return plan;
   }
   if (status.status === 'error' || status.status === 'expired') {
-    plan.notices.push({ level: 'warning', message: toUserMessage(status.message || '授权未完成。') });
+    const raw = status.code
+      ? { code: status.code, message: status.message || '' }
+      : (status.message || '授权未完成。');
+    plan.notices.push({ level: 'warning', message: toUserMessage(raw) });
     return plan;
   }
   if (status.status !== 'completed') return null;
@@ -96,7 +99,10 @@ export function planOAuthFinish(kind: ProductKind, status: DesktopOAuthStatus): 
     }),
   });
   if (result?.switchError) {
-    plan.notices.push({ level: 'warning', message: toUserMessage(result.switchError) });
+    const raw = result.switchErrorCode
+      ? { code: result.switchErrorCode, message: result.switchError }
+      : result.switchError;
+    plan.notices.push({ level: 'warning', message: toUserMessage(raw) });
   }
   if (kind === 'antigravity' && result?.accountId) {
     plan.refreshAntigravityAccountId = result.accountId;

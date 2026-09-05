@@ -72,6 +72,9 @@ export interface DesktopAuthState {
 export interface DesktopOAuthStatus {
   status: string;
   pending?: boolean;
+  // Stable identifier for the message (for example oauth_expired); the
+  // renderer translates by it before falling back to the message text.
+  code?: string | null;
   message?: string | null;
   targetAccountId?: string | null;
   expiresAt?: number | null;
@@ -84,6 +87,7 @@ export interface DesktopOAuthStatus {
     targetAccountId?: string | null;
     switched?: boolean;
     switchError?: string | null;
+    switchErrorCode?: string | null;
     authState?: DesktopAuthState | null;
   } | null;
 }

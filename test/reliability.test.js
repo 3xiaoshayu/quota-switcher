@@ -3713,6 +3713,38 @@ test("OAuth manual callback waits for completion and honors cancellation", async
   await assert.rejects(blockedFlow, /cancelled/);
   await assert.rejects(blockedManual, /cancelled/);
   assert.equal(second.engine.listAccts().some(account => account.email === "cancelled@example.com"), false);
+  // The settled status carries the stable code next to the message, so the
+  // window can pick copy without matching the English text.
+  const cancelledStatus = second.engine.getOAuthStatus();
+  assert.equal(cancelledStatus.status, "cancelled");
+  assert.equal(cancelledStatus.code, "oauth_cancelled");
+  second.engine.discardPendingOAuth?.("expired by test");
+});
+
+test("an OAuth failure status names its code", async t => {
+  const { engine } = freshEngine(t);
+  const failing = engine.oauthLoginFlow({
+    openBrowser: false,
+    exchangeCode: async () => {
+      const error = new Error("token exchange exploded");
+      error.code = "oauth_exchange_failed";
+      throw error;
+    },
+  });
+  const pendingPath = require("../engine/oauth").PENDING_PATH;
+  const startedAt = Date.now();
+  while (!fs.existsSync(pendingPath) && Date.now() - startedAt < 2000) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  const codec = { decrypt: (value) => Buffer.from(value, "base64").toString("utf8") };
+  const envelope = JSON.parse(fs.readFileSync(pendingPath, "utf8"));
+  const pending = JSON.parse(codec.decrypt(envelope.protected_payload));
+  await assert.rejects(engine.completeOAuthManually(`${pending.redirectUri}?code=x&state=${pending.state}`), /exploded/);
+  await assert.rejects(failing, /exploded/);
+  const status = engine.getOAuthStatus();
+  assert.equal(status.status, "error");
+  assert.equal(status.code, "oauth_exchange_failed");
+  assert.match(status.message, /exploded/);
 });
 
 test("OAuth callback page waits for token save and uses Chinese copy", async t => {

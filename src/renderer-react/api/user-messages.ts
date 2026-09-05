@@ -6,7 +6,35 @@ const FALLBACK = '操作失败，请稍后重试'
 // code the engine produces must have an entry (test/error-codes.test.js).
 export const CODE_MESSAGES: Readonly<Record<string, string>> = {
   account_banned: '账号已封号，无法继续使用。',
+  account_file_invalid: '账号文件损坏，无法读取',
+  account_file_missing_tokens: '账号文件里没有令牌，请重新授权',
+  account_incomplete: '该账号资料不完整，无法切换',
+  account_index_invalid: '账号索引文件损坏',
+  account_missing_secrets: '账号凭据没有载入，无法保存',
   account_not_found: '账号不存在',
+  account_prefix_mismatch: '该账号不属于当前产品，无法保存',
+  account_product_mismatch: '该账号不属于当前产品，无法切换',
+  antigravity_login_unwritable: '官方 Antigravity 登录写不进去',
+  codex_process_still_running: '官方 Codex 未能退出，请稍后重试',
+  codex_start_failed: '官方 Codex 未能正常启动',
+  current_account_delete_blocked: '请先切到其他账号，再删除当前账号',
+  current_account_missing: '管理器当前账号不可用',
+  invalid_account_id: '账号标识无效',
+  network_unavailable: '额度暂时没刷到，登录还在。请稍后再试。',
+  oauth_callback_invalid: '回调地址缺少授权码或状态不正确',
+  oauth_exchange_failed: '换取登录令牌失败',
+  oauth_expired: '授权已过期，请重新点一次',
+  oauth_failed: '授权未完成',
+  oauth_identity_unreadable: '无法解析登录身份',
+  oauth_in_progress: '已有授权正在进行',
+  oauth_missing_access_token: '授权响应缺少访问令牌',
+  oauth_not_pending: '当前没有等待完成的授权',
+  oauth_restore_failed: '未完成的授权无法恢复，请重新点一次',
+  oauth_waiting: '请在浏览器完成授权',
+  official_login_unsupported: '本机没有已登录的 Codex',
+  protobuf_invalid: '官方登录数据无法解析',
+  vault_not_initialized: '账号加密尚未就绪，请重启软件',
+  vscdb_path_missing: '没有找到官方登录库路径',
   antigravity_app_path_not_found: '没有找到官方 Antigravity IDE，请先安装后再切号',
   antigravity_cloudcode_timeout: '这次没查清 Antigravity 额度，请稍后重试',
   antigravity_oauth_client_missing: '没有找到官方 Antigravity 的授权配置，网页授权暂时不可用。',
@@ -55,6 +83,12 @@ export function errorCode(raw: unknown): string | null {
   return typeof code === 'string' && code ? code : null
 }
 
+// Message matching is the second layer. Every failure the engine raises carries
+// a code (test/error-codes.test.js enforces it), so these rules only serve two
+// jobs now: refining a code that covers several situations (MESSAGE_REFINED_CODES
+// below picks the more specific wording), and translating the string-only
+// fields that still reach the window without a code, such as reauth_reason on
+// an account, a daemon paused reason, or copy left over from an older engine.
 const RULES: Array<{ test: RegExp; to: string }> = [
   { test: /is banned and cannot refresh quotas/i, to: '账号已封号，无法刷新额度' },
   { test: /is banned and cannot be switched/i, to: '账号已封号，无法切换' },
@@ -183,6 +217,12 @@ export function isQuotaTemporaryFailure(text: string): boolean {
 const MESSAGE_REFINED_CODES: Readonly<Record<string, RegExp>> = {
   reauthorization_required: /重新授权/,
   account_banned: /封号/,
+  account_product_mismatch: /Cursor|Antigravity|Codex/,
+  codex_start_failed: /Codex/,
+  oauth_callback_invalid: /回调/,
+  // A probe failure's message says whether it was a timeout, a 5xx, or a
+  // usage endpoint that did not answer; keep that wording when we have it.
+  probe_failed: /没查清|没刷到|暂时不可用/,
 }
 
 function messageText(raw: unknown): string {

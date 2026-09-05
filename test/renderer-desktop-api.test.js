@@ -2111,7 +2111,8 @@ test("batch token check failures use product-specific Chinese copy", () => {
 test("switch and auth failure toasts go through Chinese user messages", () => {
   const oauth = readRendererFile("app", "oauth-flow.ts");
   const actions = readRendererFile("app", "useAccountActions.ts");
-  assert.match(oauth, /status\.status === 'error' \|\| status\.status === 'expired'[\s\S]*toUserMessage\(status\.message/);
+  assert.match(oauth, /status\.status === 'error' \|\| status\.status === 'expired'[\s\S]*toUserMessage\(raw\)/);
+  assert.match(oauth, /\{ code: status\.code, message: status\.message \|\| '' \}/, "OAuth failures translate by code first");
   assert.match(actions, /performAccountSwitch[\s\S]*toUserMessage\(error\)/);
   assert.match(actions, /handleToggleDaemon[\s\S]*toUserMessage\(error\)/);
   assert.match(actions, /handleRefreshToken[\s\S]*toUserMessage\(error\)/);

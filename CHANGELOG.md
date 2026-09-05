@@ -7,6 +7,18 @@ release is published.
 
 ## Unreleased
 
+- Every failure the engine raises now carries a stable code (`codedError`),
+  including account-store, OAuth, switch, and network errors that used to be
+  plain messages; a test fails the build if a bare `throw new Error` comes
+  back. OAuth statuses, the daemon's last error and per-account failures, and a
+  post-login switch error carry their codes too, so the window translates them
+  by code and only falls back to message matching for string-only fields.
+- Daemon failures are reported per account with their own copy instead of one
+  joined English string.
+- An end-to-end smoke test (`npm run test:e2e`) starts the real app in a
+  sandbox and drives it over the DevTools Protocol; CI and the release
+  workflow run it after the unit tests.
+
 ## [2.0.9] - 2026-09-05
 
 - A switch no longer fails with "did not exit" when the operating system

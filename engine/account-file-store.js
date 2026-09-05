@@ -1,3 +1,4 @@
+const { codedError } = require("./errors");
 const path = require("node:path");
 const { writeJsonAtomic, quarantineFile, restoreBackup, captureFile, statSyncWithRetry, restoreCapturedFile, copyFileWithRetry, unlinkWithRetry, readJsonWithRetry, readdirSyncWithRetry, mkdirSyncWithRetry } = require("./atomic-file");
 const { jwtPayload } = require("./crypto-utils");
@@ -47,7 +48,7 @@ function setSecretCodec(codec) {
 }
 
 function requireSecretCodec() {
-  if (!secretCodec) throw new Error("Account encryption is not initialized");
+  if (!secretCodec) throw codedError("vault_not_initialized", "Account encryption is not initialized");
   return secretCodec;
 }
 
@@ -147,13 +148,13 @@ function normalizeAccountId(id) {
     value.length > 128 ||
     !/^[A-Za-z0-9._-]+$/.test(value)
   ) {
-    throw new Error("Invalid account id");
+    throw codedError("invalid_account_id", "Invalid account id");
   }
   return value;
 }
 
 function decodeAccount(raw, filePath, options = {}) {
-  if (!raw || typeof raw !== "object") throw new Error(`Invalid account file: ${filePath}`);
+  if (!raw || typeof raw !== "object") throw codedError("account_file_invalid", `Invalid account file: ${filePath}`);
   normalizeAccountId(raw.id);
   const secrets = options.secrets !== false;
 
@@ -179,7 +180,7 @@ function decodeAccount(raw, filePath, options = {}) {
     return secrets ? legacy : omitSecrets(legacy);
   }
 
-  throw new Error(`Account file has no token payload: ${filePath}`);
+  throw codedError("account_file_missing_tokens", `Account file has no token payload: ${filePath}`);
 }
 
 function rewriteFingerprint(filePath) {
@@ -253,7 +254,7 @@ function migrateLegacyAccount(account, filePath) {
 
 function encodeAccount(account) {
   if (account?.__secretsOmitted && !account.tokens) {
-    throw new Error("Cannot encode an account loaded without secrets");
+    throw codedError("account_missing_secrets", "Cannot encode an account loaded without secrets");
   }
   const copy = { ...account };
   const tokens = copy.tokens || {};
@@ -373,7 +374,7 @@ function createAccountFileStore(spec) {
 
   function normalizeIndex(value) {
     if (!value || typeof value !== "object" || !Array.isArray(value.accounts)) {
-      throw new Error(indexInvalidMessage);
+      throw codedError("account_index_invalid", indexInvalidMessage);
     }
     const normalized = preserveIndexExtras ? { ...value } : {};
     normalized.version = value.version || indexVersion;
@@ -385,11 +386,11 @@ function createAccountFileStore(spec) {
   function accountFilePath(id) {
     const safeId = normalizeAccountId(id);
     if (pathRequiresPrefix && !safeId.startsWith(prefix)) {
-      throw new Error(invalidIdError);
+      throw codedError("invalid_account_id", invalidIdError);
     }
     const root = path.resolve(accountsDir);
     const target = path.resolve(root, `${safeId}.json`);
-    if (!target.startsWith(`${root}${path.sep}`)) throw new Error(invalidIdError);
+    if (!target.startsWith(`${root}${path.sep}`)) throw codedError("invalid_account_id", invalidIdError);
     return target;
   }
 
@@ -588,13 +589,13 @@ function createAccountFileStore(spec) {
   }
 
   function saveAcct(account) {
-    if (!account?.id) throw new Error("Account id is required");
+    if (!account?.id) throw codedError("invalid_account_id", "Account id is required");
     if (account.__secretsOmitted) {
-      throw new Error("Refusing to persist an account loaded without secrets");
+      throw codedError("account_missing_secrets", "Refusing to persist an account loaded without secrets");
     }
     const safeId = normalizeAccountId(account.id);
     if (!safeId.startsWith(prefix)) {
-      throw new Error(saveForeignPrefixError);
+      throw codedError("account_prefix_mismatch", saveForeignPrefixError);
     }
     if (decorateAccount) decorateAccount(account);
     ensureDir(accountsDir);
@@ -604,7 +605,7 @@ function createAccountFileStore(spec) {
   function deleteAcct(id, options = {}) {
     const accountId = normalizeAccountId(id);
     if (pathRequiresPrefix && !accountId.startsWith(prefix)) {
-      throw new Error(invalidIdError);
+      throw codedError("invalid_account_id", invalidIdError);
     }
     const filePath = accountFilePath(accountId);
     const targets = [filePath, `${filePath}.bak`, indexPath];
@@ -613,7 +614,7 @@ function createAccountFileStore(spec) {
     try {
       const index = loadIdx({ inventCurrent: false });
       if (index[currentField] === accountId && options.allowCurrent !== true) {
-        throw new Error("Switch to another account before deleting the current account.");
+        throw codedError("current_account_delete_blocked", "Switch to another account before deleting the current account.");
       }
 
       for (const target of [filePath, `${filePath}.bak`]) {

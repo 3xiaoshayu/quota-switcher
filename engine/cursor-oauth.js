@@ -1,3 +1,4 @@
+const { codedError } = require("./errors");
 const crypto = require("node:crypto");
 const { b64url, codeChallenge } = require("./crypto-utils");
 const {
@@ -38,6 +39,8 @@ function setStatus(status, patch = {}) {
   lastStatus = {
     status,
     message: patch.message || null,
+    // Stable identifier the window translates first; the message is diagnostic.
+    code: patch.code || null,
     targetAccountId: patch.targetAccountId ?? active?.pending?.targetAccountId ?? null,
     result: patch.result ? publicAccountResult(patch.result) : null,
   };
@@ -72,7 +75,7 @@ function loadPending() {
     const pending = JSON.parse(unprotectData(envelope.protected_payload));
     if (!pending.expiresAt || pending.expiresAt <= Date.now()) {
       clearPendingFile();
-      setStatus("expired", { message: "The pending OAuth authorization expired." });
+      setStatus("expired", { code: "oauth_expired", message: "The pending OAuth authorization expired." });
       return null;
     }
     return pending;
@@ -112,6 +115,7 @@ function settleActive(error, result) {
   active = null;
   if (error) {
     setStatus(error.code === "oauth_cancelled" ? "cancelled" : "error", {
+      code: error.code || "oauth_failed",
       message: error.message,
       targetAccountId,
     });
@@ -204,10 +208,10 @@ async function finishCursorLogin(pending, payload) {
 
 async function cursorLoginFlow(options = {}) {
   if (getOAuthStatus().pending) {
-    throw new Error("authorization is already in progress");
+    throw codedError("oauth_in_progress", "authorization is already in progress");
   }
   if (active && !active.settled) {
-    throw new Error("authorization is already in progress");
+    throw codedError("oauth_in_progress", "authorization is already in progress");
   }
   const now = Date.now();
   const verifier = b64url(32);
@@ -250,7 +254,7 @@ async function cursorLoginFlow(options = {}) {
 function discardPendingCursorOAuth(reason) {
   if (active && !active.settled) return cancelCursorOAuth();
   clearPendingFile();
-  setStatus("expired", { message: reason || "The pending OAuth authorization expired." });
+  setStatus("expired", { code: "oauth_expired", message: reason || "The pending OAuth authorization expired." });
   return true;
 }
 

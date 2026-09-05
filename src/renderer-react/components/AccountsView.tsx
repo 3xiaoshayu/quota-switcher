@@ -118,7 +118,9 @@ export default function AccountsView({
     setIsRecoveredOAuth(false);
     setIsAdding(false);
     if (oauthStatus?.status === 'error' || oauthStatus?.status === 'expired') {
-      setFormError(formMessage(product, oauthStatus.message || '授权未完成'));
+      setFormError(formMessage(product, oauthStatus.code
+        ? { code: oauthStatus.code, message: oauthStatus.message || '' }
+        : (oauthStatus.message || '授权未完成')));
       setShowAddModal(true);
       return;
     }
@@ -126,7 +128,7 @@ export default function AccountsView({
     setReauthorizeId(null);
     setManualCallbackUrl('');
     setFormError('');
-  }, [isRecoveredOAuth, oauthMode, oauthStatus?.message, oauthStatus?.pending, oauthStatus?.status, oauthStatus?.targetAccountId]);
+  }, [isRecoveredOAuth, oauthMode, oauthStatus?.code, oauthStatus?.message, oauthStatus?.pending, oauthStatus?.status, oauthStatus?.targetAccountId]);
 
   useEffect(() => {
     if (showAddModal) onOpenModal?.();

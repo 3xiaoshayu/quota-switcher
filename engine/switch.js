@@ -1,3 +1,4 @@
+const { codedError } = require("./errors");
 const path = require("node:path");
 const cp = require("node:child_process");
 const { tsIso, ts } = require("./crypto-utils");
@@ -225,7 +226,7 @@ function buildAuthJson(account) {
 
 function writeAuthJson(account) {
   if (String(account?.id || "").startsWith("cursor_")) {
-    throw new Error("Cursor accounts cannot be written to official Codex");
+    throw codedError("account_product_mismatch", "Cursor accounts cannot be written to official Codex");
   }
   ensureDir(CODEX_DIR);
   const value = buildAuthJson(account);
@@ -268,14 +269,14 @@ async function killCodex() {
     remaining = await waitForPidsToExit(remaining, FORCE_WAIT_MS);
   }
   if (remaining.length > 0) {
-    throw new Error(`Official Codex processes did not exit: ${remaining.join(", ")}`);
+    throw codedError("codex_process_still_running", `Official Codex processes did not exit: ${remaining.join(", ")}`);
   }
   const leftovers = await runtime.listProcesses();
   if (leftovers.length > 0) {
     await Promise.all(leftovers.map((item) => runtime.forceClose(item.pid)));
     remaining = await waitForPidsToExit(leftovers.map((item) => item.pid), LEFTOVER_WAIT_MS);
     if (remaining.length > 0) {
-      throw new Error(`Official Codex processes did not exit: ${remaining.join(", ")}`);
+      throw codedError("codex_process_still_running", `Official Codex processes did not exit: ${remaining.join(", ")}`);
     }
   }
   logInfo(`Closed ${pids.length} official Codex process(es)`);
@@ -314,9 +315,9 @@ async function startCodex(options = {}) {
     return true;
   }
   if (sawCrashWindow) {
-    throw new Error("Official Codex opened a crash recovery window instead of a working session");
+    throw codedError("codex_start_failed", "Official Codex opened a crash recovery window instead of a working session");
   }
-  throw new Error("Official Codex did not start within the expected time");
+  throw codedError("codex_start_failed", "Official Codex did not start within the expected time");
 }
 
 function restoreFile(filePath, content) {
@@ -325,14 +326,14 @@ function restoreFile(filePath, content) {
 
 async function doSwitch(account, options = {}) {
   if (String(account?.id || "").startsWith("cursor_")) {
-    throw new Error("Cursor accounts cannot be switched into official Codex");
+    throw codedError("account_product_mismatch", "Cursor accounts cannot be switched into official Codex");
   }
-  if (!account?.id || !account.tokens?.access_token) throw new Error("The target account is incomplete");
+  if (!account?.id || !account.tokens?.access_token) throw codedError("account_incomplete", "The target account is incomplete");
   if (account.banned) {
-    throw new Error("The target account is banned and cannot be switched to");
+    throw codedError("account_banned", "The target account is banned and cannot be switched to");
   }
   if (account.requires_reauth) {
-    throw new Error("The target account requires reauthorization before it can be switched to");
+    throw codedError("reauthorization_required", "The target account requires reauthorization before it can be switched to");
   }
   const currentId = loadIdx().current_account_id;
   if (!options.force && currentId === account.id) {

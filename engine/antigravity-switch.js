@@ -1,3 +1,4 @@
+const { codedError } = require("./errors");
 const path = require("node:path");
 const { ts } = require("./crypto-utils");
 const { getAntigravityRuntime, usesWindowsSystemCredential, preferUserDataDirForExe } = require("./antigravity-runtime");
@@ -126,13 +127,13 @@ async function clearStaleLockWithRetry(runtime, userDataDir) {
 
 async function doAntigravitySwitch(account) {
   if (!account?.id || !String(account.id).startsWith("antigravity_")) {
-    throw new Error("The target account is not an Antigravity account");
+    throw codedError("account_product_mismatch", "The target account is not an Antigravity account");
   }
   if (!account.tokens?.access_token && !account.tokens?.refresh_token) {
-    throw new Error("The target account is incomplete");
+    throw codedError("account_incomplete", "The target account is incomplete");
   }
   if (account.requires_reauth) {
-    throw new Error("The target account requires reauthorization before it can be switched to");
+    throw codedError("reauthorization_required", "The target account requires reauthorization before it can be switched to");
   }
 
   const currentId = loadAntigravityIdx().current_antigravity_account_id;
@@ -174,7 +175,7 @@ async function doAntigravitySwitch(account) {
     }
     if (writeCredential) {
       if (typeof runtime.writeSystemCredential !== "function") {
-        throw new Error("Official Antigravity 2.0 login cannot be written");
+        throw codedError("antigravity_login_unwritable", "Official Antigravity 2.0 login cannot be written");
       }
       await runtime.writeSystemCredential(account, runtime.execFile);
       wroteCredential = true;

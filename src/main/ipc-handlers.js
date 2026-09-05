@@ -241,6 +241,7 @@ function publicOAuthIpcResult(eng, result, extra = {}) {
         targetAccountId: result?.targetAccountId || extra.targetAccountId || null,
         switched: !!result?.switched,
         switchError: result?.switchError || null,
+        switchErrorCode: result?.switchErrorCode || null,
         authState: result?.authState || null,
         ...extra,
     };
@@ -1133,6 +1134,10 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
         lastRunAt: null,
         lastSuccessAt: null,
         lastError: null,
+        lastErrorCode: null,
+        // Per-account failures of the last tick, each with its own code, so the
+        // window can translate them one by one instead of parsing lastError.
+        lastFailures: [],
         pausedReason: null,
         lastAuthStatus: null,
     };
@@ -1162,6 +1167,8 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             daemonRuntimeState.lastError = result.failures?.length
                 ? result.failures.map(item => item.message).join("; ")
                 : null;
+            daemonRuntimeState.lastErrorCode = result.failures?.length === 1 ? (result.failures[0].code || null) : null;
+            daemonRuntimeState.lastFailures = result.failures || [];
             if (!result.pausedReason && !result.failures?.length) {
                 daemonRuntimeState.lastSuccessAt = result.completedAt || Date.now();
             }
@@ -1184,7 +1191,9 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
             if (runGeneration !== daemonGeneration) return;
             daemonRuntimeState.lastRunAt = Date.now();
             daemonRuntimeState.lastError = error.message;
-            broadcast("daemon:error", { message: error.message });
+            daemonRuntimeState.lastErrorCode = typeof error.code === "string" ? error.code : null;
+            daemonRuntimeState.lastFailures = [];
+            broadcast("daemon:error", { message: error.message, code: typeof error.code === "string" ? error.code : null });
         } finally {
             daemonInFlight = false;
             if (daemonRunRequested && daemonTimer !== null) {

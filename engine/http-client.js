@@ -1,3 +1,4 @@
+const { codedError } = require("./errors");
 const http = require("node:http");
 const https = require("node:https");
 const zlib = require("node:zlib");
@@ -352,7 +353,7 @@ async function httpJsonLocal(url, opts = {}) {
   const signature = await proxy.resolveLiveProxy(url);
   await proxy.applySignatureToRuntime(signature, { touchSession: false });
   if (!signature.proxyUrl && await proxy.hostLooksPoisoned(host)) {
-    throw new Error(`网络请求失败 (${host})。本机 DNS 异常且没有可用的本地代理。`);
+    throw codedError("network_unavailable", `网络请求失败 (${host})。本机 DNS 异常且没有可用的本地代理。`);
   }
 
   // Never use Chromium net.fetch here. It shares the UI session and a bad

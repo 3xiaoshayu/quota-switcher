@@ -1,3 +1,4 @@
+const { codedError } = require("./errors");
 const OAUTH_TOKEN_SENTINEL = "oauthTokenInfoSentinelKey";
 const AUTH_STATE_SENTINEL = "authStateWithContextSentinelKey";
 
@@ -35,9 +36,9 @@ function readVarint(buffer, start) {
     value |= (byte & 0x7fn) << shift;
     if ((byte & 0x80n) === 0n) return { value: Number(value), next: index };
     shift += 7n;
-    if (shift > 63n) throw new Error("varint too long");
+    if (shift > 63n) throw codedError("protobuf_invalid", "varint too long");
   }
-  throw new Error("truncated varint");
+  throw codedError("protobuf_invalid", "truncated varint");
 }
 
 function decodeFields(buffer) {

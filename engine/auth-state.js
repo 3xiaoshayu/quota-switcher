@@ -1,3 +1,4 @@
+const { codedError } = require("./errors");
 const path = require("node:path");
 const { CODEX_DIR } = require("./config");
 const { sha256hex, jwtPayload, extractChatgptAccountId } = require("./crypto-utils");
@@ -350,7 +351,7 @@ function canMirrorOfficialAuth(authState) {
 
 async function adoptOfficialAuth() {
   const official = readOfficialAuth();
-  if (!official?.supported) throw new Error("No supported official Codex OAuth login was found");
+  if (!official?.supported) throw codedError("official_login_unsupported", "No supported official Codex OAuth login was found");
   const { upsert } = require("./oauth");
   const { withAccountLock } = require("./operation-locks");
   return withAccountLock("__switch__", async () => {
@@ -368,7 +369,7 @@ async function adoptOfficialAuth() {
 async function reapplyManagedAuth(accountId = null) {
   const index = loadIdx();
   const targetId = accountId || index.current_account_id;
-  if (!targetId) throw new Error("The managed current account is not available");
+  if (!targetId) throw codedError("current_account_missing", "The managed current account is not available");
   // Reapply runs the same switch transaction as a manual switch, so it must
   // hold the same locks; otherwise two transactions can interleave and one
   // rollback undoes the other's committed state.
@@ -380,7 +381,7 @@ async function reapplyManagedAuth(accountId = null) {
   }
   return withAccountLocks(lockIds, async () => {
     const account = loadAcct(targetId);
-    if (!account) throw new Error("The managed current account is not available");
+    if (!account) throw codedError("current_account_missing", "The managed current account is not available");
     return doSwitch(account, { force: true });
   });
 }
