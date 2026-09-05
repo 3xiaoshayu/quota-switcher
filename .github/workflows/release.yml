@@ -45,6 +45,9 @@ jobs:
       - name: Run tests and project checks
         run: npm test
 
+      - name: Start the app and drive it over CDP
+        run: npm run test:e2e
+
       - name: Build installer and ZIP
         run: npm run build:windows
 

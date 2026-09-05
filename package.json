@@ -23,7 +23,8 @@
     "build": "npm run build:windows",
     "build:dir": "npm run renderer:build && electron-builder --dir --win --x64",
     "build:windows": "npm run release:clean && npm run renderer:build && npm run release:check && electron-builder --win nsis zip --x64 --publish never && npm run release:artifacts",
-    "build:nsis": "npm run renderer:build && electron-builder --win nsis --x64 --publish never"
+    "build:nsis": "npm run renderer:build && electron-builder --win nsis --x64 --publish never",
+    "test:e2e": "npm run renderer:build && node scripts/e2e-smoke.js"
   },
   "author": "WangJin",
   "license": "MIT",

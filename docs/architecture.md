@@ -248,8 +248,18 @@ Run the complete non-destructive check suite:
 ```powershell
 npm ci
 npm test
+npm run test:e2e
 npm run build:dir
 ```
+
+`npm run test:e2e` (`scripts/e2e-smoke.js`) starts the real Electron app
+against a throw-away data directory, with `APPDATA`, `LOCALAPPDATA`, and the
+Electron profile redirected so it never reads a real login database or
+collides with an installed copy, then drives the window over the Chrome
+DevTools Protocol: shell renders, product dock and the three pages respond,
+dialogs open and close, no renderer error or crash screen. CI and the release
+workflow run it after the unit tests; it catches wiring mistakes the type
+checker and unit tests cannot see.
 
 Actions that change a real account or remove account data must be tested with
 synthetic or dedicated test accounts.

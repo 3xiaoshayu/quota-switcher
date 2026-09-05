@@ -40,7 +40,10 @@ npm start
 
 `npm test` runs the engine behavior suite, TypeScript checks, JavaScript syntax
 checks, renderer/preload/IPC contract validation, documentation checks, and
-release metadata validation.
+release metadata validation. `npm run test:e2e` starts the real app against a
+throw-away data directory (your accounts and official login databases are not
+touched) and drives the sidebar, the three pages, and the dialogs over the
+DevTools Protocol.
 
 ## Project conventions
 
@@ -66,6 +69,7 @@ Run before submitting:
 
 ```powershell
 npm test
+npm run test:e2e
 npm run build:dir
 ```
 

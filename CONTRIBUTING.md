@@ -34,7 +34,7 @@ npm test
 npm start
 ```
 
-`npm test` 会跑引擎行为、TypeScript、语法、界面契约、文档链接和发布元数据。
+`npm test` 会跑引擎行为、TypeScript、语法、界面契约、文档链接和发布元数据。`npm run test:e2e` 会真的把程序起起来（用一次性数据目录，不碰你本机的账号和官方登录库），通过 DevTools 协议点一遍侧栏、三个页面和弹窗。
 
 ## 约定
 
@@ -54,6 +54,7 @@ npm start
 
 ```powershell
 npm test
+npm run test:e2e
 npm run build:dir
 ```
 
