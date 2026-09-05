@@ -256,10 +256,23 @@ npm run build:dir
 against a throw-away data directory, with `APPDATA`, `LOCALAPPDATA`, and the
 Electron profile redirected so it never reads a real login database or
 collides with an installed copy, then drives the window over the Chrome
-DevTools Protocol: shell renders, product dock and the three pages respond,
-dialogs open and close, no renderer error or crash screen. CI and the release
-workflow run it after the unit tests; it catches wiring mistakes the type
-checker and unit tests cannot see.
+DevTools Protocol. It runs twice. The first run has an empty store and checks
+the first-launch screens. The second run seeds two Codex, two Cursor, and two
+Antigravity accounts as legacy plaintext records (the app migrates them to
+encrypted records on read) and sets `CODEX_MANAGER_API_ORIGIN` so every
+upstream API call lands on a stub HTTP server inside the test script; the stub
+answers one account per product with usage and the other with `401` plus a
+rejected refresh token. That covers account cards with quota bars, the
+"needs reauthorization" copy, a manual refresh, the quotas page, and the quota
+lens with data, with no real credentials and no network. Any call to a path
+the stub does not know fails the run. CI and the release workflow run it after
+the unit tests; it catches wiring mistakes the type checker and unit tests
+cannot see.
+
+`CODEX_MANAGER_API_ORIGIN` only replaces the origin of the API endpoints in
+`engine/config.js` (token, usage, and Cloud Code URLs); the URLs opened in the
+browser for sign-in are never redirected, and the variable is unset in every
+normal run.
 
 Actions that change a real account or remove account data must be tested with
 synthetic or dedicated test accounts.

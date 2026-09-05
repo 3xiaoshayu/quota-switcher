@@ -43,7 +43,9 @@ checks, renderer/preload/IPC contract validation, documentation checks, and
 release metadata validation. `npm run test:e2e` starts the real app against a
 throw-away data directory (your accounts and official login databases are not
 touched) and drives the sidebar, the three pages, and the dialogs over the
-DevTools Protocol.
+DevTools Protocol, once with an empty store and once with seeded fake accounts
+whose quota calls are answered by a local stub server instead of the real
+services.
 
 ## Project conventions
 

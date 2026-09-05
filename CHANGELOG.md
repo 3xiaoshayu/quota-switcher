@@ -7,6 +7,13 @@ release is published.
 
 ## Unreleased
 
+- The end-to-end smoke test now also runs against a store seeded with Codex,
+  Cursor, and Antigravity accounts, with every upstream API answered by a
+  local stub (`CODEX_MANAGER_API_ORIGIN`, unset in normal runs): account cards
+  with quota bars, the "needs reauthorization" copy after a rejected refresh
+  token, a manual refresh, the quotas page, and the quota lens with data are
+  all exercised without real credentials or network.
+
 ## [2.0.10] - 2026-09-05
 
 - Every failure the engine raises now carries a stable code (`codedError`),
