@@ -11,7 +11,7 @@ const { fetchQuota, fetchQuotaWithTokenRepair, isQuotaAuthError, refreshQuota, p
 const { classifyProbe, isAccountBanned } = require("./account-probe");
 const { loadDaemonCfg, saveDaemonCfg, normalizeDaemonCfg, DEFAULT_DAEMON_CFG } = require("./config-manager");
 const { withAccountLock, withAccountLocks, withPathLock, mapLimit } = require("./operation-locks");
-const { runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes, resolutionHoldReason } = require("./daemon");
+const { runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes } = require("./daemon");
 const { getCodexInstallationStatus, getCodexInstallationStatusAsync, assertOfficialCodexInstalled, assertOfficialCodexInstalledAsync } = require("./codex-installation");
 const { listCursorAccts, loadCursorAcct, saveCursorAcct, currentCursorAcct, deleteCursorAcct, loadCursorIdx, setCurrentCursorAccountId } = require("./cursor-storage");
 const { importLocalCursorAccount, upsertCursorAccount, accountFromCursorTokens, authFromLocalValues, syncCurrentCursorFromOfficial, collapseDuplicateCursorAccounts, resetOfficialSyncCacheForTests: resetCursorOfficialSyncCacheForTests } = require("./cursor-local");
@@ -61,7 +61,7 @@ module.exports = {
   // operation-locks
   withAccountLock, withAccountLocks, withPathLock, mapLimit,
   // daemon
-  runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes, resolutionHoldReason,
+  runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes,
   // codex installation
   getCodexInstallationStatus, getCodexInstallationStatusAsync, assertOfficialCodexInstalled, assertOfficialCodexInstalledAsync,
   listCursorAccts, loadCursorAcct, saveCursorAcct, currentCursorAcct, deleteCursorAcct, loadCursorIdx, setCurrentCursorAccountId,

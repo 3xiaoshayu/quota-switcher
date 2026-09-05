@@ -6346,9 +6346,7 @@ test("a missing official Codex login does not pause the daemon, only the mirror"
   const result = await engine.runDaemonWorker();
   assert.equal(result.authState.status, "missing_official_auth");
   assert.equal(result.pausedReason, null);
-  assert.equal(engine.resolutionHoldReason(result.authState), "missing_official_auth");
-  assert.equal(engine.resolutionHoldReason({ status: "aligned", requiresResolution: false }), null);
-  assert.equal(engine.resolutionHoldReason({ status: "conflict", requiresResolution: true }), "auth_conflict");
+  assert.equal(result.authState.requiresResolution, true, "the window still asks the user to resolve it");
 });
 
 

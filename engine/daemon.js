@@ -8,17 +8,6 @@ const { inspectAuthState, isInspectBusyError, busyAuthState, canMirrorOfficialAu
 const { withAccountLock } = require("./operation-locks");
 const { logWarn } = require("./logger");
 
-// Why the official-login mirror is on hold. The window turns these into the
-// banner that asks the user to adopt the official login or write the managed
-// one back.
-function resolutionHoldReason(authState) {
-  if (!authState?.requiresResolution) return null;
-  if (authState.status === "missing_official_auth") return "missing_official_auth";
-  if (authState.status === "unsupported_official_auth") return "unsupported_official_auth";
-  if (authState.status === "unmanaged_official_auth") return "unmanaged_official_auth";
-  return "auth_conflict";
-}
-
 function isTransientQuotaNetworkError(error) {
   const text = String(error?.message || error || "").toLowerCase();
   return text.includes("网络请求失败")
@@ -271,4 +260,4 @@ function getTickIntervalMs() {
   return getTickIntervalMinutes() * 60000;
 }
 
-module.exports = { runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes, resolutionHoldReason };
+module.exports = { runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes };
