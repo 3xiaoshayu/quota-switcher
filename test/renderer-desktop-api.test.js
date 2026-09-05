@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
+const { readRendererLogicSource, readRendererFile } = require("./helpers/renderer-source");
 const vm = require("node:vm");
 const ts = require("typescript");
 
@@ -596,14 +597,15 @@ test("token status chips stay product-agnostic and summarize batch checks", () =
 test("settings token card lists every tokenBatch product", () => {
   const settings = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "components", "SettingsView.tsx"), "utf8");
   const products = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "data", "products.ts"), "utf8");
-  const app = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "App.tsx"), "utf8");
+  const actions = readRendererFile("app", "useAccountActions.ts");
+  const app = readRendererFile("App.tsx");
   assert.match(settings, /tokenStatusChip/);
   assert.match(settings, /检查各产品账号登录是否仍可用/);
   assert.doesNotMatch(settings, /只检查 Codex|只针对 Codex|已管理账号/);
   assert.match(settings, /token-status-chips/);
   assert.match(settings, /updates-status-chips/);
   assert.match(products, /id: 'cursor'[\s\S]*tokenBatch: true/);
-  assert.match(app, /refreshAllCursorTokens/);
+  assert.match(actions, /refreshAllCursorTokens/);
   assert.match(app, /tokenAccountsByProduct/);
 });
 
@@ -2101,25 +2103,27 @@ test("desktop subscribe translates daemon error copy", () => {
 });
 
 test("batch token check failures use product-specific Chinese copy", () => {
-  const app = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "App.tsx"), "utf8");
-  assert.match(app, /handleBatchVerifyTokens[\s\S]*toCursorUserMessage\(/);
-  assert.match(app, /handleBatchVerifyTokens[\s\S]*toAntigravityUserMessage\(/);
+  const actions = readRendererFile("app", "useAccountActions.ts");
+  assert.match(actions, /handleBatchVerifyTokens[\s\S]*toCursorUserMessage\(/);
+  assert.match(actions, /handleBatchVerifyTokens[\s\S]*toAntigravityUserMessage\(/);
 });
 
 test("switch and auth failure toasts go through Chinese user messages", () => {
-  const app = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "App.tsx"), "utf8");
-  assert.match(app, /status\.status === 'error' \|\| status\.status === 'expired'[\s\S]*toUserMessage\(status\.message/);
-  assert.match(app, /performAccountSwitch[\s\S]*toUserMessage\(error\)/);
-  assert.match(app, /handleToggleDaemon[\s\S]*toUserMessage\(error\)/);
-  assert.match(app, /handleRefreshToken[\s\S]*toUserMessage\(error\)/);
-  assert.equal([...app.matchAll(/toUserMessage\(error\)/g)].length >= 8, true);
+  const oauth = readRendererFile("app", "oauth-flow.ts");
+  const actions = readRendererFile("app", "useAccountActions.ts");
+  assert.match(oauth, /status\.status === 'error' \|\| status\.status === 'expired'[\s\S]*toUserMessage\(status\.message/);
+  assert.match(actions, /performAccountSwitch[\s\S]*toUserMessage\(error\)/);
+  assert.match(actions, /handleToggleDaemon[\s\S]*toUserMessage\(error\)/);
+  assert.match(actions, /handleRefreshToken[\s\S]*toUserMessage\(error\)/);
+  assert.equal([...readRendererLogicSource().matchAll(/toUserMessage\(error\)/g)].length >= 8, true);
 });
 
 test("cursor switch UI flips current without waiting on official sync", () => {
-  const app = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "App.tsx"), "utf8");
+  const actions = readRendererFile("app", "useAccountActions.ts");
+  const events = readRendererFile("app", "useDesktopEvents.ts");
   const handlers = fs.readFileSync(path.join(projectRoot, "src", "main", "ipc-handlers.js"), "utf8");
-  assert.match(app, /applyCurrentAccountBadge\(kind, id\)/);
-  assert.match(app, /loadDashboardState\(false, \{ skipOfficialSync: true \}\)/);
-  assert.match(app, /payload\?\.current\) applyCurrentAccountBadge\(payload\.product, payload\.account\?\.id\)/);
+  assert.match(actions, /applyCurrentAccountBadge\(kind, id\)/);
+  assert.match(actions, /loadDashboardState\(false, \{ skipOfficialSync: true \}\)/);
+  assert.match(events, /payload\?\.current\) applyCurrentAccountBadge\(payload\.product, payload\.account\?\.id\)/);
   assert.match(handlers, /emitAccountUpdated\("cursor", publicResult, \{ current: true \}\)/);
 });

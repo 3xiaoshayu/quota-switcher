@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const { readRendererLogicSource, readRendererFile } = require("./helpers/renderer-source");
 const {
   FLOAT_HEIGHT,
   FLOAT_WIDTH,
@@ -429,71 +430,77 @@ test("setProduct updates the float product without showing the window", () => {
 });
 
 test("dashboard product changes sync the float product and auto-open once", () => {
-  const source = fs.readFileSync(path.join(__dirname, "..", "src", "renderer-react", "App.tsx"), "utf8");
-  assert.match(source, /persistProduct/);
-  assert.match(source, /setFloatProduct/);
-  assert.match(source, /pickStartupFloatProduct/);
-  assert.match(source, /didAutoShowFloat/);
-  assert.match(source, /showFloatWindow\(chosen\)/);
-  assert.match(source, /const handleProductChange = \(next: ProductKind\) => \{\s*persistProduct\(next\);/);
-  assert.match(source, /setSwitchTarget\(null\)/);
-  assert.match(source, /setIsRefreshingAll\(refreshAllKindRef\.current === next\)/);
-  assert.match(source, /actionsLocked=\{\!\!\(product === 'antigravity' \? antigravityOAuthStatus\?\.pending/);
-  assert.match(source, /oauthStatusFor/);
-  assert.match(source, /result\.account\?\.id && productRef\.current === kind/);
-  assert.match(source, /account\?\.id && productRef\.current === kind/);
-  assert.match(source, /wasCursorOAuthPendingRef/);
-  assert.match(source, /wasAntigravityOAuthPendingRef/);
-  assert.match(source, /pending && !wasCursorOAuthPendingRef\.current && productRef\.current === 'cursor'/);
-  assert.match(source, /nextOAuth\.pending && !wasOAuthPendingRef\.current && productRef\.current === 'codex'/);
-  assert.match(source, /localOAuth\?\.pending && !incomingOAuth\.pending && incomingOAuth\.status === 'idle'/);
-  assert.match(source, /if \(productRef\.current !== kind\) return;/);
-  assert.match(source, /actions\.refreshQuota\(kind, account\.id, false\)/);
-  assert.doesNotMatch(source, /didOpenQuotaSync/);
-  assert.match(source, /queueQuotaAutoSync/);
-  assert.match(source, /authStateRef\.current\.status === 'conflict'/);
-  assert.match(source, /desktopApi\.refreshQuota\(account\.id, false\)[\s\S]{0,240}toUserMessage\(error\)/);
-  assert.doesNotMatch(source, /const authBlocked = authStateRef\.current\.requiresResolution/);
-  assert.match(source, /actions\.switchAccount\(kind, id, isCurrent\)[\s\S]{0,720}if \(snapshot\) queueQuotaAutoSync\(snapshot\.accounts\)/);
-  assert.match(source, /addLogEntry\(message, 'error', kind\);\s*try \{ await loadDashboardState\(false\); \} catch \{\}/);
-  assert.match(source, /if \(result\?\.authState\) applyAuthState\(result\.authState\);/);
+  // The renderer logic is spread over App.tsx and src/renderer-react/app/*;
+  // these guards describe invariants of that whole, and the behaviour of the
+  // extracted pieces is covered in test/app-modules.test.js.
+  const source = readRendererLogicSource();
+  const app = readRendererFile("App.tsx");
+  const loader = readRendererFile("app", "useDashboardLoader.ts");
+  const events = readRendererFile("app", "useDesktopEvents.ts");
+  const oauth = readRendererFile("app", "useOAuthFlow.ts");
+  const actions = readRendererFile("app", "useAccountActions.ts");
+
+  // Product changes reach the float window and the startup lens opens once.
+  assert.match(app, /const persistProduct = useCallback[\s\S]{0,240}desktopApi\.setFloatProduct\(next\)/);
+  assert.match(loader, /if \(!didAutoShowFloat\.current\) \{\s*didAutoShowFloat\.current = true;\s*const chosen = pickStartupFloatProduct\(/);
+  assert.match(loader, /showFloatWindow\(chosen\)/);
+  assert.match(app, /const handleProductChange = \(next: ProductKind\) => \{\s*persistProduct\(next\);\s*setAccountsFilterTab\('all'\);\s*resetForProduct\(next\);/);
+  assert.match(actions, /const resetForProduct = \(next: ProductKind\) => \{\s*setSwitchTarget\(null\);\s*setIsConfirmingSwitch\(false\);\s*setDeleteTarget\(null\);\s*setIsRefreshingAll\(refreshAllKindRef\.current === next\);/);
+  assert.match(app, /actionsLocked=\{\!\!\(product === 'antigravity' \? antigravityOAuthStatus\?\.pending/);
+
+  // Toasts only speak for the product that was showing when the action started.
+  assert.ok((actions.match(/if \(productRef\.current !== kind\) return;/g) || []).length >= 8);
+  assert.match(oauth, /if \(refs\.product\.current !== kind\) return;/);
+  assert.match(actions, /result\.account\?\.id && productRef\.current === kind/);
+  assert.match(actions, /account\?\.id && productRef\.current === kind/);
+
   // Auto-switch is gone: no daemon-driven switch events, no manual tick.
   assert.doesNotMatch(source, /onAutoSwitch|runAutoSwitchTick|autoswitch:executed/);
-  assert.match(source, /onDaemonTick: \(payload\) => \{\s*if \(payload\?\.result\?\.authState\) applyAuthState\(payload\.result\.authState\);/);
-  assert.match(source, /onAuthConflict: \(state\) => \{\s*applyAuthState\(state\);\s*const raw = state\.status && state\.status !== 'aligned'/);
-  assert.match(source, /desktopApi\.adoptOfficialAccount\(\)[\s\S]{0,240}if \(account\?\.authState\) applyAuthState\(account\.authState\);/);
-  assert.match(source, /desktopApi\.reapplyManagedAccount\([\s\S]{0,240}if \(result\?\.authState\) applyAuthState\(result\.authState\);/);
-  assert.match(source, /管理账号已重新应用到官方 Codex[\s\S]{0,160}queueQuotaAutoSync\(snapshot\.accounts\)/);
-  assert.match(source, /handleResolveAuthConflict[\s\S]{0,2400}toUserMessage\(error\)/);
+  assert.doesNotMatch(source, /didOpenQuotaSync/);
+  assert.doesNotMatch(source, /const authBlocked = authStateRef\.current\.requiresResolution/);
+
   // Every auth-state write goes through one helper that filters the busy
   // placeholder, so a lock-busy daemon tick cannot wipe a real conflict.
-  assert.match(source, /const applyAuthState = useCallback\(\(incoming: DesktopAuthState \| null \| undefined\) => \{\s*const next = resolveAuthStateAfterSnapshot\(incoming, authStateRef\.current\);\s*setAuthState\(next\);\s*authStateRef\.current = next;/);
-  assert.match(source, /applyAuthState\(snapshot\.authState\)/);
+  assert.match(app, /const applyAuthState = useCallback\(\(incoming: DesktopAuthState \| null \| undefined\) => \{\s*const next = resolveAuthStateAfterSnapshot\(incoming, authStateRef\.current\);\s*setAuthState\(next\);\s*authStateRef\.current = next;/);
   assert.equal((source.match(/setAuthState\(/g) || []).length, 1, "only applyAuthState may call setAuthState");
   assert.doesNotMatch(source, /authStateRef\.current = (?!next;)/);
-  assert.match(source, /actions\.addAccount\(kind\)[\s\S]{0,240}if \(kind === 'codex' && added\?\.authState\)/);
-  assert.match(source, /completeOAuthManually\(callbackUrl\)[\s\S]{0,200}if \(completed\?\.authState\)/);
-  assert.match(source, /actions\.reauthorize\(kind, id\)[\s\S]{0,280}if \(kind === 'codex' && result\?\.authState\)/);
-  assert.match(source, /if \(result\?\.authState\) applyAuthState\(result\.authState\);\s*if \(result\?\.mismatch\)/);
+  assert.doesNotMatch(source, /refs\.authState\.current = /);
+  assert.match(loader, /applyAuthState\(snapshot\.authState\)/);
+  assert.match(events, /onDaemonTick: \(payload\) => \{\s*if \(payload\?\.result\?\.authState\) applyAuthState\(payload\.result\.authState\);/);
+  assert.match(events, /onAuthConflict: \(state\) => \{\s*applyAuthState\(state\);\s*const raw = state\.status && state\.status !== 'aligned'/);
+  assert.match(actions, /desktopApi\.adoptOfficialAccount\(\)[\s\S]{0,240}if \(account\?\.authState\) applyAuthState\(account\.authState\);/);
+  assert.match(actions, /desktopApi\.reapplyManagedAccount\([\s\S]{0,240}if \(result\?\.authState\) applyAuthState\(result\.authState\);/);
+  assert.match(actions, /管理账号已重新应用到官方 Codex[\s\S]{0,160}queueQuotaAutoSync\(snapshot\.accounts\)/);
+  assert.match(oauth, /actions\.addAccount\(kind\)[\s\S]{0,240}if \(kind === 'codex' && added\?\.authState\)/);
+  assert.match(oauth, /completeOAuthManually\(callbackUrl\)[\s\S]{0,200}if \(completed\?\.authState\)/);
+  assert.match(oauth, /actions\.reauthorize\(kind, id\)[\s\S]{0,280}if \(kind === 'codex' && result\?\.authState\)/);
+  assert.match(oauth, /if \(plan\.authState\) applyAuthState\(plan\.authState\);/);
+
   // One browser authorization at a time across all three products, and a
-  // rejected add/reauth must not re-toast an earlier flow's completed result.
-  assert.match(source, /const anyOAuthPending = \(\) => !!oauthStatusFor\('codex'\)\?\.pending\s*\|\| !!oauthStatusFor\('cursor'\)\?\.pending\s*\|\| !!oauthStatusFor\('antigravity'\)\?\.pending;/);
-  assert.match(source, /const oauthStatusEndedThisFlow = [\s\S]{0,200}status\.status !== 'completed'/);
-  assert.equal((source.match(/if \(oauthStatusEndedThisFlow\(finished\)\)/g) || []).length, 2);
-  // An operation's own follow-up load returns the fresher superseding snapshot
-  // instead of null, and an in-flight config save is not reverted by an
-  // older snapshot.
-  assert.match(source, /const latestDashboardLoadRef = useRef<Promise<DashboardLoadResult \| null> \| null>\(null\);/);
-  assert.match(source, /while \(latest && latest !== run\) \{\s*const outcome = await latest;\s*if \(outcome !== null\) return outcome;/);
-  // The save sequencing itself is behaviour-tested in test/app-modules.test.js.
-  assert.match(source, /const nextConfig = configSaves\.current\.pending > 0 \? daemonConfigRef\.current : snapshot\.config;/);
-  assert.match(source, /await configSaves\.current\.enqueue\(\(\) => desktopApi\.saveDaemonConfig\(nextConfig\)\)/);
-  assert.match(source, /if \(result\.latest\) \{\s*await loadDashboardState\(false\);/);
-  assert.match(source, /result\?\.mismatch\) \{\s*if \(kind === 'codex' && result\?\.accountId && result\?\.switched !== false\) \{\s*applyCurrentAccountBadge\('codex', result\.accountId\);/);
-  assert.match(source, /actions\.refreshAllQuotas\(kind\)/);
+  // rejected add/reauth ends with a status read instead of a raw error toast.
+  assert.match(oauth, /anyPending\(\[oauthStatusFor\('codex'\), oauthStatusFor\('cursor'\), oauthStatusFor\('antigravity'\)\]\)/);
+  assert.match(oauth, /const guardNoOtherFlow = \(kind: ProductKind\) => \{\s*if \(!anyOAuthPending\(\)\) return;/);
+  assert.match(oauth, /if \(oauthStatusEndedThisFlow\(finished\)\) \{\s*reportOAuthFinished\(finished as DesktopOAuthStatus, kind\);/);
+  assert.match(actions, /if \(anyOAuthPending\(\)\) \{\s*addToast\(OAUTH_BUSY_MESSAGE, 'warning', kind\);\s*return;/);
+
+  // Loads stay ordered, an operation's own follow-up load sees the fresher
+  // superseding snapshot, and an in-flight config save is not reverted.
+  assert.match(loader, /const seq = loads\.current\.begin\(\);\s*const run = loadDashboardStateOnce\(seq, showLoading, options\);\s*loads\.current\.track\(run\);\s*return loads\.current\.settle\(run, seq\);/);
+  assert.match(loader, /if \(!loads\.current\.isCurrent\(seq\)\) return null;/);
+  assert.match(loader, /const saveInFlight = refs\.configSaves\.current\.pending > 0;\s*const nextConfig = saveInFlight \? refs\.daemonConfig\.current : snapshot\.config;/);
+  assert.match(actions, /await refs\.configSaves\.current\.enqueue\(\(\) => desktopApi\.saveDaemonConfig\(nextConfig\)\)/);
+  assert.match(actions, /if \(result\.latest\) \{\s*await loadDashboardState\(false\);/);
+  assert.match(oauth, /const markOAuthPending = useCallback\(\(targetAccountId: string \| null\) => \{\s*invalidatePendingLoads\(\);/);
+
+  // Switching and refreshing reload and re-sync; a failed switch still reloads.
+  assert.match(actions, /actions\.switchAccount\(kind, id, isCurrent\)[\s\S]{0,720}if \(snapshot\) queueQuotaAutoSync\(snapshot\.accounts\)/);
+  assert.match(actions, /addLogEntry\(message, 'error', kind\);\s*try \{ await loadDashboardState\(false\); \} catch \{\}/);
+  assert.match(actions, /actions\.refreshAllQuotas\(kind\)/);
+  assert.match(loader, /actions\.refreshQuota\(kind, account\.id, false\)/);
+  assert.match(loader, /desktopApi\.refreshQuota\(account\.id, false\)[\s\S]{0,240}toUserMessage\(error\)/);
+  assert.match(events, /\.\.\.\(snapshot\.cursorAccounts \|\| \[\]\)/);
+  assert.match(events, /\.\.\.\(snapshot\.antigravityAccounts \|\| \[\]\)/);
   assert.doesNotMatch(source, /\(\['codex', 'cursor', 'antigravity'\] as ProductKind\[\]\)/);
-  assert.match(source, /\.\.\.\(snapshot\.cursorAccounts \|\| \[\]\)/);
-  assert.match(source, /\.\.\.\(snapshot\.antigravityAccounts \|\| \[\]\)/);
   assert.doesNotMatch(source, /!String\(account\.id\)\.startsWith\('cursor_'\)/);
 });
 

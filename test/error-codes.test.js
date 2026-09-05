@@ -4,6 +4,7 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 const ts = require("typescript");
+const { readRendererLogicSource } = require("./helpers/renderer-source");
 
 const projectRoot = path.resolve(__dirname, "..");
 const rendererApi = path.join(projectRoot, "src", "renderer-react", "api");
@@ -169,10 +170,11 @@ test("renderer keeps the code on DesktopError and translates by code first", () 
   assert.equal(toUserMessage(new desktop.DesktopError("whatever", "no_such_code_xyz")), "操作失败，请稍后重试");
 });
 
-test("App and AccountsView hand the whole error to the translator", () => {
-  const app = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "App.tsx"), "utf8");
+test("the renderer hands the whole error to the translator", () => {
+  const logic = readRendererLogicSource();
   const accounts = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "components", "AccountsView.tsx"), "utf8");
-  assert.doesNotMatch(app, /to(?:Cursor|Antigravity)?UserMessage\(error instanceof Error \? error\.message : String\(error\)\)/);
+  assert.doesNotMatch(logic, /to(?:Cursor|Antigravity)?UserMessage\(error instanceof Error \? error\.message : String\(error\)\)/);
   assert.doesNotMatch(accounts, /formMessage\(product, error instanceof Error \? error\.message : String\(error\)\)/);
-  assert.ok((app.match(/toUserMessage\(error\)/g) || []).length >= 10);
+  assert.ok((logic.match(/toUserMessage\(error\)/g) || []).length >= 8);
+  assert.match(logic, /toUserMessage\(result\.error\)/, "config save failures also pass the error object");
 });

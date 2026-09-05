@@ -7,6 +7,18 @@ release is published.
 
 ## Unreleased
 
+## [2.0.9] - 2026-09-05
+
+- Internal: `App.tsx` is now a composition root (about 760 lines, down from
+  2200). The desktop snapshot loader, the browser-authorization flow, the
+  main-process event subscription, and every account action live in
+  `src/renderer-react/app/` as hooks, with the decision logic they use
+  (snapshot merging, load ordering, OAuth outcome planning) as pure modules
+  covered by behaviour tests. Behaviour is unchanged.
+- Internal: tests that used to match the shape of `App.tsx` source now read
+  the whole renderer logic or test the extracted modules directly, so moving
+  code between files no longer breaks them.
+
 ## [2.0.8] - 2026-09-05
 
 - Remove Codex automatic switching: the sidebar page, the thresholds and

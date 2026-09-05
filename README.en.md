@@ -16,7 +16,7 @@ current Windows user.
 [Privacy](docs/privacy.en.md) ·
 [简体中文](README.md)
 
-The current complete release is **2.0.8**.
+The current complete release is **2.0.9**.
 
 </div>
 
@@ -27,12 +27,12 @@ The current complete release is **2.0.8**.
 > publisher. Download only from this repository's
 > [Releases](https://github.com/3xiaoshayu/quota-switcher/releases)
 > page and check the SHA-256 in `SHA256SUMS.txt` on the same release.
-> 2.0.8 is still unsigned.
+> 2.0.9 is still unsigned.
 
 ## What this is
 
 Quota Switcher is a Windows-local vault, quota view, and switch tool for
-Codex, Cursor, and Antigravity IDE. 2.0.8 is the current complete product.
+Codex, Cursor, and Antigravity IDE. 2.0.9 is the current complete product.
 
 It writes the official login on this PC. It cannot raise anyone's official
 limits or bypass upstream restrictions.

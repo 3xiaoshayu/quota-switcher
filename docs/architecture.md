@@ -231,6 +231,11 @@ scripts/                Release and contract verification
 src/main/               Electron main process, IPC, engine worker host
 src/preload/            Isolated renderer bridge
 src/renderer-react/     Current React UI source
+src/renderer-react/App.tsx        Composition root: wires the hooks below and renders the shell
+src/renderer-react/app/           Renderer logic: snapshot loader, OAuth flow, desktop events,
+                                  account actions, notifications; pure rules next to each hook
+src/renderer-react/components/    Views, cards, dialogs, float lens
+src/renderer-react/api/           Bridge wrapper, product adapter, user-facing copy
 src/renderer-dist/      Generated renderer build (not tracked)
 docs/                   Architecture, privacy, release, and support docs
 .github/                CI, release automation, and community templates
