@@ -3008,12 +3008,15 @@ test("antigravity token refresh honors Retry-After on HTTP 429 and does not repl
       return { status: 429, headers: { "retry-after": "45" }, body: "rate limited" };
     },
   });
+  // Anchor the clock before the call: a second boundary passing on a slow
+  // runner must not turn 45 into 44.
+  const started = Math.floor(Date.now() / 1000);
   const first = await engine.refreshAntigravityToken(engine.loadAntigravityAcct(created.account.id), { force: true });
   assert.equal(first.ok, false);
   assert.match(first.error, /429/);
   const stored = engine.loadAntigravityAcct(created.account.id);
   assert.equal(stored.requires_reauth, false);
-  const delay = Number(stored.token_next_retry_at) - Math.floor(Date.now() / 1000);
+  const delay = Number(stored.token_next_retry_at) - started;
   assert.ok(delay >= 45 && delay <= 90, `Retry-After 45s should beat the 15-minute default, got ${delay}s`);
   const second = await engine.refreshAntigravityToken(engine.loadAntigravityAcct(created.account.id), { force: false });
   assert.equal(second.ok, false);
