@@ -16,6 +16,9 @@
 // APPDATA/LOCALAPPDATA are redirected too, so the run never reads the real
 // Cursor or Antigravity login databases and Electron keeps its own userData
 // (and single-instance lock) away from an installed copy.
+//
+// Set E2E_APP_BINARY to a packaged "Quota Switcher.exe" to run the same flows
+// against a built app (asar-packed) instead of the source tree.
 const fs = require("node:fs");
 const http = require("node:http");
 const net = require("node:net");
@@ -402,9 +405,15 @@ function startStub() {
 // ---------------------------------------------------------------------------
 // Launching the app and running one scenario against it.
 
+function appLaunch() {
+  const packaged = String(process.env.E2E_APP_BINARY || "").trim();
+  if (packaged) return { binary: packaged, args: [], what: `packaged ${path.basename(packaged)}` };
+  return { binary: require("electron"), args: ["."], what: "electron ." };
+}
+
 async function runApp({ dirs, extraEnv = {}, label }, body) {
   const port = await freePort();
-  const electronBinary = require("electron");
+  const launch = appLaunch();
   const env = {
     ...process.env,
     CODEX_MANAGER_DATA_DIR: dirs.data,
@@ -414,8 +423,8 @@ async function runApp({ dirs, extraEnv = {}, label }, body) {
     ELECTRON_ENABLE_LOGGING: "1",
     ...extraEnv,
   };
-  log(`[${label}] CDP port ${port}`);
-  const child = spawn(electronBinary, [".", `--remote-debugging-port=${port}`, `--user-data-dir=${dirs.userData}`], {
+  log(`[${label}] ${launch.what}, CDP port ${port}`);
+  const child = spawn(launch.binary, [...launch.args, `--remote-debugging-port=${port}`, `--user-data-dir=${dirs.userData}`], {
     cwd: root,
     env,
     stdio: ["ignore", "pipe", "pipe"],

@@ -274,6 +274,11 @@ cannot see.
 browser for sign-in are never redirected, and the variable is unset in every
 normal run.
 
+Setting `E2E_APP_BINARY` to a packaged `Quota Switcher.exe` (for example
+`dist\win-unpacked` after `npm run build:dir`) runs the same flows against the
+asar-packed build instead of `electron .`, which is how packaging-only
+regressions such as module loading inside the archive are caught.
+
 Actions that change a real account or remove account data must be tested with
 synthetic or dedicated test accounts.
 

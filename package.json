@@ -75,8 +75,8 @@
   },
   "dependencies": {
     "electron-updater": "^6.6.2",
-    "proxy-agent": "^6.5.0",
-    "proxy-from-env": "^1.1.0"
+    "proxy-agent": "^8.0.2",
+    "proxy-from-env": "^2.1.0"
   },
   "overrides": {
     "js-yaml": "^4.3.1",

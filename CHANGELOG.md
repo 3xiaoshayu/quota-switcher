@@ -22,6 +22,9 @@ release is published.
   in-process `transpileModule` API, so the tests that load renderer modules
   into a `vm` sandbox now lower TypeScript with esbuild
   (`test/helpers/transpile-ts.js`); type checking is unchanged.
+- Runtime: `proxy-agent` 6 → 8 and `proxy-from-env` 1 → 2 (both now ESM,
+  loaded through Node 24's `require(esm)`; verified in the packaged asar build,
+  which the smoke test can now drive via `E2E_APP_BINARY`).
 
 ## [2.0.10] - 2026-09-05
 
