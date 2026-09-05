@@ -158,7 +158,7 @@ test("status IPC carries the official-format verdict and warns once", async () =
   assert.equal(cursor.data.installed, true);
   assert.deepEqual(cursor.data.officialFormat, { status: "drift", detail: "renamed", sample: ["cursorAuth/sessionToken"] });
   await handlers.get("cursor:status")({ sender: { id: 1 } });
-  assert.equal(inspected, 2, "every status call re-inspects; only the log is deduplicated");
+  assert.equal(inspected, 2, "an explicit status call (重新检测) always re-inspects; only the log is deduplicated");
 
   const codex = await handlers.get("codex:status")({ sender: { id: 1 } });
   assert.equal(codex.success, true);
@@ -169,11 +169,31 @@ test("status IPC carries the official-format verdict and warns once", async () =
   assert.equal(antigravity.data.officialFormat, undefined, "no inspector, no verdict");
 });
 
-test("settings show a drift line per product with the main-process reason", () => {
+test("the desktop snapshot carries the same verdict and reuses it for a minute", () => {
+  // The snapshot is what the window actually renders on first paint and on
+  // every daemon-tick reload; without this the drift line would only appear
+  // after a manual 重新检测.
+  const source = fs.readFileSync(path.join(__dirname, "..", "src", "main", "ipc-handlers.js"), "utf8");
+  assert.match(source, /const FORMAT_VERDICT_TTL_MS = 60 \* 1000;/);
+  assert.match(source, /if \(cached && remembered && Date\.now\(\) - remembered\.at < FORMAT_VERDICT_TTL_MS\)/);
+  assert.match(source, /withOfficialFormat\("codex", rawCodexStatus, eng\.inspectCodexFormat, \{ cached: true \}\)/);
+  assert.match(source, /withOfficialFormat\("cursor", rawCursorStatus, cursorFormatInspector\(rawCursorStatus\), \{ cached: true \}\)/);
+  assert.match(source, /withOfficialFormat\("antigravity", rawAntigravityStatus, antigravityFormatInspector\(rawAntigravityStatus\), \{ cached: true \}\)/);
+});
+
+test("settings and the top banner show drift with the main-process reason and a releases link", () => {
   const settings = fs.readFileSync(path.join(__dirname, "..", "src", "renderer-react", "components", "SettingsView.tsx"), "utf8");
   assert.match(settings, /settings\.formatDrift\?\.\[item\.id\]/);
   assert.match(settings, /登录格式变了，切号和同步可能失效，请更新软件/);
   assert.match(settings, /id=\{`client-format-drift-\$\{item\.id\}`\}/);
   const app = fs.readFileSync(path.join(__dirname, "..", "src", "renderer-react", "App.tsx"), "utf8");
-  assert.match(app, /formatDrift: formatDriftFrom\(\{ codex: codexStatus, cursor: cursorStatus, antigravity: antigravityStatus \}\)/);
+  assert.match(app, /const formatDrift = formatDriftFrom\(\{ codex: codexStatus, cursor: cursorStatus, antigravity: antigravityStatus \}\)/);
+  assert.match(app, /settings=\{\{ \.\.\.settings, formatDrift \}\}/);
+  assert.match(app, /<FormatDriftBanner[\s\S]{0,200}onOpenReleases=\{\(\) => void handleOpenExternal\(`\$\{appInfo\?\.repository \|\| APP_GITHUB_URL\}\/releases`\)\}/);
+  assert.match(app, /onDismiss=\{\(\) => setFormatDriftDismissedKey\(formatDriftKey\)\}/);
+  const banner = fs.readFileSync(path.join(__dirname, "..", "src", "renderer-react", "components", "FormatDriftBanner.tsx"), "utf8");
+  assert.match(banner, /if \(!products\.length\) return null/);
+  assert.match(banner, /的登录格式变了/);
+  assert.match(banner, /查看新版本/);
+  assert.match(banner, /id="format-drift-dismiss"/);
 });

@@ -9,6 +9,15 @@ release is published.
 
 ## [2.0.9] - 2026-09-05
 
+- A switch no longer fails with "did not exit" when the operating system
+  handed the closed app's process id to an unrelated program: after the exit
+  wait, a PID that no longer belongs to an official process is ignored, and
+  that unrelated program is never force-closed.
+- The official-format check now also runs with every desktop snapshot (reused
+  for a minute), so drift shows on first paint and after each daemon tick,
+  not only after 重新检测. A banner above the content names the product,
+  carries the reason, and links to the releases page; it can be dismissed for
+  the session.
 - Internal: `App.tsx` is now a composition root (about 760 lines, down from
   2200). The desktop snapshot loader, the browser-authorization flow, the
   main-process event subscription, and every account action live in

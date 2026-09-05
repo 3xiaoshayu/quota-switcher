@@ -43,6 +43,7 @@ import QuotasView from './components/QuotasView';
 import AccountsView from './components/AccountsView';
 import SettingsView from './components/SettingsView';
 import AuthStatusBanner from './components/AuthStatusBanner';
+import FormatDriftBanner from './components/FormatDriftBanner';
 import { 
   Bell, 
   X, 
@@ -111,6 +112,7 @@ function DashboardApp() {
   }, [authStateRef]);
 
   const [authBannerDismissedKey, setAuthBannerDismissedKey] = useState<string | null>(null);
+  const [formatDriftDismissedKey, setFormatDriftDismissedKey] = useState<string | null>(null);
   const [showSupport, setShowSupport] = useState(false);
   const [showUpdates, setShowUpdates] = useState(false);
 
@@ -279,6 +281,11 @@ function DashboardApp() {
 
   const authBannerKey = `${authState.status}:${authState.currentAccountId || ''}:${authState.officialIdentity?.email || ''}`;
   const showAuthBanner = desktopBridgeAvailable && productById(product).features.officialAuthSync && authState.requiresResolution && authBannerDismissedKey !== authBannerKey;
+  // An official client whose login format no longer matches; the same reason
+  // text feeds the Settings detection card.
+  const formatDrift = formatDriftFrom({ codex: codexStatus, cursor: cursorStatus, antigravity: antigravityStatus });
+  const formatDriftKey = Object.entries(formatDrift).map(([kind, reason]) => `${kind}:${reason}`).join('|');
+  const showFormatDriftBanner = formatDriftKey !== '' && formatDriftDismissedKey !== formatDriftKey;
 
   const handleProductChange = (next: ProductKind) => {
     persistProduct(next);
@@ -367,6 +374,16 @@ function DashboardApp() {
               onAdopt={() => void handleResolveAuthConflict('adopt')}
               onReapply={() => void handleResolveAuthConflict('reapply')}
               onDismiss={() => setAuthBannerDismissedKey(authBannerKey)}
+            />
+          </div>
+        )}
+
+        {showFormatDriftBanner && (
+          <div className="shrink-0 px-8 pt-6" id="format-drift-banner-wrap">
+            <FormatDriftBanner
+              drift={formatDrift}
+              onOpenReleases={() => void handleOpenExternal(`${appInfo?.repository || APP_GITHUB_URL}/releases`)}
+              onDismiss={() => setFormatDriftDismissedKey(formatDriftKey)}
             />
           </div>
         )}
@@ -471,7 +488,7 @@ function DashboardApp() {
               {activeTab === 'settings' && (
                 <SettingsView 
                   product={product}
-                  settings={{ ...settings, formatDrift: formatDriftFrom({ codex: codexStatus, cursor: cursorStatus, antigravity: antigravityStatus }) }}
+                  settings={{ ...settings, formatDrift }}
                   daemonState={daemonState}
                   onToggleDaemon={handleToggleDaemon}
                   onPreviewSyncInterval={handlePreviewSyncInterval}

@@ -482,21 +482,37 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
 
     // The official login format is checked alongside installation status so the
     // window can warn before a switch fails on a renamed key or a new encoding.
+    // Snapshots reuse a verdict for a minute (they reload often); the explicit
+    // status calls behind "重新检测" always look again.
     const driftWarned = new Set();
-    const withOfficialFormat = async (product, status, inspect) => {
+    const formatVerdicts = new Map();
+    const FORMAT_VERDICT_TTL_MS = 60 * 1000;
+    const withOfficialFormat = async (product, status, inspect, { cached = false } = {}) => {
         if (typeof inspect !== "function") return status;
+        const remembered = formatVerdicts.get(product);
+        if (cached && remembered && Date.now() - remembered.at < FORMAT_VERDICT_TTL_MS) {
+            return { ...status, officialFormat: remembered.value };
+        }
         let officialFormat;
         try {
             officialFormat = await withTimeout(() => inspect(), 4000, { status: "unknown", detail: "timed out" });
         } catch (error) {
             officialFormat = { status: "unknown", detail: error?.message || String(error) };
         }
-        if (officialFormat?.status === "drift" && !driftWarned.has(product)) {
+        officialFormat = officialFormat || { status: "unknown", detail: null };
+        formatVerdicts.set(product, { at: Date.now(), value: officialFormat });
+        if (officialFormat.status === "drift" && !driftWarned.has(product)) {
             driftWarned.add(product);
             logWarn(`Official ${product} login format drifted: ${sanitizeMessage(officialFormat.detail || "")}`);
         }
-        return { ...status, officialFormat: officialFormat || { status: "unknown", detail: null } };
+        return { ...status, officialFormat };
     };
+    const cursorFormatInspector = (status) => (typeof eng.inspectCursorFormat === "function"
+        ? () => eng.inspectCursorFormat(status?.vscdbPath)
+        : null);
+    const antigravityFormatInspector = (status) => (typeof eng.inspectAntigravityFormat === "function"
+        ? () => eng.inspectAntigravityFormat(status?.vscdbPath)
+        : null);
 
     handle("codex:status", async () => {
         try {
@@ -515,11 +531,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                 ? eng.getCursorInstallationStatusAsync()
                 : Promise.resolve(eng.getCursorInstallationStatus());
             const status = await detect;
-            return ok(await withOfficialFormat(
-                "cursor",
-                status,
-                typeof eng.inspectCursorFormat === "function" ? () => eng.inspectCursorFormat(status?.vscdbPath) : null,
-            ));
+            return ok(await withOfficialFormat("cursor", status, cursorFormatInspector(status)));
         }
         catch (error) { return failFrom(error); }
     });
@@ -725,13 +737,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                 ? eng.getAntigravityInstallationStatusAsync()
                 : Promise.resolve(eng.getAntigravityInstallationStatus());
             const status = await detect;
-            return ok(await withOfficialFormat(
-                "antigravity",
-                status,
-                typeof eng.inspectAntigravityFormat === "function"
-                    ? () => eng.inspectAntigravityFormat(status?.vscdbPath)
-                    : null,
-            ));
+            return ok(await withOfficialFormat("antigravity", status, antigravityFormatInspector(status)));
         }
         catch (error) { return failFrom(error); }
     });
@@ -1269,7 +1275,7 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                 authError = error?.message || String(error);
             }
         }
-        const [codexStatus, cursorStatus, antigravityStatus] = await Promise.all([
+        const [rawCodexStatus, rawCursorStatus, rawAntigravityStatus] = await Promise.all([
             withTimeout(async () => {
                 if (typeof eng.getCodexInstallationStatusAsync === "function") {
                     return eng.getCodexInstallationStatusAsync();
@@ -1288,6 +1294,15 @@ function registerIpcHandlers(engineInstance = null, services = {}) {
                 }
                 return typeof eng.getAntigravityInstallationStatus === "function" ? eng.getAntigravityInstallationStatus() : null;
             }, 2500, null),
+        ]);
+        // Same official-format verdict the status calls carry, so the first
+        // paint (and every daemon-tick reload) can already show drift.
+        const [codexStatus, cursorStatus, antigravityStatus] = await Promise.all([
+            rawCodexStatus ? withOfficialFormat("codex", rawCodexStatus, eng.inspectCodexFormat, { cached: true }) : null,
+            rawCursorStatus ? withOfficialFormat("cursor", rawCursorStatus, cursorFormatInspector(rawCursorStatus), { cached: true }) : null,
+            rawAntigravityStatus
+                ? withOfficialFormat("antigravity", rawAntigravityStatus, antigravityFormatInspector(rawAntigravityStatus), { cached: true })
+                : null,
         ]);
         const accounts = eng.listAccts({ secrets: false });
         const cursorAccounts = eng.listCursorAccts({ secrets: false });
