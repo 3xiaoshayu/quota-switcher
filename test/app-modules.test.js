@@ -278,6 +278,132 @@ test("dashboard loads stay ordered and a superseded load hands back the fresher 
   assert.equal(loads.isCurrent(fifth), false);
 });
 
+// ---- float lens model -----------------------------------------------------
+
+function loadLensModel(overrides = {}) {
+  const managed = (account) => /^(cursor|antigravity)_/.test(String(account?.id || ""));
+  return loadTs("float-lens-model.ts", {
+    "../api/desktop": {
+      antigravityQuotaFamilies: (account) => account.families || [],
+      formatResetLine: (value) => (value ? `reset:${value}` : ""),
+      hideStaleQuota: (account) => account?.status === "SUSPENDED" || account?.status === "BANNED",
+      isManagedProductAccount: managed,
+      lensQuotaWindows: (account) => account?.windows || { outer: null, inner: null, outerLabel: "周额度", innerLabel: "5 小时", outerReset: null, innerReset: null },
+      planCaption: (account) => account.plan || "Free",
+      quotaHero: (account) => ({ key: account?.heroKey || "weekly" }),
+      statusTextForAccount: (account) => `status:${account.status}`,
+      STATUS_TEXT: { BANNED: "已封号" },
+      ...overrides,
+    },
+    "../api/product-adapter": {
+      isManagedProduct: (product) => product === "cursor" || product === "antigravity",
+      toProductUserMessage: (product, raw) => `${product}:${raw && typeof raw === "object" ? raw.code || raw.message : raw}`,
+    },
+  });
+}
+
+test("the lens picks the current account, keeps the viewed one, and reads windows defensively", () => {
+  const model = loadLensModel();
+  const accounts = [{ id: "codex_a" }, { id: "codex_b", isCurrent: true }, { id: "codex_c" }];
+  assert.equal(model.pickViewedId(accounts, "codex_c"), "codex_c", "a still-listed viewed account stays viewed");
+  assert.equal(model.pickViewedId(accounts, "codex_gone"), "codex_b", "otherwise the current account");
+  assert.equal(model.pickViewedId([{ id: "codex_only" }], null), "codex_only");
+  assert.equal(model.pickViewedId([], null), null);
+
+  assert.equal(model.tighterRemaining(null, null), null, "missing windows never become zero");
+  assert.equal(model.tighterRemaining(null, 40), 40);
+  assert.equal(model.tighterRemaining(70, null), 70);
+  assert.equal(model.tighterRemaining(70, 40), 40);
+
+  const full = model.ringLength(10);
+  assert.equal(model.arcOffset(10, null), full, "unknown percentage draws an empty ring");
+  assert.equal(model.arcOffset(10, Number.NaN), full);
+  assert.equal(model.arcOffset(10, 100), 0);
+  assert.equal(model.arcOffset(10, 150), 0, "clamped above 100");
+  assert.equal(model.arcOffset(10, -5), full, "clamped below 0");
+  assert.ok(Math.abs(model.arcOffset(10, 25) - full * 0.75) < 1e-9);
+
+  sameShape(model.splitEmail("someone@example.com"), { local: "someone", domain: "@example.com" });
+  sameShape(model.splitEmail("no-at-sign"), { local: "no-at-sign", domain: "" });
+  sameShape(model.splitEmail("trailing@"), { local: "trailing@", domain: "" });
+  sameShape(model.splitEmail(null), { local: "", domain: "" });
+
+  assert.equal(model.tokenRemainLine("剩余 3 天"), "登录还剩 3 天");
+  assert.equal(model.tokenRemainLine("已过期"), "登录已过期");
+  assert.equal(model.tokenRemainLine("有效期未知"), "登录有效期未知");
+  assert.equal(model.tokenRemainLine(""), "");
+});
+
+test("the lens explains why refresh or switch is blocked without ever calling a Cursor account banned", () => {
+  const model = loadLensModel();
+  assert.equal(model.blockedRefreshText({ id: "codex_x", status: "BANNED" }), "账号已封号，无法刷新额度");
+  assert.equal(model.blockedRefreshText({ id: "cursor_x", status: "BANNED" }), "该账号需要重新授权后才能刷新额度");
+  assert.equal(model.blockedSwitchText({ id: "codex_x", status: "BANNED" }), "账号已封号，无法切换");
+  assert.equal(model.blockedSwitchText({ id: "cursor_x", status: "SUSPENDED", tokenAccessAvailable: false }), "该账号没有可用登录令牌，无法切换");
+  assert.equal(model.blockedSwitchText({ id: "cursor_x", status: "SUSPENDED" }), "该账号需要重新授权后才能切换");
+  assert.equal(model.statusBadgeText({ id: "codex_x", status: "BANNED" }), "已封号");
+  assert.equal(model.statusBadgeText({ id: "cursor_x", status: "BANNED" }), null, "Cursor never uses the Codex ban bucket");
+  assert.equal(model.statusBadgeText({ id: "codex_x", status: "SYNC_FAILED" }), "status:SYNC_FAILED");
+  assert.equal(model.statusBadgeText({ id: "codex_x", status: "ACTIVE" }), null);
+  assert.equal(model.accountErrorText("cursor", { code: "cursor_vscdb_busy", message: "x" }), "cursor:cursor_vscdb_busy");
+});
+
+test("the lens view hides quota for unusable logins and pairs dials per product", () => {
+  const model = loadLensModel();
+  const codex = { id: "codex_a", status: "ACTIVE", email: "a@b.com", plan: "Plus", isCurrent: true, heroKey: "fiveHour",
+    windows: { outer: 80, inner: 45, outerLabel: "周额度", innerLabel: "5 小时", outerReset: "w", innerReset: "h" } };
+  const view = model.deriveLensView("codex", codex);
+  assert.equal(view.showPair, false, "Codex is a single dial");
+  assert.equal(view.isCurrent, true);
+  assert.equal(view.outerValue, 80);
+  assert.equal(view.innerValue, 45);
+  assert.equal(view.showInner, true);
+  assert.equal(view.caption, "reset:h", "the hero window's reset line is the caption");
+  assert.equal(view.planBadge, "Plus");
+  assert.equal(view.statusBadge, null);
+  assert.equal(view.emptyKind, null);
+  sameShape(view.emailParts, { local: "a", domain: "@b.com" });
+
+  const suspended = model.deriveLensView("codex", { ...codex, status: "SUSPENDED" });
+  assert.equal(suspended.hideQuota, true);
+  assert.equal(suspended.outerValue, null);
+  assert.equal(suspended.showOuter, false);
+  assert.equal(suspended.caption, "", "no reset line for a login that must be renewed");
+  assert.equal(suspended.emptyKind, "reauth");
+  assert.equal(model.deriveLensView("codex", { ...codex, status: "BANNED" }).emptyKind, "banned");
+  assert.equal(model.deriveLensView("cursor", { ...codex, id: "cursor_a", status: "BANNED" }).emptyKind, "reauth", "a banned Cursor account is treated as needing reauth");
+
+  const failed = model.deriveLensView("codex", { ...codex, status: "SYNC_FAILED" });
+  assert.equal(failed.hideFailedQuota, true);
+  assert.equal(failed.outerValue, null, "a failed sync shows no stale numbers");
+  assert.equal(failed.hideQuota, false, "but the login is still usable");
+
+  const cursor = model.deriveLensView("cursor", { ...codex, id: "cursor_a", tokenValidity: "剩余 2 天",
+    windows: { outer: 60, inner: 30, outerLabel: "套餐", innerLabel: "Auto", outerReset: null, innerReset: null } });
+  assert.equal(cursor.showPair, true, "Cursor shows plan and Auto side by side");
+  assert.equal(cursor.caption, "登录还剩 2 天", "managed products lead with the login lifetime");
+  sameShape(cursor.pairDials.map((dial) => [dial.heroPercent, dial.heroLabel]), [[60, "套餐"], [30, "Auto"]]);
+  assert.equal(model.deriveLensView("cursor", { ...codex, id: "cursor_a", status: "SUSPENDED" }).showPair, false);
+
+  const antigravity = model.deriveLensView("antigravity", {
+    id: "antigravity_a", status: "ACTIVE", email: "g@x.com",
+    families: [
+      { title: "Gemini", weekly: { remaining: 90 }, fiveHour: { remaining: 40 } },
+      { title: "Claude 与 GPT", weekly: { remaining: null }, fiveHour: { remaining: 55 } },
+    ],
+  });
+  assert.equal(antigravity.showPair, true);
+  sameShape(antigravity.pairDials.map((dial) => [dial.heroLabel, dial.heroPercent, dial.weekly, dial.fiveHour]), [
+    ["Gemini", 40, 90, 40],
+    ["Claude 与 GPT", 55, null, 55],
+  ]);
+  assert.equal(model.deriveLensView("antigravity", null).showPair, false, "nothing viewed, nothing paired");
+  const failedAntigravity = model.deriveLensView("antigravity", {
+    id: "antigravity_a", status: "SYNC_FAILED", families: [{ title: "Gemini", weekly: { remaining: 90 }, fiveHour: { remaining: 40 } }],
+  });
+  sameShape(failedAntigravity.pairDials.map((dial) => dial.heroPercent), [null], "a failed sync blanks the family dials too");
+});
+
 // ---- oauth flow rules -----------------------------------------------------
 
 function loadOAuthFlowModule() {

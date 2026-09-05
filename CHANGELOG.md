@@ -16,8 +16,13 @@ release is published.
 - Daemon failures are reported per account with their own copy instead of one
   joined English string.
 - An end-to-end smoke test (`npm run test:e2e`) starts the real app in a
-  sandbox and drives it over the DevTools Protocol; CI and the release
-  workflow run it after the unit tests.
+  sandbox and drives it over the DevTools Protocol, including the desktop
+  quota lens; CI and the release workflow run it after the unit tests.
+- Internal: the float lens's drawing rules (which dials to show, what the
+  caption says, why refresh or switch is blocked) moved into
+  `app/float-lens-model.ts` with behaviour tests. Tests that matched renderer
+  source text were cut down to state-ownership invariants and hand-tuned
+  visual values.
 
 ## [2.0.9] - 2026-09-05
 

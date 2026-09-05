@@ -185,6 +185,27 @@ async function main() {
     await page.waitForSelector("#notification-sidebar-center", { state: "detached", timeout: STEP_TIMEOUT_MS });
     log("notification drawer opens and closes");
 
+    // The desktop quota lens is a second renderer entry; open it from Settings
+    // and make sure it draws its empty state instead of crashing.
+    await page.click("#sidebar-nav-settings");
+    await page.waitForSelector("#btn-show-float-lens", { timeout: STEP_TIMEOUT_MS });
+    await page.click("#btn-show-float-lens");
+    const lens = await waitFor(async () => {
+      const pages = browser.contexts().flatMap((context) => context.pages());
+      return pages.find((item) => item.url().includes("#float")) || null;
+    }, STEP_TIMEOUT_MS, "float lens window");
+    lens.on("pageerror", (error) => problems.push(`lens pageerror: ${error.message}`));
+    lens.on("console", (message) => {
+      if (message.type() === "error") problems.push(`lens console.error: ${message.text()}`);
+    });
+    await lens.waitForSelector(".float-lens-shell", { timeout: STEP_TIMEOUT_MS });
+    await lens.waitForSelector("#float-lens-mark", { timeout: STEP_TIMEOUT_MS });
+    await lens.waitForSelector(".float-lens-empty", { timeout: STEP_TIMEOUT_MS });
+    if (await lens.locator("#renderer-crash-screen").count()) {
+      throw new Error(`float lens crashed: ${await lens.locator("#renderer-crash-message").innerText()}`);
+    }
+    log("float lens renders its empty state");
+
     if (await page.locator("#renderer-crash-screen").count()) {
       throw new Error("renderer crashed during the flow");
     }

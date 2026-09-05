@@ -3,22 +3,23 @@ import { ArrowLeftRight, ChevronLeft, ChevronRight, ExternalLink, Pin, RefreshCw
 import { AccountQuota, ProductKind } from '../types';
 import {
   desktopApi,
-  formatResetLine,
   hasDesktopBridge,
   canRefreshQuota,
   canSwitchAccount,
-  antigravityQuotaFamilies,
-  hideStaleQuota,
   isManagedProductAccount,
-  lensQuotaWindows,
-  planCaption,
-  quotaHero,
   quotaStroke,
-  statusTextForAccount,
-  STATUS_TEXT,
   withCurrentFlag,
 } from '../api/desktop';
-import { floatChromeMark, isManagedProduct, officialClientLabel, productActions, productLabel as productName, toProductUserMessage } from '../api/product-adapter';
+import {
+  accountErrorText,
+  arcOffset,
+  blockedRefreshText,
+  blockedSwitchText,
+  deriveLensView,
+  pickViewedId,
+  ringLength,
+} from '../app/float-lens-model';
+import { floatChromeMark, isManagedProduct, officialClientLabel, productActions, productLabel as productName } from '../api/product-adapter';
 import { previewAccountsForLens } from '../data/mockData';
 import { isActiveProduct, readStoredProduct } from '../data/products';
 import './FloatLens.css';
@@ -38,77 +39,6 @@ const SILENT_REFRESH_MS = 60_000;
 
 function hasFill(percent: number | null | undefined): boolean {
   return percent != null && Number.isFinite(percent) && percent > 0;
-}
-
-function pickViewedId(accounts: AccountQuota[], current: string | null | undefined): string | null {
-  if (current && accounts.some((account) => account.id === current)) return current;
-  const live = accounts.find((account) => account.isCurrent);
-  return live?.id || accounts[0]?.id || null;
-}
-
-function tighterRemaining(weekly: number | null | undefined, fiveHour: number | null | undefined): number | null {
-  const week = weekly ?? null;
-  const hourly = fiveHour ?? null;
-  if (week == null && hourly == null) return null;
-  if (week == null) return hourly;
-  if (hourly == null) return week;
-  return Math.min(week, hourly);
-}
-
-function ringLength(radius: number): number {
-  return 2 * Math.PI * radius;
-}
-
-function arcOffset(radius: number, percent: number | null): number {
-  const length = ringLength(radius);
-  if (percent == null || !Number.isFinite(percent)) return length;
-  return length * (1 - Math.max(0, Math.min(100, percent)) / 100);
-}
-
-function blockedRefreshText(account: AccountQuota): string {
-  return account.status === 'BANNED' && !isManagedProductAccount(account)
-    ? '账号已封号，无法刷新额度'
-    : '该账号需要重新授权后才能刷新额度';
-}
-
-function blockedSwitchText(account: AccountQuota): string {
-  if (account.status === 'BANNED' && !isManagedProductAccount(account)) return '账号已封号，无法切换';
-  if (account.tokenAccessAvailable === false) return '该账号没有可用登录令牌，无法切换';
-  return '该账号需要重新授权后才能切换';
-}
-
-function planBadgeText(account: AccountQuota): string {
-  return planCaption(account);
-}
-
-function statusBadgeText(account: AccountQuota): string | null {
-  if (account.status === 'BANNED' && !isManagedProductAccount(account)) return STATUS_TEXT.BANNED;
-  if (account.status === 'SUSPENDED' || account.status === 'LIMITED' || account.status === 'SYNC_FAILED' || account.status === 'EXPIRED') {
-    return statusTextForAccount(account);
-  }
-  return null;
-}
-
-function accountErrorText(product: ProductKind, error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  return toProductUserMessage(product, raw);
-}
-
-function tokenRemainLine(text: string | null | undefined): string {
-  const value = String(text || '').trim();
-  if (!value) return '';
-  if (value.startsWith('剩余')) return `登录还剩 ${value.slice(2).trim()}`;
-  if (value === '已过期') return '登录已过期';
-  if (value === '已失效') return '登录已失效';
-  if (value === '有效期未知') return '登录有效期未知';
-  return value;
-}
-
-function splitEmail(email: string | null | undefined): { local: string; domain: string } {
-  const value = String(email || '').trim();
-  const at = value.lastIndexOf('@');
-  if (at <= 0 || at === value.length - 1) return { local: value, domain: '' };
-  return { local: value.slice(0, at), domain: value.slice(at) };
 }
 
 function QuotaDial({
@@ -392,44 +322,23 @@ export default function FloatLens() {
     return () => window.clearInterval(timer);
   }, [product, viewed, loadAccounts]);
   const viewedIndex = viewed ? accounts.findIndex((account) => account.id === viewed.id) : -1;
-  const hero = quotaHero(viewed);
-  const windows = lensQuotaWindows(viewed);
-  const isCurrent = !!viewed?.isCurrent;
-  const hideQuota = hideStaleQuota(viewed);
-  const hideFailedQuota = viewed?.status === 'SYNC_FAILED';
-  const outerValue = hideQuota || hideFailedQuota ? null : windows.outer;
-  const innerValue = hideQuota || hideFailedQuota ? null : windows.inner;
-  const showInner = innerValue != null;
-  const showOuter = outerValue != null;
-  const innerReset = formatResetLine(windows.innerReset);
-  const outerReset = formatResetLine(windows.outerReset);
-  const resetLine = hero.key === 'fiveHour' ? innerReset : (outerReset || innerReset);
-  const tokenLine = isManagedProduct(product) && !hideQuota && !hideFailedQuota ? tokenRemainLine(viewed?.tokenValidity) : '';
-  const caption = tokenLine || (!hideQuota && !hideFailedQuota ? resetLine : '');
-  const showPair = product === 'antigravity'
-    ? !!viewed
-    : isManagedProduct(product) && !hideQuota;
-  const pairDials = showPair && viewed && product === 'antigravity'
-    ? antigravityQuotaFamilies(viewed).map((family) => {
-      const weekly = hideQuota || hideFailedQuota ? null : family.weekly.remaining;
-      const fiveHour = hideQuota || hideFailedQuota ? null : family.fiveHour.remaining;
-      return {
-        weekly,
-        fiveHour,
-        heroPercent: tighterRemaining(weekly, fiveHour),
-        heroLabel: family.title,
-      };
-    })
-    : [
-      { weekly: outerValue, fiveHour: null as number | null, heroPercent: outerValue, heroLabel: windows.outerLabel },
-      { weekly: innerValue, fiveHour: null as number | null, heroPercent: innerValue, heroLabel: windows.innerLabel },
-    ];
-  const planBadge = viewed ? planBadgeText(viewed) : '';
-  const statusBadge = viewed ? statusBadgeText(viewed) : null;
-  const emailParts = splitEmail(viewed?.email);
-  const emptyKind = hideQuota
-    ? (viewed?.status === 'BANNED' && !isManagedProductAccount(viewed) ? 'banned' : 'reauth')
-    : null;
+  const {
+    hero,
+    isCurrent,
+    hideQuota,
+    hideFailedQuota,
+    outerValue,
+    innerValue,
+    showInner,
+    showOuter,
+    caption,
+    showPair,
+    pairDials,
+    planBadge,
+    statusBadge,
+    emailParts,
+    emptyKind,
+  } = deriveLensView(product, viewed);
 
   const moveAccount = useCallback((step: -1 | 1) => {
     if (accounts.length <= 1 || viewedIndex < 0) return;
