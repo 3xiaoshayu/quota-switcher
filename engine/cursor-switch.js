@@ -31,7 +31,12 @@ async function waitForPidsToExit(pids, timeoutMs) {
     await runtime.sleep(PID_POLL_MS);
     remaining = remaining.filter(pidIsAlive);
   }
-  return remaining;
+  if (remaining.length === 0) return remaining;
+  // A PID that is still alive but no longer shows up as an official process
+  // was reused by something unrelated after the app exited; it must not block
+  // the switch.
+  const official = new Set((await runtime.listProcesses()).map((item) => item.pid));
+  return remaining.filter((pid) => official.has(pid));
 }
 
 function firstExistingPath(paths) {

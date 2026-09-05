@@ -1059,6 +1059,48 @@ test("cursor switch writes vscdb after close and rolls back on write failure", a
   assert.equal(engine.listAccts().length, 0);
 });
 
+test("cursor switch is not blocked by a PID that another process reused", async (t) => {
+  // The official app exited, but the OS handed its PID to something else
+  // (here: this very test process). Liveness alone would report "did not
+  // exit"; the official process list says otherwise and wins.
+  const { engine, root } = freshEngine(t);
+  const dbPath = path.join(root, "cursor-state.vscdb");
+  const exePath = path.join(root, "Cursor.exe");
+  fs.writeFileSync(exePath, "fake");
+  await engine.writeCursorAuth(dbPath, { "cursorAuth/accessToken": "old-token" });
+  const created = await engine.upsertCursorAccount({
+    email: "reused@example.com",
+    auth_id: "user_reused",
+    access_token: cursorToken("reused@example.com", "reused"),
+    refresh_token: "refresh-reused",
+  });
+  let listed = [{ name: "Cursor.exe", pid: process.pid, executablePath: exePath }];
+  let forceClosed = 0;
+  engine.setCursorRuntimeForTests({
+    vscdbPath: () => dbPath,
+    cursorExePath: () => exePath,
+    listProcesses: async () => listed,
+    gracefulClose: async () => {
+      listed = [];
+      return true;
+    },
+    forceClose: async () => {
+      forceClosed += 1;
+      return true;
+    },
+    launch: () => true,
+    sleep: async () => {},
+  });
+  const switched = await engine.doCursorSwitch(engine.loadCursorAcct(created.account.id));
+  assert.equal(switched.launched, true);
+  assert.equal(engine.currentCursorAcct().id, created.account.id);
+  assert.equal(forceClosed, 0, "an unrelated process that inherited the PID must never be force-closed");
+  for (const file of ["cursor-switch.js", "switch.js", "antigravity-switch.js"]) {
+    const source = fs.readFileSync(path.join(__dirname, "..", "engine", file), "utf8");
+    assert.match(source, /const official = new Set\(\(await runtime\.listProcesses\(\)\)\.map\(\(item\) => item\.pid\)\);\s*return remaining\.filter\(\(pid\) => official\.has\(pid\)\);/, file);
+  }
+});
+
 test("cursor switch still relaunches Cursor.exe when existsSync reports it missing", async (t) => {
   const { engine, root } = freshEngine(t);
   const dbPath = path.join(root, "cursor-state.vscdb");
