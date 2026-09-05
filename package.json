@@ -59,7 +59,7 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^5.2.0",
-    "electron": "^42.5.2",
+    "electron": "^44.2.0",
     "electron-builder": "^26.0.0",
     "lucide-react": "^0.546.0",
     "motion": "^12.43.0",

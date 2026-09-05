@@ -13,6 +13,10 @@ release is published.
   with quota bars, the "needs reauthorization" copy after a rejected refresh
   token, a manual refresh, the quotas page, and the quota lens with data are
   all exercised without real credentials or network.
+- Electron 42 → 44 (Chromium 152, Node 24), taking two majors of Chromium and
+  Node security fixes. `npm audit` is clean again: the `fast-uri` override was
+  pinning a vulnerable release, and the remaining override pins are now
+  same-major minimums so future audit fixes are not blocked.
 
 ## [2.0.10] - 2026-09-05
 
