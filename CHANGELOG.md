@@ -7,6 +7,8 @@ release is published.
 
 ## Unreleased
 
+## [2.0.10] - 2026-09-05
+
 - Every failure the engine raises now carries a stable code (`codedError`),
   including account-store, OAuth, switch, and network errors that used to be
   plain messages; a test fails the build if a bare `throw new Error` comes
