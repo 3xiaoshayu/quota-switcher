@@ -18,7 +18,6 @@ const {
 } = require("./storage");
 const { extraIdentityIds, foldDuplicateAccountsIfNeeded, mergePreservedQuota, pickIdentityKeeper, usableEmail } = require("./account-identity");
 const { APP_DISPLAY_NAME } = require("./app-brand");
-const { remapSelectedAccountIds } = require("./config-manager");
 const { writeJsonAtomic, readJsonWithBackup, unlinkIfPresent } = require("./atomic-file");
 const { logInfo, logWarn, logError } = require("./logger");
 
@@ -376,7 +375,6 @@ function collapseDuplicateCodexAccounts() {
       }
       saveAcct(keeper);
       persistCodexIndexEntry(keeper);
-      remapSelectedAccountIds(extras.map((item) => item.id), keeper.id);
       for (const extra of extras) {
         deleteAcct(extra.id, { allowCurrent: true });
       }

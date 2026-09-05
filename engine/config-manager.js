@@ -3,12 +3,11 @@ const { ensureDir } = require("./storage");
 const { writeJsonAtomic, quarantineFile, readJsonWithRetry } = require("./atomic-file");
 const { logWarn } = require("./logger");
 
-const DEFAULT_AUTO_SWITCH_CFG = {
+// The background daemon only refreshes Codex logins and quotas now. The file
+// keeps its historical name (auto-switch.json) so an upgrade keeps the user's
+// interval; the old auto-switch fields are dropped on the next save.
+const DEFAULT_DAEMON_CFG = {
   enabled: false,
-  primary_threshold: 20,
-  secondary_threshold: 30,
-  account_scope_mode: "all",
-  selected_account_ids: [],
   sync_interval_minutes: REFRESH_MINUTES,
 };
 
@@ -18,86 +17,56 @@ function normalizeSyncIntervalMinutes(value) {
   return Math.min(60, Math.max(1, Math.round(number)));
 }
 
-// The config file is user-editable, so clamp thresholds into the percentage
-// range the switch policy expects.
-function normalizeThreshold(value, fallback) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return fallback;
-  return Math.min(100, Math.max(0, Math.round(number)));
+function normalizeDaemonCfg(cfg) {
+  const raw = cfg && typeof cfg === "object" ? cfg : {};
+  return {
+    enabled: !!raw.enabled,
+    sync_interval_minutes: normalizeSyncIntervalMinutes(raw.sync_interval_minutes),
+  };
 }
 
-function normalizeAutoSwitchCfg(cfg) {
-  const next = Object.assign({}, DEFAULT_AUTO_SWITCH_CFG, cfg || {});
-  next.enabled = !!next.enabled;
-  next.primary_threshold = normalizeThreshold(next.primary_threshold, DEFAULT_AUTO_SWITCH_CFG.primary_threshold);
-  next.secondary_threshold = normalizeThreshold(next.secondary_threshold, DEFAULT_AUTO_SWITCH_CFG.secondary_threshold);
-  next.sync_interval_minutes = normalizeSyncIntervalMinutes(next.sync_interval_minutes);
-  if (next.account_scope_mode !== "selected") next.account_scope_mode = "all";
-  next.selected_account_ids = Array.isArray(next.selected_account_ids)
-    ? next.selected_account_ids.filter((id) => id != null && String(id).trim() !== "").map(String)
-    : [];
-  return next;
-}
-
-function loadAutoSwitchCfg() {
+function loadDaemonCfg() {
   let primaryError = null;
   try {
-    return normalizeAutoSwitchCfg(readJsonWithRetry(CFG_FILE));
+    return normalizeDaemonCfg(readJsonWithRetry(CFG_FILE));
   } catch (error) {
     primaryError = error;
   }
   // A missing file is a fresh start (or an intentional reset), not
   // corruption: do not resurrect a stale backup for it.
-  if (primaryError.code === "ENOENT") return normalizeAutoSwitchCfg();
+  if (primaryError.code === "ENOENT") return normalizeDaemonCfg();
   // A leftover lock is also not corruption. Restoring .bak here can flip
-  // enabled/thresholds while the real file is still good.
+  // enabled while the real file is still good.
   if (primaryError.transientIoError) throw primaryError;
   if (primaryError.code && !(primaryError instanceof SyntaxError)) throw primaryError;
 
   try {
-    const restored = normalizeAutoSwitchCfg(readJsonWithRetry(`${CFG_FILE}.bak`));
+    const restored = normalizeDaemonCfg(readJsonWithRetry(`${CFG_FILE}.bak`));
     try { quarantineFile(CFG_FILE, "invalid-json"); } catch {}
     writeJsonAtomic(CFG_FILE, restored, { backup: false });
-    logWarn(`Auto-switch configuration was restored from backup: ${primaryError.message}`);
+    logWarn(`Daemon configuration was restored from backup: ${primaryError.message}`);
     return restored;
   } catch (backupError) {
     if (backupError?.code !== "ENOENT") {
-      logWarn(`Auto-switch configuration backup is also unreadable: ${backupError.message}`);
+      logWarn(`Daemon configuration backup is also unreadable: ${backupError.message}`);
     }
   }
   try { quarantineFile(CFG_FILE, "invalid-json"); } catch {}
-  logWarn(`Auto-switch configuration was reset to defaults: ${primaryError.message}`);
-  return normalizeAutoSwitchCfg();
+  logWarn(`Daemon configuration was reset to defaults: ${primaryError.message}`);
+  return normalizeDaemonCfg();
 }
 
-function saveAutoSwitchCfg(cfg) {
+function saveDaemonCfg(cfg) {
   ensureDir(DATA_DIR);
-  writeJsonAtomic(CFG_FILE, normalizeAutoSwitchCfg(cfg));
+  const next = normalizeDaemonCfg(cfg);
+  writeJsonAtomic(CFG_FILE, next);
+  return next;
 }
 
-function remapSelectedAccountIds(fromIds, toId) {
-  const extras = [...new Set((fromIds || []).filter(Boolean).map(String))];
-  const keeper = String(toId || "").trim();
-  if (!extras.length || !keeper) return false;
-  const extraSet = new Set(extras);
-  const cfg = loadAutoSwitchCfg();
-  const next = [];
-  const seen = new Set();
-  let changed = false;
-  for (const id of cfg.selected_account_ids) {
-    const mapped = extraSet.has(id) ? keeper : id;
-    if (mapped !== id) changed = true;
-    if (seen.has(mapped)) {
-      changed = true;
-      continue;
-    }
-    seen.add(mapped);
-    next.push(mapped);
-  }
-  if (!changed) return false;
-  cfg.selected_account_ids = next;
-  saveAutoSwitchCfg(cfg);
-  return true;
-}
-
-module.exports = { loadAutoSwitchCfg, saveAutoSwitchCfg, remapSelectedAccountIds, DEFAULT_AUTO_SWITCH_CFG, normalizeSyncIntervalMinutes };
+module.exports = {
+  loadDaemonCfg,
+  saveDaemonCfg,
+  normalizeDaemonCfg,
+  DEFAULT_DAEMON_CFG,
+  normalizeSyncIntervalMinutes,
+};

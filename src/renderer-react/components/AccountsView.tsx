@@ -146,7 +146,7 @@ export default function AccountsView({
     try {
       await onCancelOAuth?.();
     } catch (error) {
-      setFormError(formMessage(product, error instanceof Error ? error.message : String(error)));
+      setFormError(formMessage(product, error));
     } finally {
       setIsCancellingOAuth(false);
     }
@@ -235,7 +235,7 @@ export default function AccountsView({
     setFormError('');
     setReauthorizeId(id);
     void Promise.resolve(onReauthorizeAccount(id)).catch((error) => {
-      setFormError(formMessage(product, error instanceof Error ? error.message : String(error)));
+      setFormError(formMessage(product, error));
       setShowAddModal(true);
       setIsAdding(false);
     });
@@ -285,7 +285,7 @@ export default function AccountsView({
       setManualCallbackUrl('');
       setShowAddModal(false);
     } catch (error) {
-      setFormError(formMessage(product, error instanceof Error ? error.message : String(error)));
+      setFormError(formMessage(product, error));
     } finally {
       setIsAdding(false);
     }
@@ -921,7 +921,7 @@ export default function AccountsView({
                           setShowAddModal(false);
                         })
                         .catch((error) => {
-                          setFormError(formMessage(product, error instanceof Error ? error.message : String(error)));
+                          setFormError(formMessage(product, error));
                         });
                     }}
                     disabled={oauthBusy}
@@ -960,7 +960,7 @@ export default function AccountsView({
                           setFormError('');
                           setIsSubmittingCallback(true);
                           Promise.resolve(onCompleteOAuthManually(manualCallbackUrl))
-                            .catch(error => setFormError(formMessage(product, error instanceof Error ? error.message : String(error))))
+                            .catch(error => setFormError(formMessage(product, error)))
                             .finally(() => setIsSubmittingCallback(false));
                         }}
                         disabled={!manualCallbackUrl || !onCompleteOAuthManually || isSubmittingCallback}

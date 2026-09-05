@@ -13,7 +13,7 @@ explicit boundary between the renderer and privileged local operations.
 | Preload bridge | `src/preload/preload.js` | Narrow `contextBridge` API exposed to the renderer |
 | Renderer source | `src/renderer-react` | Account cards, quota views, settings, dialogs, and interaction state |
 | Renderer build | `src/renderer-dist` | Generated Vite output loaded by Electron; ignored by Git |
-| Domain engine | `engine` | OAuth, storage, quota, token refresh, switching, and auto-switch policy |
+| Domain engine | `engine` | OAuth, storage, quota, token refresh, switching, and the background sync worker |
 
 The renderer runs with `contextIsolation: true`, `nodeIntegration: false`, and
 `sandbox: true`. It cannot access Node.js APIs directly. Tokens never leave
@@ -24,15 +24,16 @@ the main process; the renderer only receives public account metadata.
 The sidebar selects one product at a time. Codex, Cursor, and Antigravity keep
 separate account indexes, OAuth flows, quota parsers, and switch transactions.
 
-| Product | Storage prefix | Official write target | Auto-switch |
+| Product | Storage prefix | Official write target | Background worker |
 | --- | --- | --- | --- |
-| Codex | `codex_` | `%USERPROFILE%\.codex\auth.json` | Yes |
-| Cursor | `cursor_` | `%APPDATA%\Cursor\User\globalStorage\state.vscdb` | No |
-| Antigravity | `antigravity_` | `%APPDATA%\Antigravity IDE\User\globalStorage\state.vscdb` | No |
+| Codex | `codex_` | `%USERPROFILE%\.codex\auth.json` | Login renewal and quota sync |
+| Cursor | `cursor_` | `%APPDATA%\Cursor\User\globalStorage\state.vscdb` | None |
+| Antigravity | `antigravity_` | `%APPDATA%\Antigravity IDE\User\globalStorage\state.vscdb` | None |
 
-Codex storage rejects `cursor_` and `antigravity_` ids. Cursor and Antigravity
-status never use the Codex ban bucket. Phase 1 Antigravity is official IDE
-only: no legacy `Antigravity.exe`, no multi-instance, no daemon auto-switch.
+Every switch is user-initiated; there is no automatic account switching for
+any product. Codex storage rejects `cursor_` and `antigravity_` ids. Cursor and
+Antigravity status never use the Codex ban bucket. Phase 1 Antigravity is
+official IDE only: no legacy `Antigravity.exe`, no multi-instance.
 
 ## Startup flow
 
@@ -57,7 +58,7 @@ The manager stores its own state under `%USERPROFILE%\.codex-switch`:
   accounts.json.bak
   cursor-accounts.json
   antigravity-accounts.json
-  auto-switch.json
+  auto-switch.json          (background worker on/off and interval; historical name)
   codex_oauth_pending.json
   cursor_oauth_pending.json
   antigravity_oauth_pending.json
@@ -113,10 +114,9 @@ Cursor:
 5. Roll the index and login keys back if post-write work fails. Failures
    before the write relaunch official Cursor and are written to the app log.
 
-The Codex switching path is used by both manual and automatic switching.
 The managed Codex projection contains an authentication fingerprint. A
-mismatch with official `auth.json` pauses automatic authentication writes and
-switching until the user resolves the conflict.
+mismatch with official `auth.json` pauses the background worker's
+authentication writes until the user resolves the conflict in the window.
 
 ## Quota and token flow
 
@@ -161,8 +161,8 @@ interval.
 
 **429 is not `usage_limited`.** A Codex `429 rate_limit` means the usage
 endpoint asked the client to slow down. It is not treated as the account
-being used up, and it does not make auto-switch leave the current account.
-The card keeps leftover quota and shows that the login is still present.
+being used up. The card keeps leftover quota and shows that the login is
+still present.
 
 **Leftover windows.** When a refresh fails for a timeout, proxy 5xx, empty
 or HTML token body, or a 429 rate limit, the last known remaining quota stays
@@ -179,6 +179,16 @@ process. If the worker exits, GET-style work can fall back in-process. A
 non-idempotent token POST is not replayed from the main process after a
 worker timeout.
 
+**Official format drift.** `engine/upstream-drift.js` compares each official
+client's on-disk login with what this manager knows: Codex `auth.json` must
+carry `tokens` (or a known agent-identity / API-key shape), Cursor
+`state.vscdb` must hold `cursorAuth/accessToken` or none of the `cursorAuth/`
+family, and the Antigravity `antigravityUnifiedStateSync.oauthToken` item must
+decode with the known protobuf topic. The three `*:status` IPC calls attach the
+verdict as `officialFormat`, and Settings shows “登录格式变了” for a product
+in `drift`. The checks are read-only; a missing or locked file is `signed_out`
+or `unknown`, never `drift`, so a lock can not produce a false alarm.
+
 ## IPC contract
 
 Renderer calls are defined in `src/preload/preload.js` and handled in
@@ -189,6 +199,14 @@ Renderer calls are defined in `src/preload/preload.js` and handled in
 - expected main-process events are exposed to the renderer.
 
 When adding an operation, update all three surfaces and run `npm run audit:ui`.
+
+Failures answer `{ success: false, error, code }`. `code` is the stable
+identifier the engine attached (`error.code`, for example
+`cursor_vscdb_busy`); `error` is diagnostic text. The renderer wraps it in a
+`DesktopError` and picks user copy by code first (`CODE_MESSAGES` in
+`api/user-messages.ts`), falling back to message matching only for errors that
+carry no code. `test/error-codes.test.js` fails when the engine gains a code
+without copy.
 
 The first paint uses `desktop:snapshot`. Later quota and account changes can
 arrive as `quota:updated` / `account:updated` patches instead of a full reload.

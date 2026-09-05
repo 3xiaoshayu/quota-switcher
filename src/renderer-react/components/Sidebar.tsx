@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { AtSign, Check, ChevronDown, Gauge, Shuffle, Settings, RefreshCw, HelpCircle } from 'lucide-react';
+import { AtSign, Check, ChevronDown, Gauge, Settings, RefreshCw, HelpCircle } from 'lucide-react';
 import { motion } from 'motion/react';
 import { ProductKind } from '../types';
 import {
   PRODUCTS,
   PRODUCT_ICON_DOCK_LIMIT,
   PRODUCT_PICKER_SEARCH_THRESHOLD,
-  productById,
 } from '../data/products';
 import appIcon from '../assets/app-icon.png';
 import QuotaWordmark from './QuotaWordmark';
@@ -183,9 +182,11 @@ function ProductSwitch({
   );
 }
 
+export type SidebarTab = 'accounts' | 'quotas' | 'settings';
+
 interface SidebarProps {
-  activeTab: 'accounts' | 'quotas' | 'autoswitch' | 'settings';
-  setActiveTab: (tab: 'accounts' | 'quotas' | 'autoswitch' | 'settings') => void;
+  activeTab: SidebarTab;
+  setActiveTab: (tab: SidebarTab) => void;
   product: ProductKind;
   onProductChange: (product: ProductKind) => void;
   onShowSupport: () => void;
@@ -203,7 +204,6 @@ export default function Sidebar({
   const menuItems = [
     { id: 'accounts', label: '账号管理', icon: AtSign },
     { id: 'quotas', label: '配额总览', icon: Gauge },
-    ...(productById(product).features.autoSwitch ? [{ id: 'autoswitch' as const, label: '自动切号', icon: Shuffle }] : []),
     { id: 'settings', label: '系统设置', icon: Settings },
   ] as const;
 

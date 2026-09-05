@@ -49,14 +49,6 @@ async function captureDashboard(page) {
   await page.waitForTimeout(500);
   await save(page, "codex-accounts.png");
 
-  await page.click("#sidebar-nav-autoswitch");
-  await page.waitForTimeout(500);
-  await page.evaluate(() => {
-    const banner = document.querySelector("#autoswitch-log-banner");
-    if (banner) banner.style.display = "none";
-  });
-  await save(page, "auto-switch.png");
-
   await page.click("#sidebar-nav-settings");
   await page.waitForTimeout(500);
   await save(page, "settings.png");

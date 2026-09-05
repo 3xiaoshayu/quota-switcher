@@ -83,8 +83,7 @@ usage-endpoint 429 all use this line. The app does not ask for re-auth for
 those cases.
 
 - Leftover remaining quota stays on the card. Try again later.
-- A Codex `429 rate_limit` is not used-up quota, and it does not make
-  auto-switch leave the current account.
+- A Codex `429 rate_limit` is not used-up quota.
 - Check whether the proxy, VPN, or TUN mode applies to desktop apps, not
   only the browser.
 - Check another saved account to distinguish an account-specific response
@@ -141,16 +140,17 @@ already running may be interrupted.
 
 ## Official Codex login changed
 
-The manager pauses authentication writes and automatic switching when the
-official Codex login differs from its managed current account. Choose
+The manager pauses background authentication writes when the official Codex
+login differs from its managed current account. Choose
 **采用官方账号** to import and use the official login, or
 **写回管理账号** to restore the manager-selected identity.
 
 ## The window closed but the app is still running
 
-The title-bar close button hides the main window to the tray. The auto-switch
-daemon keeps running. Left-click the tray icon, or choose **打开窗口**, to
-show the window again. To quit, right-click the tray icon and choose **退出**.
+The title-bar close button hides the main window to the tray. The background
+login renewal and quota sync keep running. Left-click the tray icon, or choose
+**打开窗口**, to show the window again. To quit, right-click the tray icon and
+choose **退出**.
 
 ## The desktop quota lens does not appear
 

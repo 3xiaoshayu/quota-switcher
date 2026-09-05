@@ -56,8 +56,8 @@ release metadata validation.
 - Treat missing quota windows as unknown, not zero.
 - Keep Codex and Cursor storage, OAuth, and switch paths separate. Do not scan
   one product's files as the other.
-- Cursor must not use Codex ban status. Auto-switch stays Codex-only unless a
-  change is explicitly designed and documented.
+- Cursor must not use Codex ban status. Switching stays a user action; do not
+  add background account switching for any product.
 - Keep new dependencies limited and explain why they are required.
 
 ## Verification

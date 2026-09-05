@@ -9,10 +9,9 @@ const { initLogger, logInfo, logWarn, logError, getLogDir, sanitizeMessage } = r
 const { refreshOneTok, needsRefresh, refreshAll } = require("./token-refresh");
 const { fetchQuota, fetchQuotaWithTokenRepair, isQuotaAuthError, refreshQuota, probeUsageOnly, canProbeUsageWithoutRefresh, needsBanProbe, extractQuotaMetrics, normalizeQuota } = require("./quota");
 const { classifyProbe, isAccountBanned } = require("./account-probe");
-const { loadAutoSwitchCfg, saveAutoSwitchCfg, remapSelectedAccountIds, DEFAULT_AUTO_SWITCH_CFG } = require("./config-manager");
+const { loadDaemonCfg, saveDaemonCfg, normalizeDaemonCfg, DEFAULT_DAEMON_CFG } = require("./config-manager");
 const { withAccountLock, withAccountLocks, withPathLock, mapLimit } = require("./operation-locks");
-const { metricCrossedThreshold, accountMustLeave, buildSwitchCandidate, pickBestCandidate, resolveMonitoredIds, autoSwitchTick, noteOfficialSwitch, recentlySwitched, resolutionHoldReason } = require("./auto-switch");
-const { runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes } = require("./daemon");
+const { runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes, resolutionHoldReason } = require("./daemon");
 const { getCodexInstallationStatus, getCodexInstallationStatusAsync, assertOfficialCodexInstalled, assertOfficialCodexInstalledAsync } = require("./codex-installation");
 const { listCursorAccts, loadCursorAcct, saveCursorAcct, currentCursorAcct, deleteCursorAcct, loadCursorIdx, setCurrentCursorAccountId } = require("./cursor-storage");
 const { importLocalCursorAccount, upsertCursorAccount, accountFromCursorTokens, authFromLocalValues, syncCurrentCursorFromOfficial, collapseDuplicateCursorAccounts, resetOfficialSyncCacheForTests: resetCursorOfficialSyncCacheForTests } = require("./cursor-local");
@@ -33,6 +32,7 @@ const { antigravityLoginFlow, cancelAntigravityOAuth, discardPendingAntigravityO
 const { getAntigravityInstallationStatus, getAntigravityInstallationStatusAsync, assertOfficialAntigravityInstalled } = require("./antigravity-install");
 const { setAntigravityRuntimeForTests, setAntigravityOpenUrlHandler } = require("./antigravity-runtime");
 const { readAntigravityAuth, writeAntigravityAuth } = require("./antigravity-db");
+const { inspectCodexFormat, inspectCursorFormat, inspectAntigravityFormat } = require("./upstream-drift");
 
 module.exports = {
   // crypto-utils
@@ -57,13 +57,11 @@ module.exports = {
   fetchQuota, fetchQuotaWithTokenRepair, isQuotaAuthError, refreshQuota, probeUsageOnly, canProbeUsageWithoutRefresh, needsBanProbe, extractQuotaMetrics, normalizeQuota,
   classifyProbe, isAccountBanned,
   // config-manager
-  loadAutoSwitchCfg, saveAutoSwitchCfg, remapSelectedAccountIds, DEFAULT_AUTO_SWITCH_CFG,
+  loadDaemonCfg, saveDaemonCfg, normalizeDaemonCfg, DEFAULT_DAEMON_CFG,
   // operation-locks
   withAccountLock, withAccountLocks, withPathLock, mapLimit,
-  // auto-switch
-  metricCrossedThreshold, accountMustLeave, buildSwitchCandidate, pickBestCandidate, resolveMonitoredIds, autoSwitchTick, noteOfficialSwitch, recentlySwitched, resolutionHoldReason,
   // daemon
-  runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes,
+  runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes, resolutionHoldReason,
   // codex installation
   getCodexInstallationStatus, getCodexInstallationStatusAsync, assertOfficialCodexInstalled, assertOfficialCodexInstalledAsync,
   listCursorAccts, loadCursorAcct, saveCursorAcct, currentCursorAcct, deleteCursorAcct, loadCursorIdx, setCurrentCursorAccountId,
@@ -79,4 +77,6 @@ module.exports = {
   antigravityLoginFlow, cancelAntigravityOAuth, discardPendingAntigravityOAuth, getAntigravityOAuthStatus, restorePendingAntigravityOAuth,
   getAntigravityInstallationStatus, getAntigravityInstallationStatusAsync, assertOfficialAntigravityInstalled,
   setAntigravityRuntimeForTests, setAntigravityOpenUrlHandler, readAntigravityAuth, writeAntigravityAuth,
+  // upstream-drift: does the official on-disk login format still look like what we know?
+  inspectCodexFormat, inspectCursorFormat, inspectAntigravityFormat,
 };

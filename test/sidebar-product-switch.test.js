@@ -29,26 +29,21 @@ test("settings pause line maps auth_conflict to Chinese", () => {
   assert.match(settings, /toUserMessage\(daemonState\.pausedReason\)/);
 });
 
-test("auto-switch toasts name missing official login separately from a conflict", () => {
-  const view = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "components", "AutoSwitchView.tsx"), "utf8");
-  assert.match(view, /case 'oauth_pending'/);
-  assert.match(view, /已有授权正在进行，本次不自动切号/);
-  assert.match(view, /case 'missing_official_auth'/);
-  assert.match(view, /检查已暂停：官方 Codex 已退出/);
-  assert.match(view, /检查已暂停：官方登录了另一个账号/);
-  assert.match(view, /检查已暂停：官方 Codex 已登录，尚未纳入管理/);
-  assert.match(view, /case 'unmanaged_official_auth'/);
-  assert.match(view, /case 'current_not_found'/);
-  assert.match(view, /已跳过：没有当前账号/);
-  assert.match(view, /case 'current_changed'/);
-  assert.match(view, /当前账号已变化，本次未切/);
+test("the auto-switch page and its reason copy are gone", () => {
+  assert.equal(fs.existsSync(path.join(projectRoot, "src", "renderer-react", "components", "AutoSwitchView.tsx")), false);
+  assert.equal(fs.existsSync(path.join(projectRoot, "engine", "auto-switch.js")), false);
+  const sidebar = fs.readFileSync(sidebarPath, "utf8");
+  assert.doesNotMatch(sidebar, /autoswitch|自动切号/);
+  const messages = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "api", "user-messages.ts"), "utf8");
+  assert.doesNotMatch(messages, /recently_switched|oauth_pending|no_quota_data|不会切号|本次未切/);
 });
 
 test("missing official banner says quota refresh continues", () => {
   const banner = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "components", "AuthStatusBanner.tsx"), "utf8");
   assert.match(banner, /status === 'missing_official_auth'/);
   assert.match(banner, /status === 'unsupported_official_auth'/);
-  assert.match(banner, /额度刷新仍会继续，自动切号已暂停/);
+  assert.match(banner, /额度刷新仍会继续，官方登录同步已暂停/);
+  assert.doesNotMatch(banner, /自动切号/);
   assert.doesNotMatch(banner, /missing_official_auth[\s\S]{0,180}可采用官方账号/);
   assert.doesNotMatch(banner, /unsupported_official_auth[\s\S]{0,180}可采用官方账号/);
 });

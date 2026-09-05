@@ -1,13 +1,23 @@
 const { REFRESH_MINUTES } = require("./config");
 const tokenRefresh = require("./token-refresh");
 const quota = require("./quota");
-const { loadAutoSwitchCfg, normalizeSyncIntervalMinutes } = require("./config-manager");
-const { autoSwitchTick, resolutionHoldReason } = require("./auto-switch");
+const { loadDaemonCfg, normalizeSyncIntervalMinutes } = require("./config-manager");
 const { loadIdx, listAccts, loadAcct } = require("./storage");
 const { writeAuthJson, writeProjection } = require("./switch");
 const { inspectAuthState, isInspectBusyError, busyAuthState, canMirrorOfficialAuth } = require("./auth-state");
 const { withAccountLock } = require("./operation-locks");
 const { logWarn } = require("./logger");
+
+// Why the official-login mirror is on hold. The window turns these into the
+// banner that asks the user to adopt the official login or write the managed
+// one back.
+function resolutionHoldReason(authState) {
+  if (!authState?.requiresResolution) return null;
+  if (authState.status === "missing_official_auth") return "missing_official_auth";
+  if (authState.status === "unsupported_official_auth") return "unsupported_official_auth";
+  if (authState.status === "unmanaged_official_auth") return "unmanaged_official_auth";
+  return "auth_conflict";
+}
 
 function isTransientQuotaNetworkError(error) {
   const text = String(error?.message || error || "").toLowerCase();
@@ -61,19 +71,18 @@ async function runDaemonWorker(options = {}) {
   const failures = [];
   const tokenRefreshes = [];
   let accountsUpdated = 0;
-  let autoSwitchResult = null;
   let authState = null;
   const isCancelled = typeof options.isCancelled === "function" ? options.isCancelled : () => false;
-  const stopped = () => ({
+  const finish = (pausedReason, state = authState) => ({
     startedAt,
     completedAt: Date.now(),
     accountsUpdated,
     tokenRefreshes,
-    autoSwitchResult,
     failures,
-    pausedReason: "stopped",
-    authState,
+    pausedReason,
+    authState: state,
   });
+  const stopped = () => finish("stopped");
 
   if (isCancelled()) return stopped();
   // inspectAuthState can write the current account file (official token
@@ -84,16 +93,7 @@ async function runDaemonWorker(options = {}) {
     preIndex = loadIdx();
   } catch (error) {
     failures.push(failure("account_index", null, error));
-    return {
-      startedAt,
-      completedAt: Date.now(),
-      accountsUpdated,
-      tokenRefreshes,
-      autoSwitchResult,
-      failures,
-      pausedReason: null,
-      authState,
-    };
+    return finish(null);
   }
   try {
     authState = preIndex.current_account_id
@@ -101,40 +101,13 @@ async function runDaemonWorker(options = {}) {
       : inspectAuthState({ migrateProjection: false });
   } catch (error) {
     if (isInspectBusyError(error)) {
-      return {
-        startedAt,
-        completedAt: Date.now(),
-        accountsUpdated,
-        tokenRefreshes,
-        autoSwitchResult,
-        failures,
-        pausedReason: null,
-        authState: busyAuthState(preIndex.current_account_id),
-      };
+      return finish(null, busyAuthState(preIndex.current_account_id));
     }
     failures.push(failure("auth_inspect", null, error));
-    return {
-      startedAt,
-      completedAt: Date.now(),
-      accountsUpdated,
-      tokenRefreshes,
-      autoSwitchResult,
-      failures,
-      pausedReason: null,
-      authState,
-    };
+    return finish(null);
   }
   if (authState.status === "conflict") {
-    return {
-      startedAt,
-      completedAt: Date.now(),
-      accountsUpdated,
-      tokenRefreshes,
-      autoSwitchResult,
-      failures,
-      pausedReason: "auth_conflict",
-      authState,
-    };
+    return finish("auth_conflict");
   }
 
   const accounts = listAccts({ secrets: false });
@@ -213,16 +186,7 @@ async function runDaemonWorker(options = {}) {
     index = loadIdx();
   } catch (error) {
     failures.push(failure("account_index", null, error));
-    return {
-      startedAt,
-      completedAt: Date.now(),
-      accountsUpdated,
-      tokenRefreshes,
-      autoSwitchResult,
-      failures,
-      pausedReason: null,
-      authState,
-    };
+    return finish(null);
   }
   if (index.current_account_id) {
     await withAccountLock(index.current_account_id, async () => {
@@ -286,54 +250,18 @@ async function runDaemonWorker(options = {}) {
   }
 
   if (isCancelled()) return stopped();
-  let config = null;
-  try {
-    config = loadAutoSwitchCfg();
-  } catch (error) {
-    // A leftover lock must not throw away token/quota work already done.
-    failures.push(failure("auto_switch_config", null, error));
-  }
-  if (config && config.enabled) {
-    try {
-      autoSwitchResult = await autoSwitchTick(config, { isCancelled, authState });
-      if (autoSwitchResult?.authState) authState = autoSwitchResult.authState;
-      if (isCancelled() || autoSwitchResult?.reason === "cancelled") return stopped();
-      if (autoSwitchResult?.reason === "current_quota_refresh_failed") {
-        const retrying = /waiting for retry|quota_retry_pending/i.test(String(autoSwitchResult.error || ""));
-        const inspectBusy = isInspectBusyError({ message: autoSwitchResult.error || "" });
-        if (!retrying && !inspectBusy) {
-          failures.push(failure("auto_switch", null, new Error(autoSwitchResult.error || autoSwitchResult.reason)));
-        }
-      }
-    } catch (error) {
-      failures.push(failure("auto_switch", null, error));
-    }
-  }
-
   if (failures.length > 0) {
     logWarn(`Daemon worker completed with ${failures.length} failure(s)`);
   }
-  let pausedReason = null;
-  if (autoSwitchResult && !autoSwitchResult.switched) {
-    pausedReason = resolutionHoldReason(autoSwitchResult.authState)
-      || (autoSwitchResult.reason === "oauth_pending" ? "oauth_pending" : null)
-      || (autoSwitchResult.reason === "switch_verify_failed" ? "switch_verify_failed" : null);
-  }
-  return {
-    startedAt,
-    completedAt: Date.now(),
-    accountsUpdated,
-    tokenRefreshes,
-    autoSwitchResult,
-    failures,
-    pausedReason,
-    authState,
-  };
+  // A missing or unmanaged official login only holds back the auth.json
+  // mirror; token refresh and quota work above still ran, so the daemon is
+  // not paused. Only a real conflict (returned earlier) pauses it.
+  return finish(null);
 }
 
 function getTickIntervalMinutes() {
   try {
-    return normalizeSyncIntervalMinutes(loadAutoSwitchCfg().sync_interval_minutes);
+    return normalizeSyncIntervalMinutes(loadDaemonCfg().sync_interval_minutes);
   } catch {
     return REFRESH_MINUTES;
   }
@@ -343,4 +271,4 @@ function getTickIntervalMs() {
   return getTickIntervalMinutes() * 60000;
 }
 
-module.exports = { runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes };
+module.exports = { runDaemonWorker, getTickIntervalMs, getTickIntervalMinutes, resolutionHoldReason };

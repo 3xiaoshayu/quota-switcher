@@ -7,6 +7,32 @@ release is published.
 
 ## Unreleased
 
+## [2.0.8] - 2026-09-05
+
+- Remove Codex automatic switching: the sidebar page, the thresholds and
+  account scope, the daemon's switch step, and the `autoswitch:*` IPC
+  channels are gone. Every switch is a user action now. The background
+  worker keeps renewing Codex logins and refreshing quotas; its on/off switch
+  and interval stay in `auto-switch.json` under the historical file name, so
+  an upgrade keeps the user's interval.
+- Login-state banner copy says which background work paused instead of
+  referring to the removed feature.
+- Errors keep a stable code from the engine all the way to the window. IPC
+  failures answer `{ success: false, error, code }`, the renderer raises a
+  `DesktopError` with that code, and user-facing copy is chosen by code
+  first (`CODE_MESSAGES`) with message matching only as the fallback. A test
+  keeps the copy table in step with every code the engine produces.
+- Settings warns when an official client changed its login format: the
+  status checks now inspect Codex `auth.json`, Cursor `state.vscdb` keys,
+  and the Antigravity OAuth item, and report "登录格式变了" before a switch
+  would fail on it. Read-only; a locked or missing file is never reported as
+  drift.
+- A render error shows an in-window crash screen with a reload button
+  instead of a blank window.
+- Internal: the toast/activity feed, the settings derivation, and the
+  daemon-config save sequencing moved out of `App.tsx` into `app/` with
+  behaviour tests; toast timers are cleared on unmount.
+
 ## [2.0.7] - 2026-09-05
 
 - Stop sending the ChatGPT, Cursor, or Google bearer along when a quota or

@@ -77,12 +77,8 @@ function bridge(overrides = {}) {
     }]),
     getCurrentAccount: () => ok(null),
     getDaemonStatus: () => ok({ running: false, syncIntervalMinutes: 10 }),
-    getAutoSwitchConfig: () => ok({
+    getDaemonConfig: () => ok({
       enabled: false,
-      primary_threshold: 20,
-      secondary_threshold: 30,
-      account_scope_mode: "all",
-      selected_account_ids: [],
       sync_interval_minutes: 10,
     }),
     getAppInfo: () => ok({ name: "Quota Switcher", version: "test" }),
@@ -440,18 +436,18 @@ test("unusable tokens without a reauth flag still warn as reauthorization", asyn
   assert.equal(snapshot.accounts[0].warning, "该账号需要重新授权后才能使用。");
 });
 
-test("accounts without an access token cannot join auto-switch", () => {
-  const { canJoinAutoSwitch, canSwitchAccount, pruneAutoSwitchAccountIds } = loadDesktopExports(bridge());
+test("accounts without an access token cannot be switched to", () => {
+  const { canSwitchAccount } = loadDesktopExports(bridge());
   const empty = { id: "empty", status: "ACTIVE", tokenAccessAvailable: false };
   const ready = { id: "ready", status: "ACTIVE", tokenAccessAvailable: true };
-  assert.equal(canJoinAutoSwitch(empty), false);
   assert.equal(canSwitchAccount(empty), false);
-  assert.equal(canJoinAutoSwitch(ready), true);
-  assert.deepEqual(pruneAutoSwitchAccountIds(["empty", "ready"], [empty, ready]), ["ready"]);
+  assert.equal(canSwitchAccount(ready), true);
+  assert.equal(canSwitchAccount({ id: "banned", status: "BANNED", tokenAccessAvailable: true }), false);
+  assert.equal(canSwitchAccount({ id: "reauth", status: "SUSPENDED", tokenAccessAvailable: true }), false);
 });
 
-test("rejected leftover access tokens cannot refresh quotas or join auto-switch", async () => {
-  const { canJoinAutoSwitch, canRefreshQuota, needsQuotaAutoSync, pruneAutoSwitchAccountIds } = loadDesktopExports(bridge());
+test("rejected leftover access tokens cannot refresh quotas or be switched to", async () => {
+  const { canSwitchAccount, canRefreshQuota, needsQuotaAutoSync } = loadDesktopExports(bridge());
   const desktopApi = loadDesktopApiWithBridge(bridge({
     listAccounts: () => ok([{
       id: "spent",
@@ -482,12 +478,8 @@ test("rejected leftover access tokens cannot refresh quotas or join auto-switch"
   assert.equal(snapshot.accounts[0].tokenValidityPct, 0);
   assert.equal(canRefreshQuota(snapshot.accounts[0]), false);
   assert.equal(needsQuotaAutoSync(snapshot.accounts[0]), false);
-  assert.equal(canJoinAutoSwitch(snapshot.accounts[0]), false);
-  assert.equal(canJoinAutoSwitch(snapshot.accounts[1]), true);
-  assert.deepEqual(
-    pruneAutoSwitchAccountIds([snapshot.accounts[0].id, snapshot.accounts[1].id], snapshot.accounts),
-    [snapshot.accounts[1].id],
-  );
+  assert.equal(canSwitchAccount(snapshot.accounts[0]), false);
+  assert.equal(canSwitchAccount(snapshot.accounts[1]), true);
 });
 
 test("banned leftover-rejected tokens hide stale quota", async () => {
@@ -618,13 +610,14 @@ test("settings token card lists every tokenBatch product", () => {
 test("settings daemon card lists product jobs without following the sidebar", () => {
   const settings = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "components", "SettingsView.tsx"), "utf8");
   const sidebar = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "components", "Sidebar.tsx"), "utf8");
-  assert.match(settings, /只做 Codex 续登录和自动切号/);
+  assert.match(settings, /只做 Codex 续登录和额度同步/);
+  assert.doesNotMatch(settings, /自动切号/);
   assert.match(settings, /daemon-product-chips/);
-  assert.match(settings, /续登录 · 切号/);
+  assert.match(settings, /续登录 · 额度/);
   assert.match(settings, /暂不参与/);
   assert.doesNotMatch(settings, /只管 Codex/);
-  assert.match(settings, /daemonState\.status !== 'Running' && settings\.globalSwitch/);
-  assert.doesNotMatch(settings, /settings\.globalSwitch && productById\(product\)\.features\.autoSwitch/);
+  assert.doesNotMatch(settings, /globalSwitch|features\.autoSwitch/);
+  assert.match(settings, /daemonState\.status === 'Running' && daemonState\.pausedReason/);
   assert.doesNotMatch(sidebar, /Codex Daemon/);
   assert.doesNotMatch(sidebar, /Daemon 运行中/);
   assert.doesNotMatch(sidebar, /Daemon 已暂停|Daemon 已停止/);
@@ -750,163 +743,6 @@ test("quota auto-sync uses one minute for the current account and ten for others
   assert.equal(needsQuotaAutoSync(otherStale, quotaAutoSyncStaleMs(otherStale, 1)), true);
 });
 
-test("auto-switch banner uses quota thresholds and daemon state, not ACTIVE status", () => {
-  const { isCurrentQuotaSufficient, autoSwitchStatusBanner } = loadDesktopExports(bridge());
-  const low = {
-    fiveHourQuotaRemaining: 10,
-    fiveHourQuotaTotal: 100,
-    fiveHourQuotaPresent: true,
-    weeklyQuotaRemaining: 80,
-    weeklyQuotaTotal: 100,
-    weeklyQuotaPresent: true,
-    status: "ACTIVE",
-  };
-  const okQuota = {
-    fiveHourQuotaRemaining: 55,
-    fiveHourQuotaTotal: 100,
-    fiveHourQuotaPresent: true,
-    weeklyQuotaRemaining: 80,
-    weeklyQuotaTotal: 100,
-    weeklyQuotaPresent: true,
-    status: "WARNING",
-  };
-  assert.equal(isCurrentQuotaSufficient(low, 20, 30), false);
-  assert.equal(isCurrentQuotaSufficient({
-    ...okQuota,
-    fiveHourQuotaRemaining: 20,
-    weeklyQuotaRemaining: 30,
-  }, 20, 30), true);
-  assert.equal(isCurrentQuotaSufficient(okQuota, 20, 30), true);
-  assert.equal(isCurrentQuotaSufficient(null, 20, 30), false);
-  assert.equal(isCurrentQuotaSufficient({ ...okQuota, status: "BANNED" }, 20, 30), false);
-  assert.equal(isCurrentQuotaSufficient({ ...okQuota, status: "LIMITED" }, 20, 30), false);
-
-  const switchOff = autoSwitchStatusBanner({
-    hasCurrentAccount: true,
-    quotaSufficient: true,
-    globalSwitch: false,
-    daemonRunning: true,
-  });
-  assert.equal(switchOff.title, "自动切号未启用");
-  assert.equal(switchOff.detail, "全局开关已关闭。启用开关并启动 Daemon 后，将在额度低于阈值时切换账号。");
-  assert.equal(switchOff.tone, "neutral");
-
-  const daemonStopped = autoSwitchStatusBanner({
-    hasCurrentAccount: true,
-    quotaSufficient: true,
-    globalSwitch: true,
-    daemonRunning: false,
-  });
-  assert.equal(daemonStopped.title, "自动切号未运行");
-  assert.equal(daemonStopped.detail, "全局开关已启用，但 Daemon 已停止，不会自动切换账号。");
-  assert.equal(daemonStopped.tone, "warn");
-
-  const paused = autoSwitchStatusBanner({
-    hasCurrentAccount: true,
-    quotaSufficient: true,
-    globalSwitch: true,
-    daemonRunning: true,
-    pausedReason: "官方 Codex 当前没有登录",
-  });
-  assert.equal(paused.title, "自动切号已暂停");
-  assert.equal(paused.detail, "官方 Codex 当前没有登录。");
-  assert.equal(paused.tone, "warn");
-
-  const pausedConflict = autoSwitchStatusBanner({
-    hasCurrentAccount: true,
-    quotaSufficient: true,
-    globalSwitch: true,
-    daemonRunning: true,
-    pausedReason: "auth_conflict",
-  });
-  assert.equal(pausedConflict.title, "自动切号已暂停");
-  assert.equal(pausedConflict.detail, "官方登录了另一个账号。");
-
-  const pausedOAuth = autoSwitchStatusBanner({
-    hasCurrentAccount: true,
-    quotaSufficient: true,
-    globalSwitch: true,
-    daemonRunning: true,
-    pausedReason: "oauth_pending",
-  });
-  assert.equal(pausedOAuth.title, "自动切号已暂停");
-  assert.equal(pausedOAuth.detail, "已有授权正在进行，本次不自动切号。");
-
-  const pausedVerify = autoSwitchStatusBanner({
-    hasCurrentAccount: true,
-    quotaSufficient: true,
-    globalSwitch: true,
-    daemonRunning: true,
-    pausedReason: "switch_verify_failed",
-  });
-  assert.equal(pausedVerify.title, "自动切号已暂停");
-  assert.equal(pausedVerify.detail, "官方登录写入后核对失败，没有切到目标账号。");
-
-  const quotaOk = autoSwitchStatusBanner({
-    hasCurrentAccount: true,
-    quotaSufficient: true,
-    globalSwitch: true,
-    daemonRunning: true,
-  });
-  assert.equal(quotaOk.title, "额度充足，暂不切换");
-  assert.equal(quotaOk.detail, "自动切号已启用。额度低于阈值后将自动切换账号。");
-  assert.equal(quotaOk.tone, "ok");
-
-  const quotaLow = autoSwitchStatusBanner({
-    hasCurrentAccount: true,
-    quotaSufficient: false,
-    globalSwitch: true,
-    daemonRunning: true,
-  });
-  assert.equal(quotaLow.title, "当前额度偏低");
-  assert.equal(quotaLow.detail, "自动切号已启用，将在下次检查时尝试切换账号。");
-  assert.equal(quotaLow.tone, "warn");
-
-  const bannedCurrent = autoSwitchStatusBanner({
-    hasCurrentAccount: true,
-    quotaSufficient: false,
-    globalSwitch: true,
-    daemonRunning: true,
-    currentStatus: "BANNED",
-  });
-  assert.equal(bannedCurrent.title, "当前账号已封号");
-  assert.match(bannedCurrent.detail, /已封号/);
-  assert.equal(bannedCurrent.tone, "warn");
-
-  const reauthCurrent = autoSwitchStatusBanner({
-    hasCurrentAccount: true,
-    quotaSufficient: false,
-    globalSwitch: true,
-    daemonRunning: true,
-    currentStatus: "SUSPENDED",
-  });
-  assert.equal(reauthCurrent.title, "当前账号需要重新授权");
-  assert.match(reauthCurrent.detail, /无法继续使用/);
-  assert.equal(reauthCurrent.tone, "warn");
-
-  const limitedCurrent = autoSwitchStatusBanner({
-    hasCurrentAccount: true,
-    quotaSufficient: false,
-    globalSwitch: true,
-    daemonRunning: true,
-    currentStatus: "LIMITED",
-  });
-  assert.equal(limitedCurrent.title, "当前账号额度限流");
-  assert.match(limitedCurrent.detail, /将切换到其他可用账号/);
-  assert.equal(limitedCurrent.tone, "warn");
-
-  const syncFailedCurrent = autoSwitchStatusBanner({
-    hasCurrentAccount: true,
-    quotaSufficient: false,
-    globalSwitch: true,
-    daemonRunning: true,
-    currentStatus: "SYNC_FAILED",
-  });
-  assert.equal(syncFailedCurrent.title, "当前账号同步失败");
-  assert.match(syncFailedCurrent.detail, /查清后再判断是否切号/);
-  assert.equal(syncFailedCurrent.tone, "warn");
-});
-
 test("quota bar color turns green at 55 and red below 25", () => {
   const { quotaBarColor } = loadDesktopExports(bridge());
   assert.equal(quotaBarColor(null), "bg-fill-3");
@@ -1022,8 +858,8 @@ test("last check caption avoids repeating 检查 when no run has happened", () =
   assert.equal(formatLogTime(new Date(2026, 7, 16, 21, 53, 15)), "8月16日 21:53:15");
 });
 
-test("scope quota lines explain missing windows instead of showing dashes", () => {
-  const { quotaWindowSummary, quotaScopeCaption } = loadDesktopExports(bridge());
+test("quota window lines explain missing windows instead of showing dashes", () => {
+  const { quotaWindowSummary } = loadDesktopExports(bridge());
   const reauthAccount = {
     status: "SUSPENDED",
     fiveHourQuotaRemaining: 0,
@@ -1033,16 +869,12 @@ test("scope quota lines explain missing windows instead of showing dashes", () =
   };
   assert.equal(quotaWindowSummary("fiveHour", reauthAccount).text, "需重新授权后刷新");
   assert.equal(quotaWindowSummary("weekly", reauthAccount).text, "需重新授权后刷新");
-  assert.equal(quotaScopeCaption(reauthAccount).shared, "需重新授权后刷新");
-  assert.equal(quotaScopeCaption(reauthAccount).rows.length, 0);
 
   const bannedAccount = { ...reauthAccount, status: "BANNED" };
   assert.equal(quotaWindowSummary("fiveHour", bannedAccount).text, "已封号");
-  assert.equal(quotaScopeCaption(bannedAccount).shared, "已封号");
 
   const cursorBanned = { ...bannedAccount, quotaKind: "cursor", id: "cursor_one" };
   assert.equal(quotaWindowSummary("fiveHour", cursorBanned).text, "需重新授权后刷新");
-  assert.equal(quotaScopeCaption(cursorBanned).shared, "需重新授权后刷新");
 
   const cursorSyncFailed = {
     status: "SYNC_FAILED",
@@ -1100,7 +932,6 @@ test("scope quota lines explain missing windows instead of showing dashes", () =
 
   const limitedAccount = { ...reauthAccount, status: "LIMITED" };
   assert.equal(quotaWindowSummary("weekly", limitedAccount).text, "额度限流");
-  assert.equal(quotaScopeCaption(limitedAccount).shared, "额度限流");
 
   assert.equal(quotaWindowSummary("fiveHour", {
     status: "EXPIRED",
@@ -1124,11 +955,6 @@ test("scope quota lines explain missing windows instead of showing dashes", () =
   };
   assert.equal(quotaWindowSummary("fiveHour", missingFiveHour).text, "暂无此项");
   assert.equal(quotaWindowSummary("weekly", missingFiveHour).text, "41%");
-  assert.equal(quotaScopeCaption(missingFiveHour).shared, null);
-  assert.equal(
-    quotaScopeCaption(missingFiveHour).rows.map((row) => `${row.label}:${row.text}`).join("|"),
-    "5 小时:暂无此项|周额度:41%",
-  );
 
   const { averageRemainingCaption, isRedundantQuotaNotice } = loadDesktopExports(bridge());
   assert.equal(isRedundantQuotaNotice("该账号需要重新授权后才能使用。"), true);
@@ -1171,7 +997,7 @@ test("user-facing messages stay in Chinese", () => {
   }).outputText;
   const module = { exports: {} };
   vm.runInNewContext(compiled, { module, exports: module.exports }, { filename: sourcePath });
-  const { toUserMessage, logTypeLabel } = module.exports;
+  const { toUserMessage, toCursorUserMessage, toAntigravityUserMessage, logTypeLabel } = module.exports;
 
   assert.equal(
     toUserMessage("The target account requires reauthorization before it can be switched to"),
@@ -1187,9 +1013,6 @@ test("user-facing messages stay in Chinese", () => {
   assert.equal(toUserMessage("conflict"), "官方登录了另一个账号");
   assert.equal(toUserMessage("unknown"), "无法确认官方登录状态，自动同步已暂停");
   assert.equal(toUserMessage("missing_official_auth"), "官方 Codex 已退出");
-  assert.equal(toUserMessage("current_changed"), "当前账号已变化，本次未切");
-  assert.equal(toUserMessage("current_quota_refresh_failed"), "当前账号额度刷新失败，本次未切");
-  assert.equal(toUserMessage("no_quota_data"), "当前账号还没有额度数据，无法判断是否切换");
   assert.equal(toUserMessage("network unavailable"), "额度暂时没刷到，登录还在。请稍后再试。");
   assert.equal(
     toUserMessage("Codex 官方登录写入后核对失败，没有切到目标账号"),
@@ -1235,7 +1058,7 @@ test("user-facing messages stay in Chinese", () => {
   assert.equal(toUserMessage("Token refresh failed: 响应无 access_token"), "额度暂时没刷到，登录还在。请稍后再试。");
   assert.equal(toUserMessage("Token refresh failed"), "令牌刷新失败");
   assert.equal(toUserMessage("HTTP 500"), "服务暂时不可用，请稍后刷新额度");
-  assert.equal(toUserMessage("disabled"), "全局开关已关闭，不会切号");
+  assert.equal(toUserMessage("stopped"), "已停止");
   assert.equal(toUserMessage("已从管理器中删除账号 a@b.com。"), "已从管理器中删除账号 a@b.com。");
   assert.equal(toUserMessage("SomeUnknownEnglishFailureXYZ"), "操作失败，请稍后重试");
   assert.equal(toUserMessage("Token 已过期且刷新失败"), "令牌已过期且刷新失败，请重新授权");
@@ -1245,11 +1068,13 @@ test("user-facing messages stay in Chinese", () => {
   assert.equal(toUserMessage("cursor_session_missing"), "这次没查清 Cursor 额度，请稍后重试");
   assert.equal(toUserMessage("Cursor session cookie could not be built"), "这次没查清 Cursor 额度，请稍后重试");
   assert.equal(toUserMessage("Cursor usage response was not JSON"), "这次没查清 Cursor 额度，请稍后重试");
-  assert.equal(toUserMessage("invalid_usage_json"), "这次没查清 Cursor 额度，请稍后重试");
+  // A bare code has no product context; the product wrappers add it.
+  assert.equal(toUserMessage("invalid_usage_json"), "这次没查清额度，请稍后重试");
+  assert.equal(toCursorUserMessage("invalid_usage_json"), "这次没查清 Cursor 额度，请稍后重试");
+  assert.equal(toAntigravityUserMessage("invalid_usage_json"), "这次没查清 Antigravity 额度，请稍后重试");
   assert.equal(toUserMessage("官方 Cursor 还在占用登录库，请关掉后再切"), "官方 Cursor 还在占用登录库，请关掉后再切");
   assert.equal(toUserMessage("cursor_vscdb_busy"), "官方 Cursor 还在占用登录库，请关掉后再切");
   assert.equal(toUserMessage("SQLITE_BUSY: database is locked"), "登录库正被占用，请关掉后再试");
-  const { toCursorUserMessage } = module.exports;
   assert.equal(toCursorUserMessage("HTTP 401 account_disabled"), "Cursor 登录已失效，请重新授权");
   assert.equal(toCursorUserMessage("HTTP 401 account_deactivated"), "Cursor 登录已失效，请重新授权");
   assert.equal(
@@ -2284,10 +2109,10 @@ test("batch token check failures use product-specific Chinese copy", () => {
 test("switch and auth failure toasts go through Chinese user messages", () => {
   const app = fs.readFileSync(path.join(projectRoot, "src", "renderer-react", "App.tsx"), "utf8");
   assert.match(app, /status\.status === 'error' \|\| status\.status === 'expired'[\s\S]*toUserMessage\(status\.message/);
-  assert.match(app, /performAccountSwitch[\s\S]*toUserMessage\(error instanceof Error \? error\.message : String\(error\)\)/);
-  assert.match(app, /handleToggleDaemon[\s\S]*toUserMessage\(error instanceof Error \? error\.message : String\(error\)\)/);
-  assert.match(app, /handleRefreshToken[\s\S]*toUserMessage\(error instanceof Error \? error\.message : String\(error\)\)/);
-  assert.equal([...app.matchAll(/toUserMessage\(error instanceof Error \? error\.message : String\(error\)\)/g)].length >= 8, true);
+  assert.match(app, /performAccountSwitch[\s\S]*toUserMessage\(error\)/);
+  assert.match(app, /handleToggleDaemon[\s\S]*toUserMessage\(error\)/);
+  assert.match(app, /handleRefreshToken[\s\S]*toUserMessage\(error\)/);
+  assert.equal([...app.matchAll(/toUserMessage\(error\)/g)].length >= 8, true);
 });
 
 test("cursor switch UI flips current without waiting on official sync", () => {

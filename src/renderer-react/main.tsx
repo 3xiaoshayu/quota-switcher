@@ -8,6 +8,7 @@ import '@fontsource/inter/latin-600.css';
 import '@fontsource/inter/latin-700.css';
 import '@fontsource/inter/latin-800.css';
 import './index.css';
+import AppErrorBoundary, { RendererCrashScreen } from './components/AppErrorBoundary';
 
 const root = createRoot(document.getElementById('root')!);
 const isFloat = window.location.hash.replace(/^#\/?/, '') === 'float';
@@ -19,7 +20,9 @@ async function boot() {
     const { default: FloatLens } = await import('./components/FloatLens');
     root.render(
       <StrictMode>
-        <FloatLens />
+        <AppErrorBoundary>
+          <FloatLens />
+        </AppErrorBoundary>
       </StrictMode>,
     );
     return;
@@ -27,9 +30,16 @@ async function boot() {
   const { default: App } = await import('./App');
   root.render(
     <StrictMode>
-      <App />
+      <AppErrorBoundary>
+        <App />
+      </AppErrorBoundary>
     </StrictMode>,
   );
 }
 
-void boot();
+// A failed chunk load (for example a half-written renderer-dist during an
+// update) must not leave a blank window either.
+boot().catch((error: unknown) => {
+  console.error('Renderer failed to boot', error);
+  root.render(<RendererCrashScreen message={error instanceof Error ? error.message : String(error)} />);
+});

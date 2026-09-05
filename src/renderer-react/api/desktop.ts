@@ -1,8 +1,7 @@
 import {
   AccountQuota,
-  AutoSwitchRunResult,
   DesktopAppInfo,
-  DesktopAutoSwitchConfig,
+  DesktopDaemonConfig,
   DesktopAuthState,
   DesktopAntigravityStatus,
   DesktopCodexStatus,
@@ -19,7 +18,20 @@ function isManagedProduct(value: string | null | undefined): boolean {
   return value === 'cursor' || value === 'antigravity';
 }
 
-type ApiResponse<T> = { success: true; data: T } | { success: false; error?: string };
+type ApiResponse<T> = { success: true; data: T } | { success: false; error?: string; code?: string | null };
+
+// The main process answers failures with a stable `code` next to the message.
+// Keeping it on the thrown error lets copy be chosen by code instead of by
+// matching English or Chinese message fragments.
+export class DesktopError extends Error {
+  code: string | null;
+
+  constructor(message: string, code: string | null = null) {
+    super(message);
+    this.name = 'DesktopError';
+    this.code = code;
+  }
+}
 
 interface DesktopQuota {
   hourly_percentage?: number | null;
@@ -115,6 +127,7 @@ type DesktopTokenRefreshResult = {
   reauthRequired?: boolean;
   gen?: number;
   error?: string;
+  code?: string | null;
 };
 
 type DesktopTokenRefreshAllResult = {
@@ -162,7 +175,7 @@ type DesktopSnapshotPayload = {
     lastError?: string | null;
     pausedReason?: string | null;
   };
-  config?: DesktopAutoSwitchConfig | null;
+  config?: DesktopDaemonConfig | null;
   appInfo?: DesktopAppInfo | null;
   oauthStatus?: DesktopOAuthStatus | null;
   cursorOAuthStatus?: DesktopOAuthStatus | null;
@@ -262,15 +275,13 @@ interface DesktopBridge {
   }>>>;
   refreshToken: (id: string) => Promise<ApiResponse<DesktopTokenRefreshResult>>;
   refreshAllTokens: (force?: boolean) => Promise<ApiResponse<DesktopTokenRefreshAllResult>>;
-  getAutoSwitchConfig: () => Promise<ApiResponse<DesktopAutoSwitchConfig>>;
-  saveAutoSwitchConfig: (cfg: DesktopAutoSwitchConfig) => Promise<ApiResponse<boolean>>;
-  runAutoSwitchTick: () => Promise<ApiResponse<AutoSwitchRunResult>>;
+  getDaemonConfig: () => Promise<ApiResponse<DesktopDaemonConfig>>;
+  saveDaemonConfig: (cfg: DesktopDaemonConfig) => Promise<ApiResponse<boolean>>;
   startDaemon: () => Promise<ApiResponse<string>>;
   stopDaemon: () => Promise<ApiResponse<string>>;
   getDaemonStatus: () => Promise<ApiResponse<DesktopDaemonStatus>>;
   onDaemonTick?: (cb: (payload: unknown) => void) => () => void;
   onDaemonError?: (cb: (payload: { message?: string }) => void) => () => void;
-  onAutoSwitch?: (cb: (payload: AutoSwitchRunResult) => void) => () => void;
   onUpdateStatus?: (cb: (payload: DesktopUpdateStatus) => void) => () => void;
   onAuthConflict?: (cb: (payload: DesktopAuthState) => void) => () => void;
   onQuotaUpdated?: (cb: (payload: { product?: ProductKind; account?: DesktopAccount | null; quota?: DesktopQuota | null }) => void) => () => void;
@@ -290,7 +301,7 @@ export interface DashboardState {
   currentAccount: DesktopAccount | null;
   daemonRunning: boolean;
   daemonSyncInterval: number;
-  config: DesktopAutoSwitchConfig;
+  config: DesktopDaemonConfig;
   appInfo: DesktopAppInfo | null;
   codexStatus: DesktopCodexStatus | null;
   updateStatus: DesktopUpdateStatus | null;
@@ -326,7 +337,8 @@ function bridge(): DesktopBridge {
 
 export function expectData<T>(response: ApiResponse<T>, label: string): T {
   if (!response || response.success !== true) {
-    throw new Error(response?.error || `${label} failed`);
+    const code = response && typeof response.code === 'string' ? response.code : null;
+    throw new DesktopError(response?.error || `${label} failed`, code);
   }
   return response.data;
 }
@@ -341,6 +353,7 @@ async function captureResponse<T>(
     return {
       success: false,
       error: error instanceof Error ? error.message : `${label} failed`,
+      code: error instanceof DesktopError ? error.code : null,
     };
   }
 }
@@ -371,13 +384,9 @@ function optionalData<T>(response: ApiResponse<T>, fallback: T): T {
   return response?.success === true ? response.data : fallback;
 }
 
-function defaultConfig(): DesktopAutoSwitchConfig {
+function defaultConfig(): DesktopDaemonConfig {
   return {
     enabled: false,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: 'all',
-    selected_account_ids: [],
     sync_interval_minutes: DEFAULT_SYNC_INTERVAL_MINUTES,
   };
 }
@@ -444,7 +453,7 @@ export function resolveAuthStateAfterSnapshot(
   return next;
 }
 
-function clampSyncIntervalMinutes(value: unknown): number {
+export function clampSyncIntervalMinutes(value: unknown): number {
   const number = Number(value);
   if (!Number.isFinite(number)) return DEFAULT_SYNC_INTERVAL_MINUTES;
   return Math.min(60, Math.max(1, Math.round(number)));
@@ -459,7 +468,7 @@ function dashboardFromSnapshot(data: DesktopSnapshotPayload): DashboardState {
     ? data.authState
     : unverifiedAuthState(data.authError || undefined);
   return {
-    accounts: rawAccounts.map((account) => mapAccountForUi(account, currentAccount, config)),
+    accounts: rawAccounts.map((account) => mapAccountForUi(account, currentAccount)),
     rawAccounts,
     currentAccount,
     daemonRunning: !!daemon?.running,
@@ -864,10 +873,12 @@ function cursorPriorityForUi(account: DesktopAccount): AccountQuota['priority'] 
   return 'Normal';
 }
 
-function statusForUi(
-  account: DesktopAccount,
-  config: DesktopAutoSwitchConfig,
-): AccountQuota['status'] {
+// Card colouring thresholds. These used to come from the auto-switch config;
+// they are fixed now so a low 5-hour window still reads as "所剩不多".
+export const LOW_QUOTA_PERCENT = 20;
+export const WEEKLY_WARNING_PERCENT = 30;
+
+function statusForUi(account: DesktopAccount): AccountQuota['status'] {
   if (account.banned || account.probe?.status === 'banned') return 'BANNED';
   if (account.requires_reauth) return 'SUSPENDED';
   const tokenUnusable = (account.token_status?.expired || account.token_status?.accessAvailable === false)
@@ -895,8 +906,8 @@ function statusForUi(
     return 'SYNC_FAILED';
   }
   if (hourly === 0 || weekly === 0) return 'EXPIRED';
-  if (hourly !== null && hourly <= Number(config.primary_threshold ?? 20)) return 'LOW_QUOTA';
-  if (weekly !== null && weekly <= Number(config.secondary_threshold ?? 30)) return 'WARNING';
+  if (hourly !== null && hourly <= LOW_QUOTA_PERCENT) return 'LOW_QUOTA';
+  if (weekly !== null && weekly <= WEEKLY_WARNING_PERCENT) return 'WARNING';
   if (!account.quota) return 'READY';
   return 'ACTIVE';
 }
@@ -936,24 +947,10 @@ export function canRefreshQuota(account: Pick<AccountQuota, 'status' | 'leftover
   return true;
 }
 
-export function canJoinAutoSwitch(account: Pick<AccountQuota, 'status' | 'tokenAccessAvailable'>): boolean {
+export function canSwitchAccount(account: Pick<AccountQuota, 'status' | 'tokenAccessAvailable'>): boolean {
   if (account.status === 'BANNED' || account.status === 'SUSPENDED') return false;
   if (account.tokenAccessAvailable === false) return false;
   return true;
-}
-
-export function canSwitchAccount(account: Pick<AccountQuota, 'status'>): boolean {
-  return canJoinAutoSwitch(account);
-}
-
-export function pruneAutoSwitchAccountIds(ids: string[], accounts: AccountQuota[]): string[] {
-  const allowed = new Set(accounts.filter(canJoinAutoSwitch).map((account) => account.id));
-  return ids.filter((id) => allowed.has(id));
-}
-
-export function selectedAccountIdsEqual(left: string[], right: string[]): boolean {
-  if (left.length !== right.length) return false;
-  return left.every((id, index) => id === right[index]);
 }
 
 export function summarizeRefreshAllResults(results: Array<{
@@ -1098,7 +1095,6 @@ export function withCurrentFlag<T extends { id: string; isCurrent?: boolean }>(
 export function mapAccountForUi(
   account: DesktopAccount,
   currentAccount: DesktopAccount | null,
-  config: DesktopAutoSwitchConfig,
 ): AccountQuota {
   const hourlyRemaining = clampPercent(account.quota?.hourly_remaining_percentage ?? account.quota?.hourly_percentage);
   const weeklyRemaining = clampPercent(account.quota?.weekly_remaining_percentage ?? account.quota?.weekly_percentage);
@@ -1108,7 +1104,7 @@ export function mapAccountForUi(
   const quotaError = account.quota_error?.message || account.quota_error?.code
     ? toUserMessage(account.quota_error?.message || account.quota_error?.code)
     : null;
-  const status = statusForUi(account, config);
+  const status = statusForUi(account);
   const tokenStatus = account.token_status || {};
   const leftoverUsable = leftoverAccessUsableFor(account, tokenStatus);
   const leftoverRejected = !leftoverUsable
@@ -1561,109 +1557,6 @@ export function quotaBarsForAccount(account: AccountQuota): Array<{ key: string;
   ];
 }
 
-export function isCurrentQuotaSufficient(
-  account: AccountQuota | null | undefined,
-  fiveHourThreshold: number,
-  weeklyThreshold: number,
-): boolean {
-  if (!account) return false;
-  if (account.status === 'BANNED' || account.status === 'SUSPENDED' || account.status === 'SYNC_FAILED' || account.status === 'LIMITED') {
-    return false;
-  }
-  const hourlyPresent = account.fiveHourQuotaPresent !== false;
-  const weeklyPresent = account.weeklyQuotaPresent !== false;
-  const hourly = hourlyPresent && account.fiveHourQuotaRemaining != null
-    ? Number(account.fiveHourQuotaRemaining)
-    : null;
-  const weekly = weeklyPresent && account.weeklyQuotaRemaining != null
-    ? Number(account.weeklyQuotaRemaining)
-    : null;
-  if (hourly == null && weekly == null) return false;
-  if (hourly != null && Number.isFinite(hourly) && hourly < fiveHourThreshold) return false;
-  if (weekly != null && Number.isFinite(weekly) && weekly < weeklyThreshold) return false;
-  return true;
-}
-
-export function autoSwitchStatusBanner(options: {
-  hasCurrentAccount: boolean;
-  quotaSufficient: boolean;
-  globalSwitch: boolean;
-  daemonRunning: boolean;
-  pausedReason?: string | null;
-  currentStatus?: AccountQuota['status'] | null;
-}): { title: string; detail: string; tone: 'ok' | 'warn' | 'neutral' } {
-  if (!options.hasCurrentAccount) {
-    return {
-      title: '未选定当前账号',
-      detail: '请先在账号管理中指定当前账号。',
-      tone: 'neutral',
-    };
-  }
-  if (!options.globalSwitch) {
-    return {
-      title: '自动切号未启用',
-      detail: '全局开关已关闭。启用开关并启动 Daemon 后，将在额度低于阈值时切换账号。',
-      tone: 'neutral',
-    };
-  }
-  if (!options.daemonRunning) {
-    return {
-      title: '自动切号未运行',
-      detail: '全局开关已启用，但 Daemon 已停止，不会自动切换账号。',
-      tone: 'warn',
-    };
-  }
-  const paused = String(options.pausedReason || '').trim();
-  if (paused) {
-    const detail = toUserMessage(paused);
-    return {
-      title: '自动切号已暂停',
-      detail: /[。.!！]$/.test(detail) ? detail : `${detail}。`,
-      tone: 'warn',
-    };
-  }
-  if (options.currentStatus === 'BANNED') {
-    return {
-      title: '当前账号已封号',
-      detail: '账号已封号，无法继续使用，将切换到其他可用账号。',
-      tone: 'warn',
-    };
-  }
-  if (options.currentStatus === 'SUSPENDED') {
-    return {
-      title: '当前账号需要重新授权',
-      detail: '当前账号无法继续使用，将切换到其他可用账号。',
-      tone: 'warn',
-    };
-  }
-  if (options.currentStatus === 'LIMITED') {
-    return {
-      title: '当前账号额度限流',
-      detail: '额度已达上限或触发限流，将切换到其他可用账号。',
-      tone: 'warn',
-    };
-  }
-  if (options.currentStatus === 'SYNC_FAILED') {
-    return {
-      title: '当前账号同步失败',
-      detail: '额度同步失败，查清后再判断是否切号。',
-      tone: 'warn',
-    };
-  }
-  if (options.quotaSufficient) {
-    return {
-      title: '额度充足，暂不切换',
-      detail: '自动切号已启用。额度低于阈值后将自动切换账号。',
-      tone: 'ok',
-    };
-  }
-  return {
-    title: '当前额度偏低',
-    detail: '自动切号已启用，将在下次检查时尝试切换账号。',
-    tone: 'warn',
-  };
-}
-
 export function hideStaleQuota(account: Pick<AccountQuota, 'status' | 'leftoverAccessUsable' | 'tokenExpired' | 'quotaKind' | 'id'> | null | undefined): boolean {
   if (!account) return false;
   if (isAntigravityAccount(account) && account.tokenExpired === true && account.leftoverAccessUsable !== true) {
@@ -1786,19 +1679,6 @@ export function cursorEmptyQuotaText(account: Pick<AccountQuota, 'status' | 'war
   return '暂无此项';
 }
 
-export function quotaScopeCaption(account: AccountQuota): {
-  shared: string | null;
-  rows: Array<{ label: string; text: string }>;
-} {
-  const fiveHour = quotaWindowSummary('fiveHour', account);
-  const weekly = quotaWindowSummary('weekly', account);
-  const sameReason = fiveHour.text === weekly.text && !/^\d+%$/.test(fiveHour.text);
-  if (sameReason) {
-    return { shared: fiveHour.text, rows: [] };
-  }
-  return { shared: null, rows: [fiveHour, weekly] };
-}
-
 export function needsQuotaAutoSync(account: AccountQuota, staleMs = QUOTA_AUTO_SYNC_STALE_MS): boolean {
   if (!canRefreshQuota(account)) return false;
   const retryAt = toDate(account.quotaNextRetryAt);
@@ -1857,7 +1737,7 @@ export const desktopApi = {
       captureResponse(() => api.listAccounts(), 'Read accounts'),
       captureResponse(() => api.getCurrentAccount(), 'Read current account'),
       captureResponse(() => api.getDaemonStatus(), 'Read daemon status'),
-      captureResponse(() => api.getAutoSwitchConfig(), 'Read auto-switch config'),
+      captureResponse(() => api.getDaemonConfig(), 'Read daemon config'),
       captureResponse(() => api.getAppInfo(), 'Read app info'),
       captureResponse(() => api.getOAuthStatus(), 'Read OAuth status'),
     ]);
@@ -1882,7 +1762,7 @@ export const desktopApi = {
       : unverifiedAuthState(authStateResponse.error);
 
     return {
-      accounts: rawAccounts.map((account) => mapAccountForUi(account, currentAccount, config)),
+      accounts: rawAccounts.map((account) => mapAccountForUi(account, currentAccount)),
       rawAccounts,
       currentAccount,
       daemonRunning: !!daemon?.running,
@@ -1971,16 +1851,14 @@ export const desktopApi = {
       };
     }
     const api = bridge();
-    const [accountsResponse, currentResponse, configResponse] = await Promise.all([
+    const [accountsResponse, currentResponse] = await Promise.all([
       captureResponse(() => api.listAccounts(), 'Read accounts'),
       captureResponse(() => api.getCurrentAccount(), 'Read current account'),
-      captureResponse(() => api.getAutoSwitchConfig(), 'Read auto-switch config'),
     ]);
-    const config = optionalData(configResponse, defaultConfig()) || defaultConfig();
     const rawAccounts = expectData(accountsResponse, 'Read accounts') || [];
     const currentAccount = optionalData(currentResponse, null);
     return {
-      accounts: rawAccounts.map((account) => mapAccountForUi(account, currentAccount, config)),
+      accounts: rawAccounts.map((account) => mapAccountForUi(account, currentAccount)),
       currentAccount,
     };
   },
@@ -1995,7 +1873,7 @@ export const desktopApi = {
 
   async refreshToken(id: string) {
     const result = expectData(await bridge().refreshToken(id), 'Refresh token');
-    if (result && result.ok === false && !result.reauthRequired) throw new Error(result.error || 'Token refresh failed');
+    if (result && result.ok === false && !result.reauthRequired) throw new DesktopError(result.error || 'Token refresh failed', typeof result.code === 'string' ? result.code : 'token_refresh_failed');
     return result;
   },
 
@@ -2039,12 +1917,8 @@ export const desktopApi = {
     return expectData(await bridge().switchAccount(id), 'Switch account');
   },
 
-  async saveAutoSwitchConfig(config: DesktopAutoSwitchConfig) {
-    return expectData(await bridge().saveAutoSwitchConfig(config), 'Save auto-switch config');
-  },
-
-  async runAutoSwitchTick() {
-    return expectData(await bridge().runAutoSwitchTick(), 'Run auto-switch check');
+  async saveDaemonConfig(config: DesktopDaemonConfig) {
+    return expectData(await bridge().saveDaemonConfig(config), 'Save daemon config');
   },
 
   async startDaemon() {
@@ -2101,7 +1975,7 @@ export const desktopApi = {
 
   async refreshCursorToken(id: string) {
     const result = expectData(await bridge().refreshCursorToken(id), 'Refresh Cursor token');
-    if (result && result.ok === false && !result.reauthRequired) throw new Error(result.error || 'Token refresh failed');
+    if (result && result.ok === false && !result.reauthRequired) throw new DesktopError(result.error || 'Token refresh failed', typeof result.code === 'string' ? result.code : 'token_refresh_failed');
     return result;
   },
 
@@ -2151,7 +2025,7 @@ export const desktopApi = {
 
   async refreshAntigravityToken(id: string) {
     const result = expectData(await bridge().refreshAntigravityToken(id), 'Refresh Antigravity token');
-    if (result && result.ok === false && !result.reauthRequired) throw new Error(result.error || 'Token refresh failed');
+    if (result && result.ok === false && !result.reauthRequired) throw new DesktopError(result.error || 'Token refresh failed', typeof result.code === 'string' ? result.code : 'token_refresh_failed');
     return result;
   },
 
@@ -2218,7 +2092,6 @@ export const desktopApi = {
   subscribe(events: {
     onDaemonTick?: (payload?: { result?: { authState?: DesktopAuthState } }) => void;
     onDaemonError?: (message: string) => void;
-    onAutoSwitch?: (result: AutoSwitchRunResult) => void;
     onUpdateStatus?: (status: DesktopUpdateStatus) => void;
     onAuthConflict?: (state: DesktopAuthState) => void;
     onFloatProduct?: (product: ProductKind) => void;
@@ -2230,7 +2103,6 @@ export const desktopApi = {
     const cleanups = [
       api.onDaemonTick?.((payload) => events.onDaemonTick?.(payload as { result?: { authState?: DesktopAuthState } } | undefined)),
       api.onDaemonError?.((payload) => events.onDaemonError?.(toUserMessage(payload?.message || 'Daemon error'))),
-      api.onAutoSwitch?.((payload) => events.onAutoSwitch?.(payload)),
       api.onUpdateStatus?.((payload) => events.onUpdateStatus?.(payload)),
       api.onAuthConflict?.((payload) => events.onAuthConflict?.(payload)),
       api.onFloatProduct?.((product) => events.onFloatProduct?.(product)),

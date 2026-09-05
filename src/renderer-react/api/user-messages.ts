@@ -1,5 +1,60 @@
 const FALLBACK = '操作失败，请稍后重试'
 
+// Copy chosen by the stable error code the engine or main process attached.
+// This is consulted before any message matching, so wording changes in the
+// engine cannot silently turn a specific message into the fallback. Every
+// code the engine produces must have an entry (test/error-codes.test.js).
+export const CODE_MESSAGES: Readonly<Record<string, string>> = {
+  account_banned: '账号已封号，无法继续使用。',
+  account_not_found: '账号不存在',
+  antigravity_app_path_not_found: '没有找到官方 Antigravity IDE，请先安装后再切号',
+  antigravity_cloudcode_timeout: '这次没查清 Antigravity 额度，请稍后重试',
+  antigravity_oauth_client_missing: '没有找到官方 Antigravity 的授权配置，网页授权暂时不可用。',
+  antigravity_process_enumeration_failed: '无法读取官方 Antigravity IDE 进程',
+  antigravity_process_still_running: '官方 Antigravity IDE 没能退出，请手动关掉后再切',
+  antigravity_session_missing: '这次没查清 Antigravity 额度，请稍后重试',
+  antigravity_switch_verify_failed: '官方登录写入后核对失败，没有切到目标账号',
+  antigravity_vscdb_busy: '官方 Antigravity IDE 还在占用登录库，请关掉后再切',
+  antigravity_vscdb_open_failed: '官方 Antigravity IDE 登录库无法打开',
+  auth_conflict: '官方登录了另一个账号',
+  codex_process_enumeration_failed: '无法读取官方 Codex 进程',
+  codex_switch_verify_failed: '官方登录写入后核对失败，没有切到目标账号',
+  credential_decrypt_failed: '账号凭据无法解密，请重新授权这个账号',
+  cursor_app_path_not_found: '没有找到官方 Cursor，请先安装后再切号',
+  cursor_process_enumeration_failed: '无法读取官方 Cursor 进程',
+  cursor_process_still_running: '官方 Cursor 没能退出，请手动关掉后再切',
+  cursor_session_missing: '这次没查清 Cursor 额度，请稍后重试',
+  cursor_switch_verify_failed: '官方登录写入后核对失败，没有切到目标账号',
+  cursor_vscdb_busy: '官方 Cursor 还在占用登录库，请关掉后再切',
+  cursor_vscdb_open_failed: '官方 Cursor 登录库无法打开',
+  engine_worker_unknown_op: '后台服务不支持这个操作，请更新软件',
+  invalid_usage_json: '这次没查清额度，请稍后重试',
+  missing_refresh_token: '该账号没有刷新令牌，请重新授权',
+  oauth_cancelled: '授权已取消',
+  oauth_denied: '你在浏览器里拒绝了授权',
+  oauth_port_unavailable: '授权回调端口被占用，请关闭后重试',
+  oauth_state_mismatch: '这次授权和当前等待的对不上，请关闭页面后重新点一次网页授权',
+  oauth_timeout: '授权超时，请重新点一次',
+  probe_failed: '额度暂时没刷到，登录还在。请稍后再试。',
+  proxy_gateway: '代理没有转发成功，请检查代理后重试',
+  quota_retry_pending: '额度刷新稍后会自动重试',
+  reauthorization_required: '该账号需要重新授权后才能继续操作',
+  response_decode_failed: '额度暂时没刷到，登录还在。请稍后再试。',
+  response_too_large: '额度暂时没刷到，登录还在。请稍后再试。',
+  should_logout: '登录已失效，请重新授权',
+  token_refresh_failed: '令牌刷新失败',
+  unsupported_url: '这个链接不能在外部打开',
+  untrusted_sender: '请求来源不受信任，已拒绝',
+}
+
+type CodedError = { code?: unknown; message?: unknown }
+
+export function errorCode(raw: unknown): string | null {
+  if (!raw || typeof raw !== 'object') return null
+  const code = (raw as CodedError).code
+  return typeof code === 'string' && code ? code : null
+}
+
 const RULES: Array<{ test: RegExp; to: string }> = [
   { test: /is banned and cannot refresh quotas/i, to: '账号已封号，无法刷新额度' },
   { test: /is banned and cannot be switched/i, to: '账号已封号，无法切换' },
@@ -23,9 +78,6 @@ const RULES: Array<{ test: RegExp; to: string }> = [
   { test: /^missing_official_auth$/i, to: '官方 Codex 已退出' },
   { test: /^unsupported_official_auth$/i, to: '官方登录无法由本管理器接管' },
   { test: /^unmanaged_official_auth$/i, to: '官方 Codex 已登录，尚未纳入管理' },
-  { test: /^recently_switched$/i, to: '刚切过号，本次不自动再切' },
-  { test: /^oauth_pending$/i, to: '已有授权正在进行，本次不自动切号' },
-  { test: /^switch_verify_failed$/i, to: '官方登录写入后核对失败，没有切到目标账号' },
   { test: /Quota authorization could not be repaired.{0,120}HTTP\s+5\d\d/i, to: '服务暂时不可用，请稍后刷新额度' },
   { test: /Quota authorization could not be repaired/i, to: '额度授权无法修复，刷新令牌已失效，请重新授权' },
   { test: /refresh_token_invalidated|invalid_refresh_token|invalid_grant/i, to: '刷新令牌已失效，请重新授权' },
@@ -95,13 +147,7 @@ const RULES: Array<{ test: RegExp; to: string }> = [
   { test: /account_deactivated|account_deleted|workspace_deactivated|deactivated_workspace|deactivated_user/i, to: '账号已封号，无法继续使用。' },
   { test: /^HTTP \d+/i, to: '服务暂时不可用，请稍后刷新额度' },
   { test: /^current_not_found$/i, to: '没有当前账号' },
-  { test: /^current_changed$/i, to: '当前账号已变化，本次未切' },
-  { test: /^no_best_candidate$/i, to: '没有更合适的账号可切' },
-  { test: /^candidate_not_found$/i, to: '目标账号已不存在，本次未切' },
-  { test: /^current_quota_refresh_failed$/i, to: '当前账号额度刷新失败，本次未切' },
-  { test: /^no_quota_data$/i, to: '当前账号还没有额度数据，无法判断是否切换' },
   { test: /^stopped$/i, to: '已停止' },
-  { test: /^disabled$/i, to: '全局开关已关闭，不会切号' },
   { test: /^Daemon error$/i, to: '后台检查失败，请稍后重试' },
   { test: /EISDIR|illegal operation on a directory/i, to: '登录文件暂时读不到，请稍后重试' },
   { test: /EPERM|EACCES|operation not permitted/i, to: '正在确认官方登录，稍后会自动刷新' },
@@ -131,9 +177,24 @@ export function isQuotaTemporaryFailure(text: string): boolean {
     || /服务暂时不可用/.test(text)
 }
 
-export function toUserMessage(raw: unknown): string {
-  const text = String(raw || '').trim()
-  if (!text) return FALLBACK
+// These codes cover several situations whose messages say which one it is
+// ("before it can be switched" vs "before quotas can be refreshed"); keep the
+// more specific message copy when it exists and is still about the same thing.
+const MESSAGE_REFINED_CODES: Readonly<Record<string, RegExp>> = {
+  reauthorization_required: /重新授权/,
+  account_banned: /封号/,
+}
+
+function messageText(raw: unknown): string {
+  if (raw && typeof raw === 'object') {
+    const message = (raw as CodedError).message
+    return String(message ?? '').trim()
+  }
+  return String(raw ?? '').trim()
+}
+
+function translateText(text: string): string | null {
+  if (!text) return null
   if (isQuotaNetworkFailure(text)) return NETWORK_FAILURE
   for (const rule of RULES) {
     if (rule.test.test(text)) return rule.to
@@ -141,12 +202,31 @@ export function toUserMessage(raw: unknown): string {
   if (hasChinese(text) && !/Electron:|Node:|net::|ETIMEDOUT|ERR_CONNECTION/i.test(text)) {
     return text
   }
-  return FALLBACK
+  return null
+}
+
+// Accepts an Error (ideally a DesktopError carrying `code`), a bare code
+// string, or a raw message. Codes win over message text.
+export function toUserMessage(raw: unknown): string {
+  const code = errorCode(raw)
+  const text = messageText(raw)
+  if (code && CODE_MESSAGES[code]) {
+    const sameTopic = MESSAGE_REFINED_CODES[code]
+    if (sameTopic) {
+      const refined = translateText(text)
+      if (refined && sameTopic.test(refined)) return refined
+    }
+    return CODE_MESSAGES[code]
+  }
+  if (!text) return FALLBACK
+  if (!code && CODE_MESSAGES[text]) return CODE_MESSAGES[text]
+  return translateText(text) ?? FALLBACK
 }
 
 export function toCursorUserMessage(raw: unknown): string {
   const text = toUserMessage(raw)
   if (text.includes('已封号')) return 'Cursor 登录已失效，请重新授权'
+  if (text.includes('没查清') && !text.includes('Cursor')) return '这次没查清 Cursor 额度，请稍后重试'
   return text
 }
 

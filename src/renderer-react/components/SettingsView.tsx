@@ -230,17 +230,17 @@ export default function SettingsView({
                 </div>
                 <div className="flex flex-col text-left min-w-0">
                   <h3 className="font-bold text-label text-sm tracking-wide font-sans">Daemon 服务</h3>
-                  <span className="text-[11px] text-label-2 mt-0.5">只做 Codex 续登录和自动切号</span>
+                  <span className="text-[11px] text-label-2 mt-0.5">只做 Codex 续登录和额度同步</span>
                   <div className="mt-2.5 flex flex-wrap gap-1.5" id="daemon-product-chips">
                     {PRODUCTS.map((item) => (
                       <span
                         className={`px-2 py-0.5 rounded-md text-[10px] font-semibold ${
-                          item.features.autoSwitch ? 'bg-fill-2 text-label-2' : 'bg-fill text-label-3'
+                          item.features.officialAuthSync ? 'bg-fill-2 text-label-2' : 'bg-fill text-label-3'
                         }`}
                         id={`daemon-chip-${item.id}`}
                         key={item.id}
                       >
-                        {item.features.autoSwitch ? `${item.label} 续登录 · 切号` : `${item.label} 暂不参与`}
+                        {item.features.officialAuthSync ? `${item.label} 续登录 · 额度` : `${item.label} 暂不参与`}
                       </span>
                     ))}
                   </div>
@@ -289,9 +289,6 @@ export default function SettingsView({
                 </div>
                 {daemonState.status === 'Running' && daemonState.pausedReason && (
                   <span className="block text-[10px] text-warn">已暂停：{toUserMessage(daemonState.pausedReason)}</span>
-                )}
-                {daemonState.status !== 'Running' && settings.globalSwitch && (
-                  <span className="block text-[10px] text-warn">自动切号已启用，但 Daemon 已停止</span>
                 )}
                 {daemonState.lastChecked ? (
                   <span className="block text-[10px] leading-4 text-label-3">
@@ -359,6 +356,16 @@ export default function SettingsView({
                     );
                   })}
                 </div>
+                {PRODUCTS.filter((item) => settings.formatDrift?.[item.id]).map((item) => (
+                  <span
+                    className="block mt-2 text-[10px] leading-4 text-warn whitespace-normal"
+                    id={`client-format-drift-${item.id}`}
+                    key={`drift-${item.id}`}
+                    title={settings.formatDrift?.[item.id]}
+                  >
+                    官方 {item.label} 的登录格式变了，切号和同步可能失效，请更新软件。{settings.formatDrift?.[item.id]}
+                  </span>
+                ))}
               </div>
             </div>
 

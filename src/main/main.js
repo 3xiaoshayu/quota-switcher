@@ -209,12 +209,8 @@ function startApplication() {
     win.loadFile(path.join(__dirname, "..", "renderer-dist", "index.html"))
         .catch((error) => console.error("Failed to load renderer:", error));
 
-    // 自动启动守护进程（如果配置启用）
     try {
-        const cfg = eng.loadAutoSwitchCfg();
-        if (cfg && cfg.enabled) {
-            daemon.startDaemon();
-        }
+        daemon.restoreDaemonFromConfig();
     } catch (error) {
         console.error("Failed to start daemon:", error);
     }

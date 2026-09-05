@@ -975,7 +975,11 @@ test("token refresh IPC does not convert an engine failure into success", () => 
   const { tokenRefreshResponse } = require("../src/main/ipc-handlers");
   assert.deepEqual(
     tokenRefreshResponse({ ok: false, error: "HTTP 403 unsupported_country_region_territory" }),
-    { success: false, error: "HTTP 403 unsupported_country_region_territory" },
+    { success: false, error: "HTTP 403 unsupported_country_region_territory", code: "token_refresh_failed" },
+  );
+  assert.deepEqual(
+    tokenRefreshResponse({ ok: false, error: "refresh token gone", code: "missing_refresh_token" }),
+    { success: false, error: "refresh token gone", code: "missing_refresh_token" },
   );
   assert.deepEqual(
     tokenRefreshResponse({ ok: true, skipped: true }),
@@ -2058,1440 +2062,31 @@ test("token refresh skips revoked accounts until reauthorization", async t => {
   assert.equal(engine.loadAcct(account.id).quota_error.code, "refresh_token_invalidated");
 });
 
-test("auto-switch does not leave the current account after a 429 rate_limit miss", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "as-429-cur@example.com", "acct-as-429-cur", "as-429-cur");
-  const other = await addAccount(engine, "as-429-other@example.com", "acct-as-429-other", "as-429-other");
-  current.quota = {
-    weekly_remaining_percentage: 81,
-    weekly_window_present: true,
-    hourly_window_present: false,
-  };
-  current.usage_updated_at = engine.ts();
-  engine.saveAcct(current);
-  other.quota = {
-    weekly_remaining_percentage: 90,
-    weekly_window_present: true,
-    hourly_window_present: false,
-  };
-  other.usage_updated_at = engine.ts();
-  engine.saveAcct(other);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-  const httpClient = require("../engine/http-client");
-  httpClient.setHttpJsonTransport(async () => ({
-    status: 429,
-    headers: { "retry-after": "45" },
-    body: JSON.stringify({ detail: { code: "rate_limit" } }),
-  }));
-  t.after(() => httpClient.setHttpJsonTransport(null));
-  await assert.rejects(
-    () => engine.refreshQuota(engine.loadAcct(current.id), { force: true }),
-    /429|rate.?limit/,
-  );
-  assert.equal(engine.loadAcct(current.id).probe?.status, "probe_failed");
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-  assert.equal(result.switched, false);
-  assert.equal(result.reason, "quota_sufficient");
-  assert.equal(engine.loadIdx().current_account_id, current.id);
-});
 
-test("auto-switch refuses to use stale quota after current refresh failure", async t => {
-  const { engine } = freshEngine(t);
-  const account = await addAccount(engine, "current@example.com", "acct-current", "current");
-  account.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_window_present: false,
-  };
-  engine.saveAcct(account);
-  const index = engine.loadIdx();
-  index.current_account_id = account.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(account);
-  engine.writeProjection(account, auth);
 
-  const quotaModule = require("../engine/quota");
-  const originalRefresh = quotaModule.refreshQuota;
-  quotaModule.refreshQuota = async () => { throw new Error("network unavailable"); };
-  t.after(() => { quotaModule.refreshQuota = originalRefresh; });
 
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-  assert.equal(result.switched, false);
-  assert.equal(result.reason, "current_quota_refresh_failed");
-  assert.equal(result.authState.status, "aligned");
-  assert.equal(result.authState.currentAccountId, account.id);
-});
 
-test("auto-switch reuses a provided auth state instead of inspecting again", async (t) => {
-  const { engine } = freshEngine(t);
-  const account = await addAccount(engine, "reuse-auth@example.com", "acct-reuse-auth", "reuse-auth");
-  account.quota = {
-    hourly_remaining_percentage: 90,
-    hourly_window_present: true,
-    weekly_window_present: false,
-  };
-  account.usage_updated_at = engine.ts();
-  engine.saveAcct(account);
-  const index = engine.loadIdx();
-  index.current_account_id = account.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(account);
-  engine.writeProjection(account, auth);
-  const authState = require("../engine/auth-state");
-  const originalInspect = authState.inspectAuthState;
-  let inspects = 0;
-  authState.inspectAuthState = (...args) => {
-    inspects += 1;
-    return originalInspect(...args);
-  };
-  t.after(() => { authState.inspectAuthState = originalInspect; });
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  }, {
-    authState: { status: "aligned", requiresResolution: false },
-  });
-  assert.equal(result.switched, false);
-  assert.equal(result.reason, "quota_sufficient");
-  assert.equal(inspects, 0);
-  assert.equal(result.authState.status, "aligned");
-});
 
-test("auto-switch does not leave when current quota is exactly the threshold", async (t) => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "exact-th@example.com", "acct-exact-th", "exact-th");
-  const candidate = await addAccount(engine, "exact-th-ready@example.com", "acct-exact-th-ready", "exact-th-ready");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 20,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 30,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  candidate.quota = {
-    hourly_remaining_percentage: 90,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 90,
-    weekly_window_present: true,
-  };
-  candidate.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-  const switchModule = require("../engine/switch");
-  const originalSwitch = switchModule.doSwitch;
-  let switchedTo = null;
-  switchModule.doSwitch = async (account) => {
-    switchedTo = account.id;
-    return { account, authState: { status: "aligned", currentAccountId: account.id } };
-  };
-  t.after(() => { switchModule.doSwitch = originalSwitch; });
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-  assert.equal(result.switched, false);
-  assert.equal(result.reason, "quota_sufficient");
-  assert.equal(switchedTo, null);
-  assert.equal(engine.loadIdx().current_account_id, current.id);
-});
 
-test("auto-switch still leaves when current quota is below the threshold", async (t) => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "below-th@example.com", "acct-below-th", "below-th");
-  const candidate = await addAccount(engine, "below-th-ready@example.com", "acct-below-th-ready", "below-th-ready");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 19,
-    hourly_window_present: true,
-    weekly_window_present: false,
-  };
-  current.usage_updated_at = now;
-  candidate.quota = {
-    hourly_remaining_percentage: 90,
-    hourly_window_present: true,
-    weekly_window_present: false,
-  };
-  candidate.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-  const switchModule = require("../engine/switch");
-  const originalSwitch = switchModule.doSwitch;
-  let switchedTo = null;
-  switchModule.doSwitch = async (account) => {
-    switchedTo = account.id;
-    return { account, authState: { status: "aligned", currentAccountId: account.id } };
-  };
-  t.after(() => { switchModule.doSwitch = originalSwitch; });
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-  assert.equal(result.switched, true);
-  assert.equal(switchedTo, candidate.id);
-});
 
-test("auto-switch rechecks official auth before writing a switch", async (t) => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "stale-auth-current@example.com", "acct-stale-auth-current", "stale-auth-current");
-  const candidate = await addAccount(engine, "stale-auth-ready@example.com", "acct-stale-auth-ready", "stale-auth-ready");
-  const outsider = await addAccount(engine, "stale-auth-out@example.com", "acct-stale-auth-out", "stale-auth-out");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 0,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  candidate.quota = {
-    hourly_remaining_percentage: 80,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 80,
-    weekly_window_present: true,
-  };
-  candidate.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const outsiderAuth = engine.writeAuthJson(outsider);
-  engine.writeProjection(outsider, outsiderAuth);
-  const switchModule = require("../engine/switch");
-  const originalSwitch = switchModule.doSwitch;
-  let switchedTo = null;
-  switchModule.doSwitch = async (account) => {
-    switchedTo = account.id;
-    return { account };
-  };
-  t.after(() => { switchModule.doSwitch = originalSwitch; });
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  }, {
-    authState: { status: "aligned", requiresResolution: false, currentAccountId: current.id },
-  });
-  assert.equal(result.switched, false);
-  assert.equal(result.reason, "auth_conflict");
-  assert.equal(switchedTo, null);
-  assert.equal(result.authState.status, "conflict");
-  const official = JSON.parse(fs.readFileSync(path.join(require("../engine/config").CODEX_DIR, "auth.json"), "utf8"));
-  assert.equal(official.tokens.access_token, outsider.tokens.access_token);
-});
 
-test("auto-switch recheck treats a vanished official login as missing, not a write", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "recheck-missing-cur@example.com", "acct-recheck-missing-cur", "recheck-missing-cur");
-  const candidate = await addAccount(engine, "recheck-missing-ready@example.com", "acct-recheck-missing-ready", "recheck-missing-ready");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 0,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  candidate.quota = {
-    hourly_remaining_percentage: 80,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 80,
-    weekly_window_present: true,
-  };
-  candidate.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const switchModule = require("../engine/switch");
-  const originalSwitch = switchModule.doSwitch;
-  let switchedTo = null;
-  switchModule.doSwitch = async (account) => {
-    switchedTo = account.id;
-    return { account };
-  };
-  t.after(() => { switchModule.doSwitch = originalSwitch; });
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  }, {
-    authState: { status: "aligned", requiresResolution: false, currentAccountId: current.id },
-  });
-  assert.equal(result.switched, false);
-  assert.equal(result.reason, "missing_official_auth");
-  assert.equal(result.authState.status, "missing_official_auth");
-  assert.equal(switchedTo, null);
-});
 
-test("auto-switch does not write when the current account changes before the lock", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "changed-cur@example.com", "acct-changed-cur", "changed-cur");
-  const candidate = await addAccount(engine, "changed-ready@example.com", "acct-changed-ready", "changed-ready");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 0,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  candidate.quota = {
-    hourly_remaining_percentage: 80,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 80,
-    weekly_window_present: true,
-  };
-  candidate.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-  const storage = require("../engine/storage");
-  const originalLoadIdx = storage.loadIdx;
-  let loads = 0;
-  storage.loadIdx = () => {
-    loads += 1;
-    const latest = originalLoadIdx();
-    if (loads > 1) return { ...latest, current_account_id: candidate.id };
-    return latest;
-  };
-  t.after(() => { storage.loadIdx = originalLoadIdx; });
-  const switchModule = require("../engine/switch");
-  const originalSwitch = switchModule.doSwitch;
-  let switchedTo = null;
-  switchModule.doSwitch = async (account) => {
-    switchedTo = account.id;
-    return { account };
-  };
-  t.after(() => { switchModule.doSwitch = originalSwitch; });
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  }, {
-    authState: { status: "aligned", requiresResolution: false, currentAccountId: current.id, message: "stale-pre-lock" },
-  });
-  assert.equal(result.switched, false);
-  assert.equal(result.reason, "current_changed");
-  assert.equal(switchedTo, null);
-  assert.equal(result.authState.status, "aligned");
-  assert.equal(result.authState.currentAccountId, current.id);
-  assert.notEqual(result.authState.message, "stale-pre-lock");
-});
 
-test("auto-switch current-changed does not invent a conflict when auth.json is locked", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "changed-lock@example.com", "acct-changed-lock", "changed-lock");
-  const candidate = await addAccount(engine, "changed-lock-ready@example.com", "acct-changed-lock-ready", "changed-lock-ready");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_window_present: false,
-  };
-  current.usage_updated_at = now;
-  candidate.quota = {
-    hourly_remaining_percentage: 80,
-    hourly_window_present: true,
-    weekly_window_present: false,
-  };
-  candidate.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-  const storage = require("../engine/storage");
-  const originalLoadIdx = storage.loadIdx;
-  let loads = 0;
-  storage.loadIdx = () => {
-    loads += 1;
-    const latest = originalLoadIdx();
-    if (loads > 1) return { ...latest, current_account_id: candidate.id };
-    return latest;
-  };
-  const authState = require("../engine/auth-state");
-  const originalInspect = authState.inspectAuthState;
-  authState.inspectAuthState = () => {
-    const error = new Error("EPERM: operation not permitted");
-    error.code = "EPERM";
-    error.transientIoError = true;
-    throw error;
-  };
-  t.after(() => {
-    storage.loadIdx = originalLoadIdx;
-    authState.inspectAuthState = originalInspect;
-  });
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  }, {
-    authState: { status: "aligned", requiresResolution: false, currentAccountId: current.id },
-  });
-  assert.equal(result.switched, false);
-  assert.equal(result.reason, "current_changed");
-  assert.equal(result.authState.status, "unknown");
-  assert.equal(result.authState.requiresResolution, false);
-  assert.notEqual(result.authState.status, "conflict");
-});
 
-test("auto-switch names a missing official login separately from a conflict", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "missing-official-cur@example.com", "acct-missing-official-cur", "missing-official-cur");
-  const candidate = await addAccount(engine, "missing-official-ready@example.com", "acct-missing-official-ready", "missing-official-ready");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 0,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  candidate.quota = {
-    hourly_remaining_percentage: 80,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 80,
-    weekly_window_present: true,
-  };
-  candidate.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const switchModule = require("../engine/switch");
-  const originalSwitch = switchModule.doSwitch;
-  let switchedTo = null;
-  switchModule.doSwitch = async (account) => {
-    switchedTo = account.id;
-    return { account };
-  };
-  t.after(() => { switchModule.doSwitch = originalSwitch; });
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-  assert.equal(result.switched, false);
-  assert.equal(result.reason, "missing_official_auth");
-  assert.equal(result.authState.status, "missing_official_auth");
-  assert.equal(switchedTo, null);
-});
 
-test("auto-switch names an unmanaged official login separately from a conflict", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "unmanaged-cur@example.com", "acct-unmanaged-cur", "unmanaged-cur");
-  const candidate = await addAccount(engine, "unmanaged-ready@example.com", "acct-unmanaged-ready", "unmanaged-ready");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 0,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  candidate.quota = {
-    hourly_remaining_percentage: 80,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 80,
-    weekly_window_present: true,
-  };
-  candidate.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const switchModule = require("../engine/switch");
-  const originalSwitch = switchModule.doSwitch;
-  let switchedTo = null;
-  switchModule.doSwitch = async (account) => {
-    switchedTo = account.id;
-    return { account };
-  };
-  t.after(() => { switchModule.doSwitch = originalSwitch; });
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  }, {
-    authState: { status: "unmanaged_official_auth", requiresResolution: true },
-  });
-  assert.equal(result.switched, false);
-  assert.equal(result.reason, "unmanaged_official_auth");
-  assert.equal(switchedTo, null);
-});
 
-test("auto-switch keeps cached quota when refresh is only waiting to retry", async t => {
-  const { engine } = freshEngine(t);
-  const account = await addAccount(engine, "retry-current@example.com", "acct-retry-current", "retry-current");
-  const now = engine.ts();
-  account.quota = {
-    hourly_window_present: false,
-    weekly_remaining_percentage: 93,
-    weekly_window_present: true,
-  };
-  account.quota_error = { code: "quota_retry_pending", message: "Quota refresh is waiting for retry until 1" };
-  account.usage_updated_at = now - 1200;
-  engine.saveAcct(account);
-  const index = engine.loadIdx();
-  index.current_account_id = account.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(account);
-  engine.writeProjection(account, auth);
 
-  const quotaModule = require("../engine/quota");
-  const originalRefresh = quotaModule.refreshQuota;
-  quotaModule.refreshQuota = async () => {
-    const error = new Error("Quota refresh is waiting for retry until 1");
-    error.code = "quota_retry_pending";
-    throw error;
-  };
-  t.after(() => { quotaModule.refreshQuota = originalRefresh; });
 
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-  assert.equal(result.switched, false);
-  assert.equal(result.reason, "quota_sufficient");
 
-  engine.saveAutoSwitchCfg({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-    sync_interval_minutes: 60,
-  });
-  const worker = await engine.runDaemonWorker();
-  assert.ok(!worker.failures.some((item) => /waiting for retry|quota_retry_pending/i.test(item.message || "")));
-});
 
-test("auto-switch cancellation prevents switching after a daemon stop", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "cancel-current@example.com", "acct-cancel-current", "cancel-current");
-  const candidate = await addAccount(engine, "cancel-candidate@example.com", "acct-cancel-candidate", "cancel-candidate");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 0,
-    weekly_window_present: true,
-  };
-  // Stale on purpose: the tick must go through the refresh path so the
-  // cancellation signal below can fire.
-  current.usage_updated_at = now - 1200;
-  candidate.quota = {
-    hourly_remaining_percentage: 100,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 100,
-    weekly_window_present: true,
-  };
-  candidate.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
 
-  const quotaModule = require("../engine/quota");
-  const switchModule = require("../engine/switch");
-  const originalRefresh = quotaModule.refreshQuota;
-  const originalSwitch = switchModule.doSwitch;
-  let refreshedCurrent = false;
-  let switched = false;
-  quotaModule.refreshQuota = async acct => {
-    if (acct.id === current.id) refreshedCurrent = true;
-  };
-  switchModule.doSwitch = async () => {
-    switched = true;
-    throw new Error("switch should have been cancelled");
-  };
-  t.after(() => {
-    quotaModule.refreshQuota = originalRefresh;
-    switchModule.doSwitch = originalSwitch;
-  });
 
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  }, {
-    isCancelled: () => refreshedCurrent,
-  });
 
-  assert.equal(result.switched, false);
-  assert.equal(result.reason, "cancelled");
-  assert.equal(switched, false);
-  assert.equal(engine.loadIdx().current_account_id, current.id);
-  assert.equal(result.authState.status, "aligned");
-  assert.equal(result.authState.currentAccountId, current.id);
-});
 
-test("auto-switch revalidates failed candidates and excludes accounts requiring reauthorization", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "candidate-current@example.com", "acct-candidate-current", "candidate-current");
-  const candidate = await addAccount(engine, "candidate-ready@example.com", "acct-candidate-ready", "candidate-ready");
-  const revoked = await addAccount(engine, "candidate-revoked@example.com", "acct-candidate-revoked", "candidate-revoked");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 0,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  candidate.quota = {
-    hourly_remaining_percentage: 90,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 90,
-    weekly_window_present: true,
-  };
-  candidate.usage_updated_at = now;
-  candidate.quota_error = { code: "network_error", message: "previous refresh failed", timestamp: now };
-  revoked.quota = {
-    hourly_remaining_percentage: 100,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 100,
-    weekly_window_present: true,
-  };
-  revoked.usage_updated_at = now;
-  revoked.requires_reauth = true;
-  revoked.reauth_reason = "refresh token revoked";
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  engine.saveAcct(revoked);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
 
-  const quotaModule = require("../engine/quota");
-  const switchModule = require("../engine/switch");
-  const originalRefresh = quotaModule.refreshQuota;
-  const originalSwitch = switchModule.doSwitch;
-  let candidateRefreshed = false;
-  let switchedTo = null;
-  quotaModule.refreshQuota = async account => {
-    if (account.id === candidate.id) {
-      candidateRefreshed = true;
-      account.quota_error = null;
-      account.usage_updated_at = engine.ts();
-      engine.saveAcct(account);
-    }
-    return account.quota;
-  };
-  switchModule.doSwitch = async account => {
-    switchedTo = account.id;
-    return { account };
-  };
-  t.after(() => {
-    quotaModule.refreshQuota = originalRefresh;
-    switchModule.doSwitch = originalSwitch;
-  });
 
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
 
-  assert.equal(candidateRefreshed, true);
-  assert.equal(result.switched, true);
-  assert.equal(switchedTo, candidate.id);
-  assert.notEqual(switchedTo, revoked.id);
-});
 
-test("auto-switch treats a banned current account as must-leave and skips banned candidates", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "banned-current@example.com", "acct-banned-current", "banned-current");
-  const candidate = await addAccount(engine, "banned-ready@example.com", "acct-banned-ready", "banned-ready");
-  const bannedCandidate = await addAccount(engine, "banned-other@example.com", "acct-banned-other", "banned-other");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 90,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 90,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  current.banned = true;
-  current.probe = { status: "banned", error_code: "account_deactivated", http_status: 401, checked_at: now };
-  candidate.quota = {
-    hourly_remaining_percentage: 80,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 80,
-    weekly_window_present: true,
-  };
-  candidate.usage_updated_at = now;
-  bannedCandidate.quota = {
-    hourly_remaining_percentage: 100,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 100,
-    weekly_window_present: true,
-  };
-  bannedCandidate.usage_updated_at = now;
-  bannedCandidate.banned = true;
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  engine.saveAcct(bannedCandidate);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-
-  const quotaModule = require("../engine/quota");
-  const switchModule = require("../engine/switch");
-  const originalRefresh = quotaModule.refreshQuota;
-  const originalSwitch = switchModule.doSwitch;
-  let refreshedIds = [];
-  let switchedTo = null;
-  quotaModule.refreshQuota = async account => {
-    refreshedIds.push(account.id);
-    return account.quota;
-  };
-  switchModule.doSwitch = async account => {
-    switchedTo = account.id;
-    return { account };
-  };
-  t.after(() => {
-    quotaModule.refreshQuota = originalRefresh;
-    switchModule.doSwitch = originalSwitch;
-  });
-
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-
-  assert.equal(result.switched, true);
-  assert.equal(switchedTo, candidate.id);
-  assert.ok(!refreshedIds.includes(current.id));
-  assert.ok(!refreshedIds.includes(bannedCandidate.id));
-  const decrypts = countDecrypts(engine);
-  decrypts.reset();
-  await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-  assert.ok(decrypts.count < 6);
-});
-
-test("auto-switch treats a reauth current account as must-leave", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "reauth-current-switch@example.com", "acct-reauth-current-switch", "reauth-current-switch");
-  const candidate = await addAccount(engine, "reauth-ready@example.com", "acct-reauth-ready", "reauth-ready");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 90,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 90,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  current.requires_reauth = true;
-  candidate.quota = {
-    hourly_remaining_percentage: 80,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 80,
-    weekly_window_present: true,
-  };
-  candidate.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-
-  const quotaModule = require("../engine/quota");
-  const switchModule = require("../engine/switch");
-  const originalRefresh = quotaModule.refreshQuota;
-  const originalSwitch = switchModule.doSwitch;
-  let refreshedIds = [];
-  let switchedTo = null;
-  quotaModule.refreshQuota = async account => {
-    refreshedIds.push(account.id);
-    return account.quota;
-  };
-  switchModule.doSwitch = async account => {
-    switchedTo = account.id;
-    return { account };
-  };
-  t.after(() => {
-    quotaModule.refreshQuota = originalRefresh;
-    switchModule.doSwitch = originalSwitch;
-  });
-
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-
-  assert.equal(result.switched, true);
-  assert.equal(switchedTo, candidate.id);
-  assert.ok(!refreshedIds.includes(current.id));
-});
-
-test("auto-switch does not immediately undo a just-completed official switch", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "recent-switch-cur@example.com", "acct-recent-switch-cur", "recent-switch-cur");
-  const candidate = await addAccount(engine, "recent-switch-ready@example.com", "acct-recent-switch-ready", "recent-switch-ready");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 0,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  candidate.quota = {
-    hourly_remaining_percentage: 80,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 80,
-    weekly_window_present: true,
-  };
-  candidate.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-  const switchModule = require("../engine/switch");
-  const originalSwitch = switchModule.doSwitch;
-  let switchedTo = null;
-  switchModule.doSwitch = async (account) => {
-    switchedTo = account.id;
-    return { account };
-  };
-  t.after(() => { switchModule.doSwitch = originalSwitch; });
-  engine.noteOfficialSwitch();
-  const blocked = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-  assert.equal(blocked.switched, false);
-  assert.equal(blocked.reason, "recently_switched");
-  assert.equal(switchedTo, null);
-  assert.equal(blocked.authState.status, "aligned");
-  assert.equal(blocked.authState.currentAccountId, current.id);
-});
-
-test("auto-switch does not write while Codex OAuth is pending", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "oauth-pend-cur@example.com", "acct-oauth-pend-cur", "oauth-pend-cur");
-  const candidate = await addAccount(engine, "oauth-pend-ready@example.com", "acct-oauth-pend-ready", "oauth-pend-ready");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 0,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  candidate.quota = {
-    hourly_remaining_percentage: 80,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 80,
-    weekly_window_present: true,
-  };
-  candidate.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-  const oauth = require("../engine/oauth");
-  const originalStatus = oauth.getOAuthStatus;
-  oauth.getOAuthStatus = () => ({ pending: true });
-  t.after(() => { oauth.getOAuthStatus = originalStatus; });
-  const switchModule = require("../engine/switch");
-  const originalSwitch = switchModule.doSwitch;
-  let switchedTo = null;
-  switchModule.doSwitch = async (account) => {
-    switchedTo = account.id;
-    return { account };
-  };
-  t.after(() => { switchModule.doSwitch = originalSwitch; });
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-  assert.equal(result.switched, false);
-  assert.equal(result.reason, "oauth_pending");
-  assert.equal(switchedTo, null);
-});
-
-test("auto-switch recheck does not write if OAuth starts after the first look", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "oauth-race-cur@example.com", "acct-oauth-race-cur", "oauth-race-cur");
-  const candidate = await addAccount(engine, "oauth-race-ready@example.com", "acct-oauth-race-ready", "oauth-race-ready");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 0,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  candidate.quota = {
-    hourly_remaining_percentage: 80,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 80,
-    weekly_window_present: true,
-  };
-  candidate.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-  const oauth = require("../engine/oauth");
-  const originalStatus = oauth.getOAuthStatus;
-  let looks = 0;
-  oauth.getOAuthStatus = () => {
-    looks += 1;
-    return { pending: looks > 1 };
-  };
-  t.after(() => { oauth.getOAuthStatus = originalStatus; });
-  const switchModule = require("../engine/switch");
-  const originalSwitch = switchModule.doSwitch;
-  let switchedTo = null;
-  switchModule.doSwitch = async (account) => {
-    switchedTo = account.id;
-    return { account };
-  };
-  t.after(() => { switchModule.doSwitch = originalSwitch; });
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  }, {
-    authState: { status: "aligned", requiresResolution: false, currentAccountId: current.id },
-  });
-  assert.equal(result.switched, false);
-  assert.equal(result.reason, "oauth_pending");
-  assert.equal(switchedTo, null);
-  assert.ok(looks >= 2);
-  assert.equal(result.authState.status, "aligned");
-  assert.equal(result.authState.currentAccountId, current.id);
-});
-
-test("auto-switch reports a verify failure instead of throwing", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "verify-fail-cur@example.com", "acct-verify-fail-cur", "verify-fail-cur");
-  const candidate = await addAccount(engine, "verify-fail-ready@example.com", "acct-verify-fail-ready", "verify-fail-ready");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 0,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  candidate.quota = {
-    hourly_remaining_percentage: 80,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 80,
-    weekly_window_present: true,
-  };
-  candidate.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-  const switchModule = require("../engine/switch");
-  const originalSwitch = switchModule.doSwitch;
-  switchModule.doSwitch = async () => {
-    const error = new Error("Codex 官方登录写入后核对失败，没有切到目标账号");
-    error.code = "codex_switch_verify_failed";
-    throw error;
-  };
-  t.after(() => { switchModule.doSwitch = originalSwitch; });
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-  assert.equal(result.switched, false);
-  assert.equal(result.reason, "switch_verify_failed");
-  assert.equal(engine.loadIdx().current_account_id, current.id);
-  assert.equal(result.authState.status, "aligned");
-  assert.equal(result.authState.currentAccountId, current.id);
-});
-
-test("auto-switch treats a usage-limited current account as must-leave", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "limited-current-switch@example.com", "acct-limited-current-switch", "limited-current-switch");
-  const candidate = await addAccount(engine, "limited-ready@example.com", "acct-limited-ready", "limited-ready");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 90,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 90,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  current.probe = {
-    status: "usage_limited",
-    error_code: "usage_limit_reached",
-    http_status: 429,
-    checked_at: now,
-  };
-  candidate.quota = {
-    hourly_remaining_percentage: 80,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 80,
-    weekly_window_present: true,
-  };
-  candidate.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-
-  const quotaModule = require("../engine/quota");
-  const switchModule = require("../engine/switch");
-  const originalRefresh = quotaModule.refreshQuota;
-  const originalSwitch = switchModule.doSwitch;
-  let refreshedIds = [];
-  let switchedTo = null;
-  quotaModule.refreshQuota = async account => {
-    refreshedIds.push(account.id);
-    return account.quota;
-  };
-  switchModule.doSwitch = async account => {
-    switchedTo = account.id;
-    return { account, authState: { status: "aligned", currentAccountId: account.id } };
-  };
-  t.after(() => {
-    quotaModule.refreshQuota = originalRefresh;
-    switchModule.doSwitch = originalSwitch;
-  });
-
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-
-  assert.equal(result.switched, true);
-  assert.equal(switchedTo, candidate.id);
-  assert.equal(result.authState.status, "aligned");
-  assert.equal(result.authState.currentAccountId, candidate.id);
-  assert.ok(!refreshedIds.includes(current.id));
-});
-
-test("auto-switch excludes usage-limited candidates even when cached quota is high", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "limited-cand-current@example.com", "acct-limited-cand-current", "limited-cand-current");
-  const limited = await addAccount(engine, "limited-cand@example.com", "acct-limited-cand", "limited-cand");
-  const ready = await addAccount(engine, "limited-cand-ready@example.com", "acct-limited-cand-ready", "limited-cand-ready");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 0,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  limited.quota = {
-    hourly_remaining_percentage: 99,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 99,
-    weekly_window_present: true,
-  };
-  limited.usage_updated_at = now;
-  limited.probe = {
-    status: "usage_limited",
-    error_code: "usage_limit_reached",
-    http_status: 429,
-    checked_at: now,
-  };
-  ready.quota = {
-    hourly_remaining_percentage: 70,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 70,
-    weekly_window_present: true,
-  };
-  ready.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(limited);
-  engine.saveAcct(ready);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-
-  const quotaModule = require("../engine/quota");
-  const switchModule = require("../engine/switch");
-  const originalRefresh = quotaModule.refreshQuota;
-  const originalSwitch = switchModule.doSwitch;
-  let switchedTo = null;
-  quotaModule.refreshQuota = async account => account.quota;
-  switchModule.doSwitch = async account => {
-    switchedTo = account.id;
-    return { account };
-  };
-  t.after(() => {
-    quotaModule.refreshQuota = originalRefresh;
-    switchModule.doSwitch = originalSwitch;
-  });
-
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-
-  assert.equal(result.switched, true);
-  assert.equal(switchedTo, ready.id);
-});
-
-test("auto-switch skips candidates that have no access token", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "empty-tok-cur@example.com", "acct-empty-tok-cur", "empty-tok-cur");
-  const empty = await addAccount(engine, "empty-tok-cand@example.com", "acct-empty-tok-cand", "empty-tok-cand");
-  const ready = await addAccount(engine, "empty-tok-ready@example.com", "acct-empty-tok-ready", "empty-tok-ready");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 0,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  empty.tokens.access_token = "";
-  empty.quota = {
-    hourly_remaining_percentage: 99,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 99,
-    weekly_window_present: true,
-  };
-  empty.usage_updated_at = now;
-  ready.quota = {
-    hourly_remaining_percentage: 70,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 70,
-    weekly_window_present: true,
-  };
-  ready.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(empty);
-  engine.saveAcct(ready);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-  assert.equal(engine.listAccts({ secrets: false }).find((item) => item.id === empty.id).has_access, false);
-
-  const quotaModule = require("../engine/quota");
-  const switchModule = require("../engine/switch");
-  const originalRefresh = quotaModule.refreshQuota;
-  const originalSwitch = switchModule.doSwitch;
-  let switchedTo = null;
-  quotaModule.refreshQuota = async account => account.quota;
-  switchModule.doSwitch = async account => {
-    switchedTo = account.id;
-    return { account, authState: { status: "aligned", currentAccountId: account.id } };
-  };
-  t.after(() => {
-    quotaModule.refreshQuota = originalRefresh;
-    switchModule.doSwitch = originalSwitch;
-  });
-
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-
-  assert.equal(result.switched, true);
-  assert.equal(switchedTo, ready.id);
-  assert.equal(result.authState.status, "aligned");
-});
-
-test("auto-switch does not throw when the only candidate has no access token", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "empty-only-cur@example.com", "acct-empty-only-cur", "empty-only-cur");
-  const empty = await addAccount(engine, "empty-only-cand@example.com", "acct-empty-only-cand", "empty-only-cand");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 0,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  empty.tokens.access_token = "";
-  empty.quota = {
-    hourly_remaining_percentage: 99,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 99,
-    weekly_window_present: true,
-  };
-  empty.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(empty);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-
-  const quotaModule = require("../engine/quota");
-  const switchModule = require("../engine/switch");
-  const originalRefresh = quotaModule.refreshQuota;
-  const originalSwitch = switchModule.doSwitch;
-  let switchedTo = null;
-  quotaModule.refreshQuota = async account => account.quota;
-  switchModule.doSwitch = async account => {
-    switchedTo = account.id;
-    return { account };
-  };
-  t.after(() => {
-    quotaModule.refreshQuota = originalRefresh;
-    switchModule.doSwitch = originalSwitch;
-  });
-
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-
-  assert.equal(result.switched, false);
-  assert.equal(result.reason, "no_candidates");
-  assert.equal(switchedTo, null);
-});
-
-test("auto-switch leaves a current account that has no access token", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "empty-cur-leave@example.com", "acct-empty-cur-leave", "empty-cur-leave");
-  const ready = await addAccount(engine, "empty-cur-ready@example.com", "acct-empty-cur-ready", "empty-cur-ready");
-  const now = engine.ts();
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-  current.tokens.access_token = "";
-  current.quota = {
-    hourly_remaining_percentage: 90,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 90,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  ready.quota = {
-    hourly_remaining_percentage: 80,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 80,
-    weekly_window_present: true,
-  };
-  ready.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(ready);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  assert.equal(engine.listAccts({ secrets: false }).find((item) => item.id === current.id).has_access, false);
-
-  const quotaModule = require("../engine/quota");
-  const switchModule = require("../engine/switch");
-  const originalRefresh = quotaModule.refreshQuota;
-  const originalSwitch = switchModule.doSwitch;
-  let switchedTo = null;
-  quotaModule.refreshQuota = async account => account.quota;
-  switchModule.doSwitch = async account => {
-    switchedTo = account.id;
-    return { account, authState: { status: "aligned", currentAccountId: account.id } };
-  };
-  t.after(() => {
-    quotaModule.refreshQuota = originalRefresh;
-    switchModule.doSwitch = originalSwitch;
-  });
-
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-
-  assert.equal(result.switched, true);
-  assert.equal(switchedTo, ready.id);
-});
-
-test("auto-switch still accepts listed candidates that omit has_access", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "omit-access-cur@example.com", "acct-omit-access-cur", "omit-access-cur");
-  const ready = await addAccount(engine, "omit-access-ready@example.com", "acct-omit-access-ready", "omit-access-ready");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 0,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  ready.quota = {
-    hourly_remaining_percentage: 80,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 80,
-    weekly_window_present: true,
-  };
-  ready.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(ready);
-  const filePath = engine.accountFilePath(ready.id);
-  const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
-  delete raw.has_access;
-  if (raw.token_exp == null) raw.token_exp = Math.floor(Date.now() / 1000) + 3600;
-  fs.writeFileSync(filePath, JSON.stringify(raw));
-  const listed = engine.listAccts({ secrets: false }).find((item) => item.id === ready.id);
-  assert.equal(listed.has_access, undefined);
-  assert.equal(listed.tokens, null);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-
-  const quotaModule = require("../engine/quota");
-  const switchModule = require("../engine/switch");
-  const originalRefresh = quotaModule.refreshQuota;
-  const originalSwitch = switchModule.doSwitch;
-  let switchedTo = null;
-  quotaModule.refreshQuota = async account => account.quota;
-  switchModule.doSwitch = async account => {
-    switchedTo = account.id;
-    return { account, authState: { status: "aligned", currentAccountId: account.id } };
-  };
-  t.after(() => {
-    quotaModule.refreshQuota = originalRefresh;
-    switchModule.doSwitch = originalSwitch;
-  });
-
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-
-  assert.equal(result.switched, true);
-  assert.equal(switchedTo, ready.id);
-});
 
 test("the daemon does not treat leftover usage limits as worker failures", async t => {
   const { engine } = freshEngine(t);
@@ -3525,59 +2120,6 @@ test("the daemon does not treat leftover usage limits as worker failures", async
   assert.equal(persisted.requires_reauth, true);
 });
 
-test("auto-switch reports but does not switch when the global switch is off", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "disabled-current@example.com", "acct-disabled-current", "disabled-current");
-  const candidate = await addAccount(engine, "disabled-candidate@example.com", "acct-disabled-candidate", "disabled-candidate");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 0,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  candidate.quota = {
-    hourly_remaining_percentage: 90,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 90,
-    weekly_window_present: true,
-  };
-  candidate.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-
-  const switchModule = require("../engine/switch");
-  const originalSwitch = switchModule.doSwitch;
-  let switchedTo = null;
-  switchModule.doSwitch = async account => {
-    switchedTo = account.id;
-    return { account };
-  };
-  t.after(() => {
-    switchModule.doSwitch = originalSwitch;
-  });
-
-  const result = await engine.autoSwitchTick({
-    enabled: false,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-
-  assert.equal(result.switched, false);
-  assert.equal(result.reason, "disabled");
-  assert.equal(switchedTo, null);
-  assert.equal(engine.loadIdx().current_account_id, current.id);
-  assert.equal(result.authState.status, "aligned");
-  assert.equal(result.authState.currentAccountId, current.id);
-});
 
 test("daemon still refreshes spare tokens when official auth.json is missing", async t => {
   const { engine } = freshEngine(t);
@@ -3692,7 +2234,6 @@ test("the daemon does not pause as an auth conflict when official auth.json stay
   assert.equal(result.failures.some((item) => item.stage === "auth_inspect"), false);
   assert.equal(result.authState.status, "unknown");
   assert.equal(result.authState.requiresResolution, false);
-  assert.equal(result.autoSwitchResult, null);
   assert.equal(result.accountsUpdated, 0);
   assert.deepEqual(result.tokenRefreshes, []);
 });
@@ -3776,7 +2317,6 @@ test("daemon announces a newly missing official login once", async t => {
     completedAt: Date.now(),
     pausedReason: null,
     failures: [],
-    autoSwitchResult: null,
     authState: { status: "missing_official_auth", requiresResolution: true },
   });
   const { registerIpcHandlers } = require("../src/main/ipc-handlers");
@@ -3806,7 +2346,6 @@ test("daemon announces a newly missing official login once", async t => {
     completedAt: Date.now(),
     pausedReason: "auth_conflict",
     failures: [],
-    autoSwitchResult: null,
     authState: { status: "conflict", requiresResolution: true },
   });
   await daemon.runDaemon();
@@ -3867,7 +2406,6 @@ test("daemon restart during in-flight work schedules an immediate replacement ru
           completedAt: Date.now(),
           pausedReason: options.isCancelled() ? "stopped" : null,
           failures: [],
-          autoSwitchResult: null,
         }));
       });
     },
@@ -3939,7 +2477,6 @@ test("a cancelled daemon worker does not write stopped back over a restarted run
           completedAt: Date.now(),
           pausedReason: options.isCancelled() ? "stopped" : null,
           failures: [],
-          autoSwitchResult: null,
         }));
       });
     },
@@ -3978,10 +2515,6 @@ test("config saves reload only a changed daemon interval without triggering work
   let runCount = 0;
   let config = {
     enabled: false,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
     sync_interval_minutes: 10,
   };
   const electron = {
@@ -4003,15 +2536,14 @@ test("config saves reload only a changed daemon interval without triggering work
   const engine = {
     getTickIntervalMs: () => config.sync_interval_minutes * 60000,
     getTickIntervalMinutes: () => config.sync_interval_minutes,
-    loadAutoSwitchCfg: () => ({ ...config }),
-    saveAutoSwitchCfg(next) { config = { ...next }; },
+    loadDaemonCfg: () => ({ ...config }),
+    saveDaemonCfg(next) { config = { ...next }; },
     async runDaemonWorker() {
       runCount += 1;
       return {
         completedAt: Date.now(),
         pausedReason: null,
         failures: [],
-        autoSwitchResult: null,
       };
     },
   };
@@ -4034,228 +2566,21 @@ test("config saves reload only a changed daemon interval without triggering work
   assert.equal(runCount, 1);
   assert.deepEqual(intervalCalls.map(timer => timer.milliseconds), [10 * 60000]);
 
-  await handlers.get("autoswitch:config:save")({}, { ...config, primary_threshold: 15 });
+  // Saving the same interval (only `enabled` differs, which this channel does
+  // not own) must not rebuild the timer or trigger a run.
+  await handlers.get("daemon:config:save")({}, { ...config, enabled: true });
   assert.equal(runCount, 1);
   assert.equal(intervalCalls.length, 1);
   assert.equal(clearedIntervals.length, 0);
 
-  await handlers.get("autoswitch:config:save")({}, { ...config, sync_interval_minutes: 25 });
+  await handlers.get("daemon:config:save")({}, { ...config, sync_interval_minutes: 25 });
   assert.equal(runCount, 1);
   assert.deepEqual(intervalCalls.map(timer => timer.milliseconds), [10 * 60000, 25 * 60000]);
   assert.equal(clearedIntervals.length, 1);
 });
 
-test("manual auto-switch checks update daemon status metadata", async () => {
-  const handlers = new Map();
-  const electron = {
-    ipcMain: {
-      handle(channel, listener) {
-        handlers.set(channel, listener);
-      },
-    },
-    BrowserWindow: { getAllWindows: () => [] },
-    app: {
-      getVersion: () => "0.1.0-beta.9",
-      isPackaged: false,
-    },
-    shell: {
-      async openExternal() {},
-      async openPath() { return ""; },
-    },
-  };
-  let nextResult = { switched: false, reason: "quota_sufficient" };
-  const engine = {
-    getTickIntervalMs: () => 10 * 60000,
-    getTickIntervalMinutes: () => 10,
-    loadAutoSwitchCfg: () => ({
-      enabled: false,
-      primary_threshold: 20,
-      secondary_threshold: 30,
-      account_scope_mode: "selected",
-      selected_account_ids: [],
-      sync_interval_minutes: 10,
-    }),
-    async autoSwitchTick() {
-      return nextResult;
-    },
-  };
 
-  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
-  registerIpcHandlers(engine, { electron });
 
-  const before = await handlers.get("daemon:status")({});
-  assert.equal(before.data.lastRunAt, null);
-
-  const firstResult = await handlers.get("autoswitch:tick")({});
-  assert.equal(firstResult.success, true);
-  assert.equal(firstResult.data.reason, "quota_sufficient");
-  const afterSuccess = await handlers.get("daemon:status")({});
-  assert.equal(typeof afterSuccess.data.lastRunAt, "number");
-  assert.equal(afterSuccess.data.lastSuccessAt, afterSuccess.data.lastRunAt);
-  assert.equal(afterSuccess.data.lastError, null);
-
-  nextResult = { switched: false, reason: "no_monitored" };
-  const skippedResult = await handlers.get("autoswitch:tick")({});
-  assert.equal(skippedResult.success, true);
-  const afterSkip = await handlers.get("daemon:status")({});
-  assert.equal(typeof afterSkip.data.lastRunAt, "number");
-  assert.equal(afterSkip.data.lastSuccessAt, afterSuccess.data.lastSuccessAt);
-  assert.equal(afterSkip.data.lastError, null);
-
-  nextResult = {
-    switched: false,
-    reason: "current_quota_refresh_failed",
-    error: "network unavailable",
-  };
-  const failedResult = await handlers.get("autoswitch:tick")({});
-  assert.equal(failedResult.success, true);
-  const afterFailure = await handlers.get("daemon:status")({});
-  assert.equal(afterFailure.data.lastError, "network unavailable");
-  assert.equal(afterFailure.data.lastSuccessAt, afterSkip.data.lastSuccessAt);
-
-  nextResult = {
-    switched: false,
-    reason: "missing_official_auth",
-    authState: { status: "missing_official_auth", requiresResolution: true },
-  };
-  const missingResult = await handlers.get("autoswitch:tick")({});
-  assert.equal(missingResult.success, true);
-  const afterMissing = await handlers.get("daemon:status")({});
-  assert.equal(afterMissing.data.lastError, null);
-  assert.equal(afterMissing.data.lastAuthStatus, "missing_official_auth");
-  assert.equal(afterMissing.data.lastSuccessAt, afterSkip.data.lastSuccessAt);
-  assert.equal(afterMissing.data.pausedReason, "missing_official_auth");
-
-  nextResult = { switched: false, reason: "quota_sufficient", authState: { status: "aligned", requiresResolution: false } };
-  const recovered = await handlers.get("autoswitch:tick")({});
-  assert.equal(recovered.success, true);
-  const afterRecovered = await handlers.get("daemon:status")({});
-  assert.equal(afterRecovered.data.pausedReason, null);
-  assert.equal(afterRecovered.data.lastAuthStatus, "aligned");
-});
-
-test("manual auto-switch check broadcasts the new current account to other windows", async () => {
-  const handlers = new Map();
-  const sent = [];
-  const electron = {
-    ipcMain: {
-      handle(channel, listener) {
-        handlers.set(channel, listener);
-      },
-    },
-    BrowserWindow: {
-      getAllWindows: () => [{
-        isDestroyed: () => false,
-        webContents: {
-          isDestroyed: () => false,
-          send(channel, payload) { sent.push({ channel, payload }); },
-        },
-      }],
-    },
-    app: {
-      getVersion: () => "2.0.4",
-      isPackaged: false,
-    },
-    shell: {
-      async openExternal() {},
-      async openPath() { return ""; },
-    },
-  };
-  let nextResult = {
-    switched: false,
-    reason: "quota_sufficient",
-    to: { id: "codex_keep", email: "keep@example.com" },
-  };
-  const engine = {
-    getTickIntervalMs: () => 10 * 60000,
-    getTickIntervalMinutes: () => 10,
-    loadAutoSwitchCfg: () => ({
-      enabled: false,
-      primary_threshold: 20,
-      secondary_threshold: 30,
-      account_scope_mode: "selected",
-      selected_account_ids: [],
-      sync_interval_minutes: 10,
-    }),
-    async autoSwitchTick() {
-      return nextResult;
-    },
-  };
-
-  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
-  registerIpcHandlers(engine, { electron });
-
-  const skipped = await handlers.get("autoswitch:tick")({});
-  assert.equal(skipped.success, true);
-  assert.equal(sent.some((item) => item.channel === "account:updated"), false);
-  assert.equal(sent.some((item) => item.channel === "autoswitch:executed"), false);
-
-  nextResult = {
-    switched: true,
-    reason: "switched",
-    from: { id: "codex_keep", email: "keep@example.com" },
-    to: { id: "codex_next", email: "next@example.com" },
-    authState: { status: "aligned", currentAccountId: "codex_next", requiresResolution: false },
-  };
-  sent.length = 0;
-  const switched = await handlers.get("autoswitch:tick")({});
-  assert.equal(switched.success, true);
-  assert.equal(switched.data.to.id, "codex_next");
-  const accountEvents = sent.filter((item) => item.channel === "account:updated");
-  assert.equal(accountEvents.length, 1);
-  assert.equal(accountEvents[0].payload.product, "codex");
-  assert.equal(accountEvents[0].payload.current, true);
-  assert.equal(accountEvents[0].payload.account.id, "codex_next");
-  assert.equal(sent.some((item) => item.channel === "autoswitch:executed"), false);
-});
-
-test("daemon auto-switch broadcasts the new current account to other windows", async () => {
-  const sent = [];
-  const engine = {
-    getTickIntervalMs: () => 10 * 60000,
-    getTickIntervalMinutes: () => 10,
-    loadAutoSwitchCfg: () => ({ enabled: true, sync_interval_minutes: 10 }),
-    async runDaemonWorker() {
-      return {
-        completedAt: Date.now(),
-        pausedReason: null,
-        failures: [],
-        autoSwitchResult: {
-          switched: true,
-          from: { id: "codex_keep", email: "keep@example.com" },
-          to: { id: "codex_next", email: "next@example.com" },
-        },
-        authState: { status: "aligned", currentAccountId: "codex_next", requiresResolution: false },
-      };
-    },
-  };
-  const { registerIpcHandlers } = require("../src/main/ipc-handlers");
-  const daemon = registerIpcHandlers(engine, {
-    electron: {
-      ipcMain: { handle() {} },
-      BrowserWindow: {
-        getAllWindows: () => [{
-          isDestroyed: () => false,
-          webContents: {
-            isDestroyed: () => false,
-            send(channel, payload) { sent.push({ channel, payload }); },
-          },
-        }],
-      },
-      app: { getVersion: () => "2.0.4", isPackaged: false },
-      shell: { async openExternal() {}, async openPath() { return ""; } },
-    },
-  });
-  await daemon.runDaemon();
-  const executed = sent.filter((item) => item.channel === "autoswitch:executed");
-  assert.equal(executed.length, 1);
-  assert.equal(executed[0].payload.to.id, "codex_next");
-  const accountEvents = sent.filter((item) => item.channel === "account:updated");
-  assert.equal(accountEvents.length, 1);
-  assert.equal(accountEvents[0].payload.product, "codex");
-  assert.equal(accountEvents[0].payload.current, true);
-  assert.equal(accountEvents[0].payload.account.id, "codex_next");
-});
 
 test("adopt official IPC returns the post-adopt auth state", async () => {
   const handlers = new Map();
@@ -4278,7 +2603,7 @@ test("adopt official IPC returns the post-adopt auth state", async () => {
   const engine = {
     getTickIntervalMs: () => 10 * 60000,
     getTickIntervalMinutes: () => 10,
-    loadAutoSwitchCfg: () => ({ enabled: false, sync_interval_minutes: 10 }),
+    loadDaemonCfg: () => ({ enabled: false, sync_interval_minutes: 10 }),
     async adoptOfficialAuth() {
       return { account: { id: "codex_adopt", email: "adopt@example.com" }, updated: true };
     },
@@ -4336,7 +2661,7 @@ test("adopt official IPC does not keep a conflict when auth.json is locked", asy
   const engine = {
     getTickIntervalMs: () => 10 * 60000,
     getTickIntervalMinutes: () => 10,
-    loadAutoSwitchCfg: () => ({ enabled: false, sync_interval_minutes: 10 }),
+    loadDaemonCfg: () => ({ enabled: false, sync_interval_minutes: 10 }),
     async adoptOfficialAuth() {
       return { account: { id: "codex_adopt", email: "adopt@example.com" }, updated: true };
     },
@@ -4391,7 +2716,7 @@ test("reapply managed IPC broadcasts the current account after a successful rewr
   const engine = {
     getTickIntervalMs: () => 10 * 60000,
     getTickIntervalMinutes: () => 10,
-    loadAutoSwitchCfg: () => ({ enabled: false, sync_interval_minutes: 10 }),
+    loadDaemonCfg: () => ({ enabled: false, sync_interval_minutes: 10 }),
     async reapplyManagedAuth() {
       return {
         already: false,
@@ -4417,7 +2742,7 @@ test("OAuth account-saved does not mark a reauthorized other card as current", a
   const engine = {
     getTickIntervalMs: () => 10 * 60000,
     getTickIntervalMinutes: () => 10,
-    loadAutoSwitchCfg: () => ({ enabled: false, sync_interval_minutes: 10 }),
+    loadDaemonCfg: () => ({ enabled: false, sync_interval_minutes: 10 }),
     setOAuthAccountSavedHandler(handler) {
       savedHandler = handler;
     },
@@ -4491,7 +2816,7 @@ test("Codex OAuth IPC returns official auth after add, reauth, and manual comple
   const engine = {
     getTickIntervalMs: () => 10 * 60000,
     getTickIntervalMinutes: () => 10,
-    loadAutoSwitchCfg: () => ({ enabled: false, sync_interval_minutes: 10 }),
+    loadDaemonCfg: () => ({ enabled: false, sync_interval_minutes: 10 }),
     listAccts: () => [{ id: "codex_oauth", email: "oauth@example.com" }],
     async oauthLoginFlow(options = {}) {
       return {
@@ -4550,7 +2875,7 @@ test("adopt official IPC still returns the account if auth inspect fails", async
   const engine = {
     getTickIntervalMs: () => 10 * 60000,
     getTickIntervalMinutes: () => 10,
-    loadAutoSwitchCfg: () => ({ enabled: false, sync_interval_minutes: 10 }),
+    loadDaemonCfg: () => ({ enabled: false, sync_interval_minutes: 10 }),
     async adoptOfficialAuth() {
       return { account: { id: "codex_adopt2", email: "adopt2@example.com" }, updated: false };
     },
@@ -5700,30 +4025,12 @@ test("app logs still write after a transient append lock", (t) => {
   assert.ok(files.some((name) => fs.readFileSync(path.join(logDir, name), "utf8").includes("append-retry-ok")));
 });
 
-test("auto-switch config normalization clamps user-edited values", t => {
-  freshEngine(t);
-  const { loadAutoSwitchCfg, saveAutoSwitchCfg } = require("../engine/config-manager");
-  saveAutoSwitchCfg({
-    enabled: 1,
-    primary_threshold: 999,
-    secondary_threshold: "not-a-number",
-    account_scope_mode: "selected",
-    selected_account_ids: ["  ", null, 42, "codex_valid"],
-    sync_interval_minutes: -5,
-  });
-  const cfg = loadAutoSwitchCfg();
-  assert.equal(cfg.enabled, true);
-  assert.equal(cfg.primary_threshold, 100);
-  assert.equal(cfg.secondary_threshold, 30);
-  assert.equal(cfg.account_scope_mode, "selected");
-  assert.deepEqual(cfg.selected_account_ids, ["42", "codex_valid"]);
-  assert.equal(cfg.sync_interval_minutes, 1);
-});
 
-test("auto-switch default sync interval is one minute", t => {
+
+test("daemon default sync interval is one minute", t => {
   freshEngine(t);
-  const { loadAutoSwitchCfg } = require("../engine/config-manager");
-  assert.equal(loadAutoSwitchCfg().sync_interval_minutes, 1);
+  const { loadDaemonCfg } = require("../engine/config-manager");
+  assert.equal(loadDaemonCfg().sync_interval_minutes, 1);
 });
 
 test("config resolves CODEX_HOME with quotes stripped and manager override first", t => {
@@ -6294,8 +4601,8 @@ test("auto-switch config does not restore a stale backup after a leftover lock",
   const { engine } = freshEngine(t);
   const config = require("../engine/config");
   engine.ensureDir(config.DATA_DIR);
-  fs.writeFileSync(config.CFG_FILE, JSON.stringify({ enabled: true, primary_threshold: 15 }), "utf8");
-  fs.writeFileSync(`${config.CFG_FILE}.bak`, JSON.stringify({ enabled: false, primary_threshold: 99 }), "utf8");
+  fs.writeFileSync(config.CFG_FILE, JSON.stringify({ enabled: true, sync_interval_minutes: 15 }), "utf8");
+  fs.writeFileSync(`${config.CFG_FILE}.bak`, JSON.stringify({ enabled: false, sync_interval_minutes: 45 }), "utf8");
   const originalRead = fs.readFileSync;
   fs.readFileSync = (file, encoding) => {
     if (path.resolve(String(file)) === path.resolve(config.CFG_FILE)) {
@@ -6307,12 +4614,12 @@ test("auto-switch config does not restore a stale backup after a leftover lock",
   };
   t.after(() => { fs.readFileSync = originalRead; });
   assert.throws(
-    () => engine.loadAutoSwitchCfg(),
+    () => engine.loadDaemonCfg(),
     (error) => error.code === "EPERM" && error.transientIoError === true,
   );
   fs.readFileSync = originalRead;
   assert.equal(JSON.parse(fs.readFileSync(config.CFG_FILE, "utf8")).enabled, true);
-  assert.equal(JSON.parse(fs.readFileSync(config.CFG_FILE, "utf8")).primary_threshold, 15);
+  assert.equal(JSON.parse(fs.readFileSync(config.CFG_FILE, "utf8")).sync_interval_minutes, 15);
   assert.equal(JSON.parse(fs.readFileSync(`${config.CFG_FILE}.bak`, "utf8")).enabled, false);
 });
 
@@ -6320,8 +4627,8 @@ test("auto-switch config does not restore a stale backup on a non-JSON filesyste
   const { engine } = freshEngine(t);
   const config = require("../engine/config");
   engine.ensureDir(config.DATA_DIR);
-  fs.writeFileSync(config.CFG_FILE, JSON.stringify({ enabled: true, primary_threshold: 15 }), "utf8");
-  fs.writeFileSync(`${config.CFG_FILE}.bak`, JSON.stringify({ enabled: false, primary_threshold: 99 }), "utf8");
+  fs.writeFileSync(config.CFG_FILE, JSON.stringify({ enabled: true, sync_interval_minutes: 15 }), "utf8");
+  fs.writeFileSync(`${config.CFG_FILE}.bak`, JSON.stringify({ enabled: false, sync_interval_minutes: 45 }), "utf8");
   const originalRead = fs.readFileSync;
   fs.readFileSync = (file, encoding) => {
     if (path.resolve(String(file)) === path.resolve(config.CFG_FILE)) {
@@ -6333,12 +4640,12 @@ test("auto-switch config does not restore a stale backup on a non-JSON filesyste
   };
   t.after(() => { fs.readFileSync = originalRead; });
   assert.throws(
-    () => engine.loadAutoSwitchCfg(),
+    () => engine.loadDaemonCfg(),
     (error) => error.code === "EISDIR",
   );
   fs.readFileSync = originalRead;
   assert.equal(JSON.parse(fs.readFileSync(config.CFG_FILE, "utf8")).enabled, true);
-  assert.equal(JSON.parse(fs.readFileSync(config.CFG_FILE, "utf8")).primary_threshold, 15);
+  assert.equal(JSON.parse(fs.readFileSync(config.CFG_FILE, "utf8")).sync_interval_minutes, 15);
   assert.equal(JSON.parse(fs.readFileSync(`${config.CFG_FILE}.bak`, "utf8")).enabled, false);
 });
 
@@ -6346,7 +4653,7 @@ test("auto-switch config retries a transient lock instead of resetting", t => {
   const { engine } = freshEngine(t);
   const config = require("../engine/config");
   engine.ensureDir(config.DATA_DIR);
-  fs.writeFileSync(config.CFG_FILE, JSON.stringify({ enabled: true, primary_threshold: 15 }), "utf8");
+  fs.writeFileSync(config.CFG_FILE, JSON.stringify({ enabled: true, sync_interval_minutes: 15 }), "utf8");
   const originalRead = fs.readFileSync;
   let failures = 0;
   fs.readFileSync = (file, encoding) => {
@@ -6359,9 +4666,9 @@ test("auto-switch config retries a transient lock instead of resetting", t => {
     return originalRead(file, encoding);
   };
   t.after(() => { fs.readFileSync = originalRead; });
-  const cfg = engine.loadAutoSwitchCfg();
+  const cfg = engine.loadDaemonCfg();
   assert.equal(cfg.enabled, true);
-  assert.equal(cfg.primary_threshold, 15);
+  assert.equal(cfg.sync_interval_minutes, 15);
   assert.equal(failures, 2);
 });
 
@@ -7285,221 +5592,10 @@ test("a torn Codex auth.json is not treated as missing official auth", async (t)
   assert.equal(state.requiresResolution, false);
 });
 
-test("auto-switch does not treat a torn auth.json as a login conflict", async (t) => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "torn-as-auth@example.com", "acct-torn-as-auth", "torn-as-auth");
-  current.quota = {
-    hourly_remaining_percentage: null,
-    hourly_window_present: false,
-    weekly_remaining_percentage: 80,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = engine.ts();
-  engine.saveAcct(current);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-  const config = require("../engine/config");
-  stubTornJsonReads(t, path.join(config.CODEX_DIR, "auth.json"));
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-  assert.equal(result.switched, false);
-  assert.equal(result.reason, "quota_sufficient");
-});
 
-test("auto-switch does not treat a locked auth.json as a login conflict", async (t) => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "lock-as-auth@example.com", "acct-lock-as-auth", "lock-as-auth");
-  current.quota = {
-    hourly_remaining_percentage: null,
-    hourly_window_present: false,
-    weekly_remaining_percentage: 80,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = engine.ts();
-  engine.saveAcct(current);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-  const config = require("../engine/config");
-  const authPath = path.join(config.CODEX_DIR, "auth.json");
-  const originalRead = fs.readFileSync;
-  fs.readFileSync = (file, encoding) => {
-    if (path.resolve(String(file)) === path.resolve(authPath)) {
-      const error = new Error("EPERM: operation not permitted");
-      error.code = "EPERM";
-      throw error;
-    }
-    return originalRead(file, encoding);
-  };
-  t.after(() => { fs.readFileSync = originalRead; });
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-  assert.equal(result.switched, false);
-  assert.notEqual(result.reason, "auth_conflict");
-  assert.equal(result.reason, "current_quota_refresh_failed");
-  assert.equal(result.error, "Read authentication state timed out");
-  assert.equal(result.authState, null);
-});
 
-test("auto-switch does not throw when the pre-switch auth recheck hits a leftover lock", async (t) => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "recheck-lock@example.com", "acct-recheck-lock", "recheck-lock");
-  const candidate = await addAccount(engine, "recheck-ready@example.com", "acct-recheck-ready", "recheck-ready");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_window_present: false,
-  };
-  current.usage_updated_at = now;
-  candidate.quota = {
-    hourly_remaining_percentage: 90,
-    hourly_window_present: true,
-    weekly_window_present: false,
-  };
-  candidate.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-  const aligned = engine.inspectAuthState({ migrateProjection: false });
-  const authState = require("../engine/auth-state");
-  const originalInspect = authState.inspectAuthState;
-  authState.inspectAuthState = () => {
-    const error = new Error("EPERM: operation not permitted");
-    error.code = "EPERM";
-    error.transientIoError = true;
-    throw error;
-  };
-  t.after(() => { authState.inspectAuthState = originalInspect; });
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  }, { authState: aligned });
-  assert.equal(result.switched, false);
-  assert.notEqual(result.reason, "auth_conflict");
-  assert.equal(result.reason, "current_quota_refresh_failed");
-  assert.equal(result.error, "Read authentication state timed out");
-  assert.equal(engine.loadIdx().current_account_id, current.id);
-});
 
-test("the daemon does not treat a leftover lock during auto-switch as a worker failure", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "daemon-recheck-lock@example.com", "acct-daemon-recheck-lock", "daemon-recheck-lock");
-  const candidate = await addAccount(engine, "daemon-recheck-ready@example.com", "acct-daemon-recheck-ready", "daemon-recheck-ready");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_window_present: false,
-  };
-  current.usage_updated_at = now;
-  candidate.quota = {
-    hourly_remaining_percentage: 90,
-    hourly_window_present: true,
-    weekly_window_present: false,
-  };
-  candidate.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-  engine.saveAutoSwitchCfg({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-    sync_interval_minutes: 60,
-  });
-  const quotaModule = require("../engine/quota");
-  const switchModule = require("../engine/switch");
-  const originalRefresh = quotaModule.refreshQuota;
-  const originalSwitch = switchModule.doSwitch;
-  let switchedTo = null;
-  quotaModule.refreshQuota = async account => account.quota;
-  switchModule.doSwitch = async account => {
-    switchedTo = account.id;
-    return { account };
-  };
-  const authState = require("../engine/auth-state");
-  const originalInspect = authState.inspectAuthState;
-  let looks = 0;
-  authState.inspectAuthState = () => {
-    looks += 1;
-    const error = new Error("EPERM: operation not permitted");
-    error.code = "EPERM";
-    throw error;
-  };
-  t.after(() => {
-    quotaModule.refreshQuota = originalRefresh;
-    switchModule.doSwitch = originalSwitch;
-    authState.inspectAuthState = originalInspect;
-  });
-  const worker = await engine.runDaemonWorker();
-  assert.ok(looks >= 1);
-  assert.equal(worker.autoSwitchResult?.reason, "current_quota_refresh_failed");
-  assert.equal(worker.autoSwitchResult?.error, "Read authentication state timed out");
-  assert.equal(switchedTo, null);
-  assert.ok(!worker.failures.some((item) => item.stage === "auto_switch"));
-  assert.ok(!worker.failures.some((item) => item.stage === "auth_inspect"));
-  assert.equal(engine.loadIdx().current_account_id, current.id);
-});
 
-test("the daemon still records a real current quota refresh failure", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "daemon-quota-fail@example.com", "acct-daemon-quota-fail", "daemon-quota-fail");
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_window_present: false,
-  };
-  engine.saveAcct(current);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-  engine.saveAutoSwitchCfg({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-    sync_interval_minutes: 60,
-  });
-  const quotaModule = require("../engine/quota");
-  const originalRefresh = quotaModule.refreshQuota;
-  quotaModule.refreshQuota = async () => { throw new Error("network unavailable"); };
-  t.after(() => { quotaModule.refreshQuota = originalRefresh; });
-  const worker = await engine.runDaemonWorker();
-  assert.equal(worker.autoSwitchResult?.reason, "current_quota_refresh_failed");
-  assert.ok(worker.failures.some((item) => item.stage === "auto_switch" && /network unavailable/.test(item.message)));
-});
 
 test("the daemon does not toast a transient quota network miss as a worker failure", async t => {
   const { engine } = freshEngine(t);
@@ -7508,12 +5604,8 @@ test("the daemon does not toast a transient quota network miss as a worker failu
   const index = engine.loadIdx();
   index.current_account_id = current.id;
   engine.saveIdx(index);
-  engine.saveAutoSwitchCfg({
+  engine.saveDaemonCfg({
     enabled: false,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
     sync_interval_minutes: 60,
   });
   const quotaModule = require("../engine/quota");
@@ -7521,7 +5613,6 @@ test("the daemon does not toast a transient quota network miss as a worker failu
   quotaModule.refreshQuota = async () => { throw new Error("connect ECONNREFUSED 127.0.0.1:7890"); };
   t.after(() => { quotaModule.refreshQuota = originalRefresh; });
   const worker = await engine.runDaemonWorker();
-  assert.equal(worker.autoSwitchResult, null);
   assert.ok(!worker.failures.some((item) => item.stage === "quota_refresh"));
   assert.equal(worker.failures.length, 0);
 });
@@ -7533,12 +5624,8 @@ test("the daemon does not toast an IPv6 unreachable quota miss as a worker failu
   const index = engine.loadIdx();
   index.current_account_id = current.id;
   engine.saveIdx(index);
-  engine.saveAutoSwitchCfg({
+  engine.saveDaemonCfg({
     enabled: false,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
     sync_interval_minutes: 60,
   });
   const quotaModule = require("../engine/quota");
@@ -7546,7 +5633,6 @@ test("the daemon does not toast an IPv6 unreachable quota miss as a worker failu
   quotaModule.refreshQuota = async () => { throw new Error("connect ENETUNREACH 2606:4700::1:443"); };
   t.after(() => { quotaModule.refreshQuota = originalRefresh; });
   const worker = await engine.runDaemonWorker();
-  assert.equal(worker.autoSwitchResult, null);
   assert.ok(!worker.failures.some((item) => item.stage === "quota_refresh"));
   assert.equal(worker.failures.length, 0);
 });
@@ -7558,12 +5644,8 @@ test("the daemon does not toast an engine worker timeout as a worker failure", a
   const index = engine.loadIdx();
   index.current_account_id = current.id;
   engine.saveIdx(index);
-  engine.saveAutoSwitchCfg({
+  engine.saveDaemonCfg({
     enabled: false,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
     sync_interval_minutes: 60,
   });
   const quotaModule = require("../engine/quota");
@@ -7573,7 +5655,6 @@ test("the daemon does not toast an engine worker timeout as a worker failure", a
   quotaModule.refreshQuota = async () => { throw workerTimeout; };
   t.after(() => { quotaModule.refreshQuota = originalRefresh; });
   const worker = await engine.runDaemonWorker();
-  assert.equal(worker.autoSwitchResult, null);
   assert.ok(!worker.failures.some((item) => item.stage === "quota_refresh"));
   assert.equal(worker.failures.length, 0);
 });
@@ -7585,12 +5666,8 @@ test("the daemon does not toast an HTTP 500 quota miss as a worker failure", asy
   const index = engine.loadIdx();
   index.current_account_id = current.id;
   engine.saveIdx(index);
-  engine.saveAutoSwitchCfg({
+  engine.saveDaemonCfg({
     enabled: false,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
     sync_interval_minutes: 60,
   });
   const quotaModule = require("../engine/quota");
@@ -7598,7 +5675,6 @@ test("the daemon does not toast an HTTP 500 quota miss as a worker failure", asy
   quotaModule.refreshQuota = async () => { throw new Error("HTTP 500 temporarily_unavailable"); };
   t.after(() => { quotaModule.refreshQuota = originalRefresh; });
   const worker = await engine.runDaemonWorker();
-  assert.equal(worker.autoSwitchResult, null);
   assert.ok(!worker.failures.some((item) => item.stage === "quota_refresh"));
   assert.equal(worker.failures.length, 0);
 });
@@ -7610,12 +5686,8 @@ test("the daemon does not toast a not-JSON quota miss as a worker failure", asyn
   const index = engine.loadIdx();
   index.current_account_id = current.id;
   engine.saveIdx(index);
-  engine.saveAutoSwitchCfg({
+  engine.saveDaemonCfg({
     enabled: false,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
     sync_interval_minutes: 60,
   });
   const quotaModule = require("../engine/quota");
@@ -7623,7 +5695,6 @@ test("the daemon does not toast a not-JSON quota miss as a worker failure", asyn
   quotaModule.refreshQuota = async () => { throw new Error("这次没查清额度，请稍后重试。"); };
   t.after(() => { quotaModule.refreshQuota = originalRefresh; });
   const worker = await engine.runDaemonWorker();
-  assert.equal(worker.autoSwitchResult, null);
   assert.ok(!worker.failures.some((item) => item.stage === "quota_refresh"));
   assert.equal(worker.failures.length, 0);
 });
@@ -7635,12 +5706,8 @@ test("the daemon does not toast an empty token JSON miss as a worker failure", a
   const index = engine.loadIdx();
   index.current_account_id = current.id;
   engine.saveIdx(index);
-  engine.saveAutoSwitchCfg({
+  engine.saveDaemonCfg({
     enabled: false,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
     sync_interval_minutes: 60,
   });
   const quotaModule = require("../engine/quota");
@@ -7648,7 +5715,6 @@ test("the daemon does not toast an empty token JSON miss as a worker failure", a
   quotaModule.refreshQuota = async () => { throw new Error("响应无 access_token"); };
   t.after(() => { quotaModule.refreshQuota = originalRefresh; });
   const worker = await engine.runDaemonWorker();
-  assert.equal(worker.autoSwitchResult, null);
   assert.ok(!worker.failures.some((item) => item.stage === "quota_refresh"));
   assert.equal(worker.failures.length, 0);
 });
@@ -7660,12 +5726,8 @@ test("the daemon does not toast an HTML token miss as a worker failure", async t
   const index = engine.loadIdx();
   index.current_account_id = current.id;
   engine.saveIdx(index);
-  engine.saveAutoSwitchCfg({
+  engine.saveDaemonCfg({
     enabled: false,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
     sync_interval_minutes: 60,
   });
   const quotaModule = require("../engine/quota");
@@ -7673,7 +5735,6 @@ test("the daemon does not toast an HTML token miss as a worker failure", async t
   quotaModule.refreshQuota = async () => { throw new Error("响应不是 JSON"); };
   t.after(() => { quotaModule.refreshQuota = originalRefresh; });
   const worker = await engine.runDaemonWorker();
-  assert.equal(worker.autoSwitchResult, null);
   assert.ok(!worker.failures.some((item) => item.stage === "quota_refresh"));
   assert.equal(worker.failures.length, 0);
 });
@@ -7685,12 +5746,8 @@ test("the daemon does not toast an HTTP 429 quota miss as a worker failure", asy
   const index = engine.loadIdx();
   index.current_account_id = current.id;
   engine.saveIdx(index);
-  engine.saveAutoSwitchCfg({
+  engine.saveDaemonCfg({
     enabled: false,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
     sync_interval_minutes: 60,
   });
   const quotaModule = require("../engine/quota");
@@ -7698,7 +5755,6 @@ test("the daemon does not toast an HTTP 429 quota miss as a worker failure", asy
   quotaModule.refreshQuota = async () => { throw new Error("HTTP 429"); };
   t.after(() => { quotaModule.refreshQuota = originalRefresh; });
   const worker = await engine.runDaemonWorker();
-  assert.equal(worker.autoSwitchResult, null);
   assert.ok(!worker.failures.some((item) => item.stage === "quota_refresh"));
   assert.equal(worker.failures.length, 0);
 });
@@ -7710,12 +5766,8 @@ test("the daemon does not toast an undici proxy socket miss as a worker failure"
   const index = engine.loadIdx();
   index.current_account_id = current.id;
   engine.saveIdx(index);
-  engine.saveAutoSwitchCfg({
+  engine.saveDaemonCfg({
     enabled: false,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
     sync_interval_minutes: 60,
   });
   const quotaModule = require("../engine/quota");
@@ -7727,7 +5779,6 @@ test("the daemon does not toast an undici proxy socket miss as a worker failure"
   };
   t.after(() => { quotaModule.refreshQuota = originalRefresh; });
   const worker = await engine.runDaemonWorker();
-  assert.equal(worker.autoSwitchResult, null);
   assert.ok(!worker.failures.some((item) => item.stage === "quota_refresh"));
   assert.equal(worker.failures.length, 0);
 });
@@ -7739,12 +5790,8 @@ test("the daemon does not toast a dropped proxy pipe as a worker failure", async
   const index = engine.loadIdx();
   index.current_account_id = current.id;
   engine.saveIdx(index);
-  engine.saveAutoSwitchCfg({
+  engine.saveDaemonCfg({
     enabled: false,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
     sync_interval_minutes: 60,
   });
   const quotaModule = require("../engine/quota");
@@ -7752,7 +5799,6 @@ test("the daemon does not toast a dropped proxy pipe as a worker failure", async
   quotaModule.refreshQuota = async () => { throw new Error("write EPIPE"); };
   t.after(() => { quotaModule.refreshQuota = originalRefresh; });
   const worker = await engine.runDaemonWorker();
-  assert.equal(worker.autoSwitchResult, null);
   assert.ok(!worker.failures.some((item) => item.stage === "quota_refresh"));
   assert.equal(worker.failures.length, 0);
 });
@@ -7765,12 +5811,8 @@ test("the daemon does not toast a transient token network miss as a worker failu
   const index = engine.loadIdx();
   index.current_account_id = current.id;
   engine.saveIdx(index);
-  engine.saveAutoSwitchCfg({
+  engine.saveDaemonCfg({
     enabled: false,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
     sync_interval_minutes: 60,
   });
   const tokenRefresh = require("../engine/token-refresh");
@@ -7804,18 +5846,15 @@ test("auto-switch config still keeps the primary file when the first JSON parse 
   const { engine } = freshEngine(t);
   const config = require("../engine/config");
   engine.ensureDir(config.DATA_DIR);
-  engine.saveAutoSwitchCfg({
+  engine.saveDaemonCfg({
     enabled: true,
-    primary_threshold: 15,
-    secondary_threshold: 25,
-    account_scope_mode: "all",
-    selected_account_ids: [],
+    sync_interval_minutes: 15,
   });
-  fs.writeFileSync(`${config.CFG_FILE}.bak`, JSON.stringify({ enabled: false, primary_threshold: 99 }), "utf8");
+  fs.writeFileSync(`${config.CFG_FILE}.bak`, JSON.stringify({ enabled: false, sync_interval_minutes: 45 }), "utf8");
   stubTornJsonReads(t, config.CFG_FILE);
-  const cfg = engine.loadAutoSwitchCfg();
+  const cfg = engine.loadDaemonCfg();
   assert.equal(cfg.enabled, true);
-  assert.equal(cfg.primary_threshold, 15);
+  assert.equal(cfg.sync_interval_minutes, 15);
   assert.equal(JSON.parse(fs.readFileSync(config.CFG_FILE, "utf8")).enabled, true);
 });
 
@@ -8030,50 +6069,6 @@ test("the daemon still decrypts expired tokens that have a refresh token", async
   assert.equal(refreshedId, expired.id);
   assert.equal(result.tokenRefreshes.length, 1);
   assert.equal(result.tokenRefreshes[0].ok, true);
-});
-
-test("the daemon keeps finished refresh work when auto-switch config is briefly locked", async t => {
-  const { engine } = freshEngine(t);
-  const account = await addAccount(engine, "daemon-cfg-lock@example.com", "acct-daemon-cfg-lock", "daemon-cfg-lock");
-  account.tokens.access_token = jwt({ exp: Math.floor(Date.now() / 1000) - 60 });
-  engine.saveAcct(account);
-  const index = engine.loadIdx();
-  index.current_account_id = account.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(account);
-  engine.writeProjection(account, auth);
-  engine.saveAutoSwitchCfg({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-  const tokenRefresh = require("../engine/token-refresh");
-  const originalRefresh = tokenRefresh.refreshOneTok;
-  tokenRefresh.refreshOneTok = async (acct) => {
-    acct.token_generation = Number(acct.token_generation || 0) + 1;
-    return { ok: true, skipped: false, gen: acct.token_generation };
-  };
-  const config = require("../engine/config");
-  const originalRead = fs.readFileSync;
-  fs.readFileSync = (file, encoding) => {
-    if (path.resolve(String(file)) === path.resolve(config.CFG_FILE)) {
-      const error = new Error("EPERM: operation not permitted");
-      error.code = "EPERM";
-      throw error;
-    }
-    return originalRead(file, encoding);
-  };
-  t.after(() => {
-    tokenRefresh.refreshOneTok = originalRefresh;
-    fs.readFileSync = originalRead;
-  });
-  const result = await engine.runDaemonWorker();
-  assert.equal(result.pausedReason, null);
-  assert.ok(result.tokenRefreshes.some((item) => item.ok === true));
-  assert.ok(result.failures.some((item) => item.stage === "auto_switch_config"));
-  assert.equal(result.autoSwitchResult, null);
 });
 
 test("the daemon keeps quota work when a later index read hits a non-JSON filesystem error", async t => {
@@ -8339,289 +6334,25 @@ test("daemon ban probe keeps the in-memory account after leftover usage errors",
   assert.equal(persisted.requires_reauth, true);
 });
 
-test("the daemon reports official auth after an auto-switch, not the pre-switch inspect", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "daemon-pre@example.com", "acct-daemon-pre", "daemon-pre");
-  const candidate = await addAccount(engine, "daemon-post@example.com", "acct-daemon-post", "daemon-post");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 0,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  candidate.quota = {
-    hourly_remaining_percentage: 90,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 90,
-    weekly_window_present: true,
-  };
-  candidate.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-  engine.saveAutoSwitchCfg({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-    sync_interval_minutes: 60,
-  });
-  const quotaModule = require("../engine/quota");
-  const originalRefresh = quotaModule.refreshQuota;
-  quotaModule.refreshQuota = async account => account.quota;
-  t.after(() => { quotaModule.refreshQuota = originalRefresh; });
-  const before = engine.inspectAuthState({ migrateProjection: false });
-  assert.equal(before.currentAccountId, current.id);
-  const result = await engine.runDaemonWorker();
-  assert.equal(result.autoSwitchResult?.switched, true);
-  assert.equal(result.autoSwitchResult?.to?.id, candidate.id);
-  assert.equal(result.authState.status, "aligned");
-  assert.equal(result.authState.currentAccountId, candidate.id);
-  assert.equal(engine.currentAcct().id, candidate.id);
-});
 
-test("the daemon marks auto-switch as paused when official Codex login is missing", async t => {
+test("a missing official Codex login does not pause the daemon, only the mirror", async t => {
   const { engine } = freshEngine(t);
   const current = await addAccount(engine, "daemon-missing@example.com", "acct-daemon-missing", "daemon-missing");
   const index = engine.loadIdx();
   index.current_account_id = current.id;
   engine.saveIdx(index);
-  engine.saveAutoSwitchCfg({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-    sync_interval_minutes: 60,
-  });
   const result = await engine.runDaemonWorker();
   assert.equal(result.authState.status, "missing_official_auth");
-  assert.equal(result.autoSwitchResult?.reason, "missing_official_auth");
-  assert.equal(result.pausedReason, "missing_official_auth");
+  assert.equal(result.pausedReason, null);
+  assert.equal(engine.resolutionHoldReason(result.authState), "missing_official_auth");
+  assert.equal(engine.resolutionHoldReason({ status: "aligned", requiresResolution: false }), null);
+  assert.equal(engine.resolutionHoldReason({ status: "conflict", requiresResolution: true }), "auth_conflict");
 });
 
-test("the daemon marks auto-switch as paused while Codex OAuth is pending", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "daemon-oauth-cur@example.com", "acct-daemon-oauth-cur", "daemon-oauth-cur");
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-  engine.saveAutoSwitchCfg({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-    sync_interval_minutes: 60,
-  });
-  const oauth = require("../engine/oauth");
-  const originalStatus = oauth.getOAuthStatus;
-  oauth.getOAuthStatus = () => ({ pending: true });
-  t.after(() => { oauth.getOAuthStatus = originalStatus; });
-  const result = await engine.runDaemonWorker();
-  assert.equal(result.autoSwitchResult?.reason, "oauth_pending");
-  assert.equal(result.pausedReason, "oauth_pending");
-});
 
-test("the daemon marks auto-switch as paused when the switch verify fails", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "daemon-verify-cur@example.com", "acct-daemon-verify-cur", "daemon-verify-cur");
-  const candidate = await addAccount(engine, "daemon-verify-ready@example.com", "acct-daemon-verify-ready", "daemon-verify-ready");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 0,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  candidate.quota = {
-    hourly_remaining_percentage: 90,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 90,
-    weekly_window_present: true,
-  };
-  candidate.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-  engine.saveAutoSwitchCfg({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-    sync_interval_minutes: 60,
-  });
-  const quotaModule = require("../engine/quota");
-  const switchModule = require("../engine/switch");
-  const originalRefresh = quotaModule.refreshQuota;
-  const originalSwitch = switchModule.doSwitch;
-  quotaModule.refreshQuota = async account => account.quota;
-  switchModule.doSwitch = async () => {
-    const error = new Error("official write did not stick");
-    error.code = "codex_switch_verify_failed";
-    throw error;
-  };
-  t.after(() => {
-    quotaModule.refreshQuota = originalRefresh;
-    switchModule.doSwitch = originalSwitch;
-  });
-  const result = await engine.runDaemonWorker();
-  assert.equal(result.autoSwitchResult?.reason, "switch_verify_failed");
-  assert.equal(result.pausedReason, "switch_verify_failed");
-  assert.equal(engine.currentAcct().id, current.id);
-});
 
-test("auto-switch trusts fresh cached quota instead of refreshing the current account again", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "fresh-current@example.com", "acct-fresh-current", "fresh-current");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: null,
-    hourly_window_present: false,
-    weekly_remaining_percentage: 80,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  engine.saveAcct(current);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
 
-  const quotaModule = require("../engine/quota");
-  const originalRefresh = quotaModule.refreshQuota;
-  let refreshCalls = 0;
-  quotaModule.refreshQuota = async () => { refreshCalls += 1; };
-  t.after(() => { quotaModule.refreshQuota = originalRefresh; });
 
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-  assert.equal(result.reason, "quota_sufficient");
-  assert.equal(refreshCalls, 0,
-    "a quota refreshed moments ago must not trigger a second usage request");
-});
-
-test("auto-switch keeps the refreshed current account without decrypting it again", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "stale-current@example.com", "acct-stale-current", "stale-current");
-  current.quota = {
-    hourly_remaining_percentage: null,
-    hourly_window_present: false,
-    weekly_remaining_percentage: 80,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = engine.ts() - 601;
-  engine.saveAcct(current);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-
-  const quotaModule = require("../engine/quota");
-  const originalRefresh = quotaModule.refreshQuota;
-  quotaModule.refreshQuota = async (account) => {
-    account.quota = {
-      hourly_remaining_percentage: null,
-      hourly_window_present: false,
-      weekly_remaining_percentage: 80,
-      weekly_window_present: true,
-    };
-    account.quota_error = null;
-    account.usage_updated_at = engine.ts();
-    engine.saveAcct(account);
-    return account.quota;
-  };
-  t.after(() => { quotaModule.refreshQuota = originalRefresh; });
-
-  const decrypts = countDecrypts(engine);
-  decrypts.reset();
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-  assert.equal(result.reason, "quota_sufficient");
-  // inspectAuthState plus the quota-refresh load. Reloading the same account
-  // after refreshQuota mutated it in place would make this 3.
-  assert.equal(decrypts.count, 2);
-});
-
-test("auto-switch does not decrypt a fresh-quota candidate until the actual switch", async t => {
-  const { engine } = freshEngine(t);
-  const current = await addAccount(engine, "fresh-cand-current@example.com", "acct-fresh-cand-current", "fresh-cand-current");
-  const candidate = await addAccount(engine, "fresh-cand-ready@example.com", "acct-fresh-cand-ready", "fresh-cand-ready");
-  const now = engine.ts();
-  current.quota = {
-    hourly_remaining_percentage: 0,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 0,
-    weekly_window_present: true,
-  };
-  current.usage_updated_at = now;
-  candidate.quota = {
-    hourly_remaining_percentage: 90,
-    hourly_window_present: true,
-    weekly_remaining_percentage: 90,
-    weekly_window_present: true,
-  };
-  candidate.usage_updated_at = now;
-  engine.saveAcct(current);
-  engine.saveAcct(candidate);
-  const index = engine.loadIdx();
-  index.current_account_id = current.id;
-  engine.saveIdx(index);
-  const auth = engine.writeAuthJson(current);
-  engine.writeProjection(current, auth);
-
-  const switchModule = require("../engine/switch");
-  const originalSwitch = switchModule.doSwitch;
-  let switchedTo = null;
-  switchModule.doSwitch = async (account) => {
-    switchedTo = account.id;
-    return { account };
-  };
-  t.after(() => { switchModule.doSwitch = originalSwitch; });
-
-  const decrypts = countDecrypts(engine);
-  decrypts.reset();
-  const result = await engine.autoSwitchTick({
-    enabled: true,
-    primary_threshold: 20,
-    secondary_threshold: 30,
-    account_scope_mode: "all",
-    selected_account_ids: [],
-  });
-  assert.equal(result.switched, true);
-  assert.equal(switchedTo, candidate.id);
-  // Start inspect (current), switch-lock loads of current and the winner,
-  // plus one more current inspect immediately before doSwitch. Decrypting
-  // the listed candidate just to read cached quota would make this 5.
-  assert.equal(decrypts.count, 4);
-});
 
 test("auto-switch config recovery ignores stale backups on ENOENT and survives double corruption", t => {
   const { engine } = freshEngine(t);
@@ -8630,17 +6361,17 @@ test("auto-switch config recovery ignores stale backups on ENOENT and survives d
 
   // Deleting the config is a reset: a stale backup must not resurrect it.
   fs.writeFileSync(`${config.CFG_FILE}.bak`, JSON.stringify({ enabled: true }), "utf8");
-  assert.equal(engine.loadAutoSwitchCfg().enabled, false);
+  assert.equal(engine.loadDaemonCfg().enabled, false);
 
   // Corrupt primary with a good backup restores and rewrites the primary.
   fs.writeFileSync(config.CFG_FILE, "{ corrupted", "utf8");
-  assert.equal(engine.loadAutoSwitchCfg().enabled, true);
+  assert.equal(engine.loadDaemonCfg().enabled, true);
   assert.equal(JSON.parse(fs.readFileSync(config.CFG_FILE, "utf8")).enabled, true);
 
   // Both corrupt: quarantine the primary and fall back to defaults loudly.
   fs.writeFileSync(config.CFG_FILE, "{ corrupted", "utf8");
   fs.writeFileSync(`${config.CFG_FILE}.bak`, "{ also corrupted", "utf8");
-  assert.equal(engine.loadAutoSwitchCfg().enabled, false);
+  assert.equal(engine.loadDaemonCfg().enabled, false);
   assert.equal(fs.existsSync(config.CFG_FILE), false, "the corrupt primary must be quarantined");
   const quarantined = fs.readdirSync(config.DATA_DIR).filter(name => name.includes("invalid-json"));
   assert.ok(quarantined.length >= 1);
@@ -8651,16 +6382,16 @@ test("auto-switch config still restores from backup when existsSync reports it m
   const config = require("../engine/config");
   engine.ensureDir(config.DATA_DIR);
   fs.writeFileSync(config.CFG_FILE, "{ corrupted", "utf8");
-  fs.writeFileSync(`${config.CFG_FILE}.bak`, JSON.stringify({ enabled: true, primary_threshold: 15 }), "utf8");
+  fs.writeFileSync(`${config.CFG_FILE}.bak`, JSON.stringify({ enabled: true, sync_interval_minutes: 15 }), "utf8");
   const originalExists = fs.existsSync;
   fs.existsSync = (file) => {
     if (path.resolve(String(file)) === path.resolve(`${config.CFG_FILE}.bak`)) return false;
     return originalExists(file);
   };
   t.after(() => { fs.existsSync = originalExists; });
-  const cfg = engine.loadAutoSwitchCfg();
+  const cfg = engine.loadDaemonCfg();
   assert.equal(cfg.enabled, true);
-  assert.equal(cfg.primary_threshold, 15);
+  assert.equal(cfg.sync_interval_minutes, 15);
   assert.equal(JSON.parse(fs.readFileSync(config.CFG_FILE, "utf8")).enabled, true);
 });
 
@@ -8783,24 +6514,6 @@ test("codex unknown emails do not merge without account ids", () => {
   assert.equal(engine.sameAccountIdentity({ email: "one@example.com" }, { email: "unknown" }), false);
 });
 
-test("codex collapse remaps selected auto-switch ids onto the keeper", async (t) => {
-  const { engine } = freshEngine(t);
-  const first = await addAccount(engine, "fold-sel@example.com", "acct-fold-sel", "fold-sel");
-  const extra = {
-    ...first,
-    id: engine.buildId("fold-sel@example.com", "acct-fold-sel", "org-extra"),
-    created_at: first.created_at + 10,
-  };
-  engine.saveAcct(extra);
-  engine.saveAutoSwitchCfg({
-    ...engine.loadAutoSwitchCfg(),
-    account_scope_mode: "selected",
-    selected_account_ids: [extra.id, "unrelated-id"],
-  });
-  engine.collapseDuplicateCodexAccounts();
-  assert.deepEqual(engine.loadAutoSwitchCfg().selected_account_ids, [first.id, "unrelated-id"]);
-  assert.equal(engine.listAccts().length, 1);
-});
 
 test("codex upsert keeps quota_error when no new windows arrive", async (t) => {
   const { engine } = freshEngine(t);
@@ -9089,7 +6802,7 @@ test("a locked official auth.json does not fail auth inspect as a conflict", asy
   const engine = {
     getTickIntervalMs: () => 10 * 60000,
     getTickIntervalMinutes: () => 10,
-    loadAutoSwitchCfg: () => ({ enabled: false, sync_interval_minutes: 10 }),
+    loadDaemonCfg: () => ({ enabled: false, sync_interval_minutes: 10 }),
     loadIdx: () => ({ current_account_id: "codex_keep" }),
     listAccts: () => [],
     listCursorAccts: () => [],

@@ -276,14 +276,11 @@ export const INITIAL_ANTIGRAVITY_ACCOUNTS: AccountQuota[] = [
 ];
 
 export const INITIAL_SETTINGS: SystemSettings = {
-  globalSwitch: true,
-  fiveHourThreshold: 10,
-  weeklyThreshold: 5,
   clientDetected: true,
   cursorDetected: true,
   antigravityDetected: true,
   updateChannel: 'Stable Channel',
-  version: '2.0.7',
+  version: '2.0.8',
   latestStatus: 'Up to date',
 };
 
@@ -291,13 +288,13 @@ export const INITIAL_LOGS: LogEntry[] = [
   {
     id: 'l1',
     timestamp: '2026-06-30 10:40:15',
-    message: '当前额度充足，自动轮换暂停。',
+    message: '已同步 3 个账号的额度。',
     type: 'success',
   },
   {
     id: 'l2',
     timestamp: '2026-06-30 10:35:02',
-    message: '全局自动切号已启用。',
+    message: 'Daemon 服务已启动。',
     type: 'info',
   },
   {
@@ -309,7 +306,7 @@ export const INITIAL_LOGS: LogEntry[] = [
   {
     id: 'l4',
     timestamp: '2026-06-30 10:25:44',
-    message: '警告：jamie@example.com 的 5 小时额度低于阈值（剩余 5%）。',
+    message: '警告：jamie@example.com 的 5 小时额度所剩不多（剩余 5%）。',
     type: 'warning',
   },
   {

@@ -452,21 +452,19 @@ test("dashboard product changes sync the float product and auto-open once", () =
   assert.doesNotMatch(source, /didOpenQuotaSync/);
   assert.match(source, /queueQuotaAutoSync/);
   assert.match(source, /authStateRef\.current\.status === 'conflict'/);
-  assert.match(source, /desktopApi\.refreshQuota\(account\.id, false\)[\s\S]{0,240}toUserMessage\(error instanceof Error \? error\.message : String\(error\)\)/);
+  assert.match(source, /desktopApi\.refreshQuota\(account\.id, false\)[\s\S]{0,240}toUserMessage\(error\)/);
   assert.doesNotMatch(source, /const authBlocked = authStateRef\.current\.requiresResolution/);
   assert.match(source, /actions\.switchAccount\(kind, id, isCurrent\)[\s\S]{0,720}if \(snapshot\) queueQuotaAutoSync\(snapshot\.accounts\)/);
   assert.match(source, /addLogEntry\(message, 'error', kind\);\s*try \{ await loadDashboardState\(false\); \} catch \{\}/);
   assert.match(source, /if \(result\?\.authState\) applyAuthState\(result\.authState\);/);
-  assert.match(source, /onAutoSwitch: \(result\) => \{\s*if \(result\?\.authState\) applyAuthState\(result\.authState\);/);
-  assert.match(source, /if \(result\?\.switched\) \{\s*setSessionSwitchCount\(count => count \+ 1\);\s*if \(result\.to\?\.id\) applyCurrentAccountBadge\('codex', result\.to\.id\);/);
-  assert.match(source, /runAutoSwitchTick\(\);[\s\S]{0,360}if \(result\.to\?\.id\) applyCurrentAccountBadge\('codex', result\.to\.id\);/);
+  // Auto-switch is gone: no daemon-driven switch events, no manual tick.
+  assert.doesNotMatch(source, /onAutoSwitch|runAutoSwitchTick|autoswitch:executed/);
   assert.match(source, /onDaemonTick: \(payload\) => \{\s*if \(payload\?\.result\?\.authState\) applyAuthState\(payload\.result\.authState\);/);
   assert.match(source, /onAuthConflict: \(state\) => \{\s*applyAuthState\(state\);\s*const raw = state\.status && state\.status !== 'aligned'/);
   assert.match(source, /desktopApi\.adoptOfficialAccount\(\)[\s\S]{0,240}if \(account\?\.authState\) applyAuthState\(account\.authState\);/);
   assert.match(source, /desktopApi\.reapplyManagedAccount\([\s\S]{0,240}if \(result\?\.authState\) applyAuthState\(result\.authState\);/);
   assert.match(source, /管理账号已重新应用到官方 Codex[\s\S]{0,160}queueQuotaAutoSync\(snapshot\.accounts\)/);
-  assert.match(source, /handleResolveAuthConflict[\s\S]{0,2400}toUserMessage\(error instanceof Error \? error\.message : String\(error\)\)/);
-  assert.match(source, /const result = await desktopApi\.runAutoSwitchTick\(\);\s*if \(result\?\.authState\) applyAuthState\(result\.authState\);/);
+  assert.match(source, /handleResolveAuthConflict[\s\S]{0,2400}toUserMessage\(error\)/);
   // Every auth-state write goes through one helper that filters the busy
   // placeholder, so a lock-busy daemon tick cannot wipe a real conflict.
   assert.match(source, /const applyAuthState = useCallback\(\(incoming: DesktopAuthState \| null \| undefined\) => \{\s*const next = resolveAuthStateAfterSnapshot\(incoming, authStateRef\.current\);\s*setAuthState\(next\);\s*authStateRef\.current = next;/);
@@ -487,8 +485,10 @@ test("dashboard product changes sync the float product and auto-open once", () =
   // older snapshot.
   assert.match(source, /const latestDashboardLoadRef = useRef<Promise<DashboardLoadResult \| null> \| null>\(null\);/);
   assert.match(source, /while \(latest && latest !== run\) \{\s*const outcome = await latest;\s*if \(outcome !== null\) return outcome;/);
-  assert.match(source, /const baseConfig = configSavesPending\.current > 0 \? autoSwitchConfigRef\.current : snapshot\.config;/);
-  assert.match(source, /configSavesPending\.current \+= 1;\s*try \{\s*await saveOperation;\s*configSavesPending\.current -= 1;/);
+  // The save sequencing itself is behaviour-tested in test/app-modules.test.js.
+  assert.match(source, /const nextConfig = configSaves\.current\.pending > 0 \? daemonConfigRef\.current : snapshot\.config;/);
+  assert.match(source, /await configSaves\.current\.enqueue\(\(\) => desktopApi\.saveDaemonConfig\(nextConfig\)\)/);
+  assert.match(source, /if \(result\.latest\) \{\s*await loadDashboardState\(false\);/);
   assert.match(source, /result\?\.mismatch\) \{\s*if \(kind === 'codex' && result\?\.accountId && result\?\.switched !== false\) \{\s*applyCurrentAccountBadge\('codex', result\.accountId\);/);
   assert.match(source, /actions\.refreshAllQuotas\(kind\)/);
   assert.doesNotMatch(source, /\(\['codex', 'cursor', 'antigravity'\] as ProductKind\[\]\)/);

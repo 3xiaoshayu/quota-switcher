@@ -7,33 +7,25 @@ import {
 } from './data/mockData';
 import {
   AccountQuota,
-  DesktopAppInfo,
-  DesktopAutoSwitchConfig,
+  DesktopDaemonConfig,
   DesktopAuthState,
-  DesktopAntigravityStatus,
-  DesktopCodexStatus,
-  DesktopCursorStatus,
   DesktopOAuthStatus,
-  DesktopUpdateStatus,
   ProductKind,
-  LogEntry,
   SystemSettings,
 } from './types';
 import {
+  clampSyncIntervalMinutes,
   countUnreadAlertLogs,
   desktopApi,
   formatDateTime,
-  formatLogTime,
   hasDesktopBridge,
-  canJoinAutoSwitch,
+  canSwitchAccount,
   accountHasVisibleQuota,
   needsHandling,
   needsQuotaAutoSync,
   isManagedProductAccount,
   pickStartupFloatProduct,
-  pruneAutoSwitchAccountIds,
   quotaAutoSyncStaleMs,
-  selectedAccountIdsEqual,
   summarizeRefreshAllResults,
   formatTokenCheckMessage,
   QUOTA_AUTO_SYNC_MIN_GAP_MS,
@@ -41,6 +33,9 @@ import {
   resolveAuthStateAfterSnapshot,
 } from './api/desktop';
 import { logTypeLabel, toAntigravityUserMessage, toCursorUserMessage, toUserMessage } from './api/user-messages';
+import { formatDriftFrom, latestStatusForUi, settingsFromDesktopState, updateChannelForUi } from './app/dashboard-settings';
+import { useNotifications } from './app/useNotifications';
+import { ConfigSaveQueue } from './app/config-save-queue';
 import {
   accountsFromSnapshot,
   isManagedProduct,
@@ -51,7 +46,6 @@ import {
   productLabel,
   productOfAccount,
   syncFailedCopy,
-  toProductUserMessage,
 } from './api/product-adapter';
 import { productById, readStoredProduct } from './data/products';
 import {
@@ -60,7 +54,7 @@ import {
   setAntigravityStatus,
   setAppInfo,
   setAuthState,
-  setAutoSwitchConfig,
+  setDaemonConfig,
   setCodexAccounts,
   setCodexStatus,
   setCursorAccounts,
@@ -68,14 +62,12 @@ import {
   setCursorStatus,
   setDaemonState,
   setOAuthStatus,
-  setSelectedAccountIds,
   setUpdateStatus,
   useDesktopStore,
 } from './state/desktop-store';
-import Sidebar from './components/Sidebar';
+import Sidebar, { type SidebarTab } from './components/Sidebar';
 import Header from './components/Header';
 import QuotasView from './components/QuotasView';
-import AutoSwitchView from './components/AutoSwitchView';
 import AccountsView from './components/AccountsView';
 import SettingsView from './components/SettingsView';
 import AuthStatusBanner from './components/AuthStatusBanner';
@@ -98,48 +90,9 @@ import {
 const desktopBridgeAvailable = hasDesktopBridge();
 const actions = productActions();
 
-function updateChannelForUi(status: DesktopUpdateStatus | null): SystemSettings['updateChannel'] {
-  const channel = String(status?.channel || '').toLowerCase();
-  if (channel.includes('dev')) return 'Developer Channel';
-  if (channel.includes('stable')) return 'Stable Channel';
-  return 'Beta Channel';
-}
-
-function latestStatusForUi(status: DesktopUpdateStatus | null): string {
-  if (!status) return '未知';
-  if (status.status === 'error') return status.error || '检查更新失败';
-  if (status.status === 'downloaded') return '可安装';
-  if (status.status === 'checking') return '检查中';
-  if (status.status === 'disabled') return status.message || '更新已禁用';
-  return status.message || '已是最新';
-}
-
-function settingsFromDesktopState(
-  config: DesktopAutoSwitchConfig,
-  appInfo: DesktopAppInfo | null,
-  codexStatus: DesktopCodexStatus | null,
-  updateStatus: DesktopUpdateStatus | null,
-  cursorStatus: DesktopCursorStatus | null = null,
-  antigravityStatus: DesktopAntigravityStatus | null = null,
-): SystemSettings {
-  return {
-    globalSwitch: !!config.enabled,
-    fiveHourThreshold: Number(config.primary_threshold ?? 20),
-    weeklyThreshold: Number(config.secondary_threshold ?? 30),
-    clientDetected: !!codexStatus?.installed,
-    cursorDetected: !!cursorStatus?.installed,
-    cursorHasLocalLogin: !!cursorStatus?.vscdbPresent,
-    antigravityDetected: !!antigravityStatus?.installed,
-    antigravityHasLocalLogin: !!antigravityStatus?.vscdbPresent,
-    updateChannel: updateChannelForUi(updateStatus),
-    version: appInfo?.version || INITIAL_SETTINGS.version,
-    latestStatus: latestStatusForUi(updateStatus),
-  };
-}
-
 function DashboardApp() {
   // Main UI States
-  const [activeTab, setActiveTab] = useState<'accounts' | 'quotas' | 'autoswitch' | 'settings'>(() => {
+  const [activeTab, setActiveTab] = useState<SidebarTab>(() => {
     if (desktopBridgeAvailable) return 'quotas';
     return INITIAL_ACCOUNTS.some(needsHandling) ? 'accounts' : 'quotas';
   });
@@ -152,7 +105,7 @@ function DashboardApp() {
     cursorAccounts,
     antigravityAccounts,
     daemonState,
-    autoSwitchConfig,
+    daemonConfig,
     appInfo,
     codexStatus,
     cursorStatus,
@@ -162,11 +115,9 @@ function DashboardApp() {
     oauthStatus,
     cursorOAuthStatus,
     antigravityOAuthStatus,
-    selectedAccountIds,
   } = useDesktopStore();
   const accounts = accountsFromSnapshot(product, { accounts: codexAccounts, cursorAccounts, antigravityAccounts });
   const [settings, setSettings] = useState<SystemSettings>(INITIAL_SETTINGS);
-  const [logs, setLogs] = useState<LogEntry[]>(desktopBridgeAvailable ? [] : INITIAL_LOGS);
   const [isResolvingAuth, setIsResolvingAuth] = useState(false);
   const [dashboardLoadState, setDashboardLoadState] = useState<'loading' | 'ready' | 'error'>(
     desktopBridgeAvailable ? 'loading' : 'ready',
@@ -183,13 +134,11 @@ function DashboardApp() {
   const cursorOAuthStatusRef = useRef<DesktopOAuthStatus | null>(cursorOAuthStatus);
   const antigravityOAuthStatusRef = useRef<DesktopOAuthStatus | null>(antigravityOAuthStatus);
   const accountOperationIds = useRef<Set<string>>(new Set());
-  const autoSwitchConfigRef = useRef<DesktopAutoSwitchConfig>(autoSwitchConfig);
+  const daemonConfigRef = useRef<DesktopDaemonConfig>(daemonConfig);
   const authStateRef = useRef<DesktopAuthState>(authState);
-  const configSaveQueue = useRef<Promise<unknown>>(Promise.resolve());
-  const configSaveRevision = useRef(0);
-  // User-initiated config saves still in flight. While one is pending, a
-  // snapshot that started before the click must not put the old config back.
-  const configSavesPending = useRef(0);
+  // User-initiated config saves. While one is pending, a snapshot that started
+  // before the click must not put the old config back.
+  const configSaves = useRef(new ConfigSaveQueue<unknown>());
 
   // Every auth-state write goes through the same busy-placeholder filter as a
   // snapshot, so a lock-busy "unknown" from a daemon tick or an OAuth result
@@ -199,8 +148,6 @@ function DashboardApp() {
     setAuthState(next);
     authStateRef.current = next;
   }, []);
-  
-  const selectedAccountIdsRef = useRef<string[]>(selectedAccountIds);
 
   useEffect(() => {
     accountsRef.current = accounts;
@@ -227,23 +174,16 @@ function DashboardApp() {
   }, [antigravityOAuthStatus]);
 
   useEffect(() => {
-    autoSwitchConfigRef.current = autoSwitchConfig;
-  }, [autoSwitchConfig]);
-
-  useEffect(() => {
-    selectedAccountIdsRef.current = selectedAccountIds;
-  }, [selectedAccountIds]);
+    daemonConfigRef.current = daemonConfig;
+  }, [daemonConfig]);
 
   // UI Interactive triggers
   const [isRefreshingAll, setIsRefreshingAll] = useState(false);
   const refreshAllKindRef = useRef<ProductKind | null>(null);
-  const [showNotifications, setShowNotifications] = useState(false);
   const [authBannerDismissedKey, setAuthBannerDismissedKey] = useState<string | null>(null);
-  const [lastReadLogId, setLastReadLogId] = useState<string | null>(null);
   const [showSupport, setShowSupport] = useState(false);
   const [showUpdates, setShowUpdates] = useState(false);
-  // Real switch counter for this session (manual switches, manual checks, and
-  // daemon auto-switches all increment it).
+  // Real switch counter for this session (manual switches increment it).
   const [sessionSwitchCount, setSessionSwitchCount] = useState(0);
   // In-app delete confirmation (replaces the native window.confirm).
   const [deleteTarget, setDeleteTarget] = useState<AccountQuota | null>(null);
@@ -251,47 +191,19 @@ function DashboardApp() {
   const [isConfirmingSwitch, setIsConfirmingSwitch] = useState(false);
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
 
-  // Custom Toast notifications array
-  const [toasts, setToasts] = useState<{ id: string; msg: string; type: 'success' | 'info' | 'warning' | 'error' }[]>([]);
-
-  const toastTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  const dismissToast = useCallback((id: string) => {
-    const timer = toastTimers.current.get(id);
-    if (timer) clearTimeout(timer);
-    toastTimers.current.delete(id);
-    setToasts(prev => prev.filter(t => t.id !== id));
-  }, []);
-  const addToast = useCallback((msg: string, type: 'success' | 'info' | 'warning' | 'error' = 'info', source: ProductKind | 'auto' = 'auto') => {
-    const id = `toast_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-    const kind = source === 'auto' ? productRef.current : source;
-    const text = toProductUserMessage(kind, msg);
-    setToasts(prev => [...prev, { id, msg: text, type }]);
-    const timer = setTimeout(() => {
-      toastTimers.current.delete(id);
-      setToasts(prev => prev.filter(t => t.id !== id));
-    }, 4000);
-    toastTimers.current.set(id, timer);
-  }, []);
-
-  const addLogEntry = useCallback((message: string, type: LogEntry['type'], source: ProductKind | 'auto' = 'auto') => {
-    const timestamp = formatLogTime();
-    const kind = source === 'auto' ? productRef.current : source;
-    const newLog: LogEntry = {
-      id: `l_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
-      timestamp,
-      message: toProductUserMessage(kind, message),
-      type,
-    };
-    // Cap the in-memory feed so long sessions cannot grow it without bound.
-    setLogs(prev => [newLog, ...prev].slice(0, 500));
-  }, []);
-
-  useEffect(() => {
-    if (!showNotifications) return;
-    const newestId = logs[0]?.id;
-    if (!newestId) return;
-    setLastReadLogId(newestId);
-  }, [showNotifications, logs]);
+  const {
+    toasts,
+    addToast,
+    dismissToast,
+    logs,
+    addLogEntry,
+    showNotifications,
+    setShowNotifications,
+    lastReadLogId,
+  } = useNotifications({
+    productRef,
+    initialLogs: desktopBridgeAvailable ? [] : INITIAL_LOGS,
+  });
 
   const runAccountOperation = useCallback(async <T,>(id: string, task: () => Promise<T>): Promise<T> => {
     if (accountOperationIds.current.has(id)) {
@@ -396,30 +308,11 @@ function DashboardApp() {
   const applyDashboardState = useCallback((snapshot: Awaited<ReturnType<typeof desktopApi.loadDashboardState>>) => {
     setCodexAccounts(snapshot.accounts);
     accountsRef.current = isManagedProduct(productRef.current) ? accountsRef.current : snapshot.accounts;
-    const baseConfig = configSavesPending.current > 0 ? autoSwitchConfigRef.current : snapshot.config;
-    const prunedSelected = baseConfig.account_scope_mode === 'selected'
-      ? pruneAutoSwitchAccountIds(baseConfig.selected_account_ids || [], snapshot.accounts)
-      : snapshot.accounts.filter(canJoinAutoSwitch).map((account) => account.id);
-    let nextConfig = baseConfig;
-    if (
-      baseConfig.account_scope_mode === 'selected'
-      && !selectedAccountIdsEqual(baseConfig.selected_account_ids || [], prunedSelected)
-    ) {
-      nextConfig = {
-        ...baseConfig,
-        selected_account_ids: prunedSelected,
-      };
-      const revision = configSaveRevision.current;
-      const saveOperation = configSaveQueue.current
-        .catch(() => {})
-        .then(() => {
-          if (revision !== configSaveRevision.current) return;
-          return desktopApi.saveAutoSwitchConfig(nextConfig);
-        });
-      configSaveQueue.current = saveOperation.catch(() => {});
-    }
-    setAutoSwitchConfig(nextConfig);
-    autoSwitchConfigRef.current = nextConfig;
+    // A snapshot that started before a Settings change must not put the old
+    // interval back while that save is still in flight.
+    const nextConfig = configSaves.current.pending > 0 ? daemonConfigRef.current : snapshot.config;
+    setDaemonConfig(nextConfig);
+    daemonConfigRef.current = nextConfig;
     setAppInfo(snapshot.appInfo);
     setCodexStatus(snapshot.codexStatus);
     setUpdateStatus(snapshot.updateStatus);
@@ -437,7 +330,7 @@ function DashboardApp() {
     }
     wasOAuthPendingRef.current = !!nextOAuth.pending;
     setSettings((prev) => ({
-      ...settingsFromDesktopState(nextConfig, snapshot.appInfo, snapshot.codexStatus, snapshot.updateStatus),
+      ...settingsFromDesktopState(snapshot.appInfo, snapshot.codexStatus, snapshot.updateStatus),
       cursorDetected: prev.cursorDetected,
       cursorHasLocalLogin: prev.cursorHasLocalLogin,
       antigravityDetected: prev.antigravityDetected,
@@ -445,14 +338,14 @@ function DashboardApp() {
     }));
     setDaemonState({
       status: snapshot.daemonRunning ? 'Running' : 'Stopped',
-      syncInterval: snapshot.daemonSyncInterval,
+      syncInterval: configSaves.current.pending > 0
+        ? clampSyncIntervalMinutes(nextConfig.sync_interval_minutes)
+        : snapshot.daemonSyncInterval,
       lastChecked: snapshot.daemonLastRunAt ? formatDateTime(snapshot.daemonLastRunAt) : '',
       lastSuccessAt: snapshot.daemonLastSuccessAt,
       lastError: snapshot.daemonLastError ? toUserMessage(snapshot.daemonLastError) : null,
       pausedReason: snapshot.daemonPausedReason ? toUserMessage(snapshot.daemonPausedReason) : null,
     });
-    setSelectedAccountIds(prunedSelected);
-    selectedAccountIdsRef.current = prunedSelected;
   }, [applyAuthState, persistProduct]);
 
   type DashboardLoadResult = Awaited<ReturnType<typeof desktopApi.loadDashboardState>> & {
@@ -519,7 +412,7 @@ function DashboardApp() {
       };
     } catch (error) {
       if (seq !== dashboardLoadSeqRef.current) return null;
-      const message = toUserMessage(error instanceof Error ? error.message : String(error));
+      const message = toUserMessage(error);
       addToast(message, 'error', 'codex');
       addLogEntry(message, 'error', 'codex');
       if (!hasLoadedDashboard.current) {
@@ -565,7 +458,7 @@ function DashboardApp() {
       if (authBlocked && !isManagedProductAccount(account)) return false;
       return needsQuotaAutoSync(
         account,
-        quotaAutoSyncStaleMs(account, autoSwitchConfigRef.current.sync_interval_minutes),
+        quotaAutoSyncStaleMs(account, daemonConfigRef.current.sync_interval_minutes),
       );
     });
     if (!staleAccounts.length) return;
@@ -578,7 +471,7 @@ function DashboardApp() {
           if (isManagedProduct(kind)) await actions.refreshQuota(kind, account.id, false);
           else await desktopApi.refreshQuota(account.id, false);
         } catch (error) {
-          const message = toUserMessage(error instanceof Error ? error.message : String(error));
+          const message = toUserMessage(error);
           addLogEntry(`${account.email}: ${message}`, 'info', kind);
         }
       }
@@ -675,15 +568,6 @@ function DashboardApp() {
         const text = toUserMessage(message);
         addToast(text, 'error', 'codex');
         addLogEntry(text, 'error', 'codex');
-      },
-      onAutoSwitch: (result) => {
-        if (result?.authState) applyAuthState(result.authState);
-        if (result?.switched) {
-          setSessionSwitchCount(count => count + 1);
-          if (result.to?.id) applyCurrentAccountBadge('codex', result.to.id);
-          addToast(`已自动切换至 ${result.to?.email || '新账号'}`, 'warning', 'codex');
-        }
-        loadDashboardState(false);
       },
       onUpdateStatus: (status) => {
         setUpdateStatus(status);
@@ -934,18 +818,18 @@ function DashboardApp() {
         const results = await actions.refreshAllQuotas(kind);
         const { refreshed, reauthSkipped, bannedSkipped, failed, networkFailed } = summarizeRefreshAllResults(results);
         const snapshot = await loadDashboardState(false);
-        if (snapshot && currentProduct.features.autoSwitch) queueQuotaAutoSync(snapshot.accounts);
+        if (snapshot && currentProduct.features.officialAuthSync) queueQuotaAutoSync(snapshot.accounts);
         if (productRef.current !== kind) return;
         if (failed || bannedSkipped || networkFailed) {
           const parts = [`已刷新 ${refreshed} 个`];
           if (reauthSkipped) parts.push(`${reauthSkipped} 个需重新授权`);
-          if (bannedSkipped && currentProduct.features.autoSwitch) parts.push(`${bannedSkipped} 个已封号`);
+          if (bannedSkipped && currentProduct.features.officialAuthSync) parts.push(`${bannedSkipped} 个已封号`);
           if (networkFailed) parts.push(`${networkFailed} 个额度暂时没刷到，登录还在`);
           if (failed) parts.push(isManagedProduct(kind) ? `${failed} 个这次没查清` : `${failed} 个同步失败`);
           addToast(parts.join('，'), 'warning', kind);
           const logParts = [];
           if (reauthSkipped) logParts.push(`需重新授权 ${reauthSkipped} 个`);
-          if (bannedSkipped && currentProduct.features.autoSwitch) logParts.push(`封号 ${bannedSkipped} 个`);
+          if (bannedSkipped && currentProduct.features.officialAuthSync) logParts.push(`封号 ${bannedSkipped} 个`);
           if (networkFailed) logParts.push(`暂时没刷到 ${networkFailed} 个`);
           if (failed) logParts.push(isManagedProduct(kind) ? `没查清 ${failed} 个` : `失败 ${failed} 个`);
           addLogEntry(`额度刷新完成：${logParts.join('，')}。`, 'warning', kind);
@@ -958,7 +842,7 @@ function DashboardApp() {
         }
       } catch (error) {
         if (productRef.current === kind) {
-          const message = toUserMessage(error instanceof Error ? error.message : String(error));
+          const message = toUserMessage(error);
           addToast(message, 'error', kind);
           addLogEntry(message, 'error', kind);
         }
@@ -1137,7 +1021,7 @@ function DashboardApp() {
         addLogEntry(`${account?.email || id}：${detail}`, 'error', kind);
         return;
       }
-      const message = toUserMessage(error instanceof Error ? error.message : String(error));
+      const message = toUserMessage(error);
       addToast(message, 'error', kind);
       addLogEntry(message, 'error', kind);
     }
@@ -1151,14 +1035,10 @@ function DashboardApp() {
         if (nextAction === 'stop') await desktopApi.stopDaemon();
         else await desktopApi.startDaemon();
         await loadDashboardState(false);
-        if (nextAction === 'stop' && autoSwitchConfigRef.current.enabled) {
-          addToast('Daemon 已停止。自动切号已打开，但不会再自动换号。', 'warning', 'codex');
-        } else {
-          addToast(`Daemon 已${nextAction === 'stop' ? '停止' : '启动'}`, nextAction === 'stop' ? 'warning' : 'success', 'codex');
-        }
+        addToast(`Daemon 已${nextAction === 'stop' ? '停止' : '启动'}`, nextAction === 'stop' ? 'warning' : 'success', 'codex');
         addLogEntry(`Daemon 已${nextAction === 'stop' ? '停止' : '启动'}。`, nextAction === 'stop' ? 'warning' : 'success', 'codex');
       } catch (error) {
-        const message = toUserMessage(error instanceof Error ? error.message : String(error));
+        const message = toUserMessage(error);
         addToast(message, 'error', 'codex');
         addLogEntry(message, 'error', 'codex');
       }
@@ -1188,12 +1068,12 @@ function DashboardApp() {
     const syncInterval = Math.min(60, Math.max(1, Math.round(Number(val) || 1)));
     handlePreviewSyncInterval(syncInterval);
     if (desktopBridgeAvailable) {
-      if (Number(autoSwitchConfigRef.current.sync_interval_minutes) === syncInterval) return;
+      if (Number(daemonConfigRef.current.sync_interval_minutes) === syncInterval) return;
       const nextConfig = {
-        ...autoSwitchConfigRef.current,
+        ...daemonConfigRef.current,
         sync_interval_minutes: syncInterval,
       };
-      void saveAutoSwitchConfig(nextConfig);
+      void saveDaemonConfig(nextConfig);
       return;
     }
     addToast(`Daemon 检查间隔已调整为 ${val} 分钟`, 'info');
@@ -1226,7 +1106,7 @@ function DashboardApp() {
         if (oauthStatusEndedThisFlow(finished)) {
           reportOAuthFinished(finished as DesktopOAuthStatus, kind);
         } else {
-          const message = toUserMessage(error instanceof Error ? error.message : String(error));
+          const message = toUserMessage(error);
           addToast(message, 'error', kind);
           addLogEntry(message, 'error', kind);
         }
@@ -1287,7 +1167,7 @@ function DashboardApp() {
       if (oauthStatusEndedThisFlow(finished)) {
         reportOAuthFinished(finished as DesktopOAuthStatus, kind);
       } else {
-        const message = toUserMessage(error instanceof Error ? error.message : String(error));
+        const message = toUserMessage(error);
         addToast(message, 'error', kind);
         addLogEntry(message, 'error', kind);
       }
@@ -1332,7 +1212,7 @@ function DashboardApp() {
       const snapshot = await loadDashboardState(false);
       if (snapshot) queueQuotaAutoSync(snapshot.accounts);
     } catch (error) {
-      const message = toUserMessage(error instanceof Error ? error.message : String(error));
+      const message = toUserMessage(error);
       addToast(message, 'error', 'codex');
       addLogEntry(message, 'error', 'codex');
     } finally {
@@ -1369,7 +1249,7 @@ function DashboardApp() {
       setDeleteTarget(null);
     } catch (error) {
       if (productRef.current === kind) {
-        const message = toUserMessage(error instanceof Error ? error.message : String(error));
+        const message = toUserMessage(error);
         addToast(message, 'error', kind);
         addLogEntry(message, 'error', kind);
       }
@@ -1415,7 +1295,7 @@ function DashboardApp() {
         }
       } catch (error) {
         if (productRef.current !== kind) return;
-        const message = toUserMessage(error instanceof Error ? error.message : String(error));
+        const message = toUserMessage(error);
         addToast(message, 'error', kind);
         addLogEntry(message, 'error', kind);
         try { await loadDashboardState(false); } catch {}
@@ -1457,144 +1337,21 @@ function DashboardApp() {
     }
   };
 
-  // Toggle Auto-switch scope selection
-  const handleToggleAccountSelection = (id: string) => {
-    const selected = accounts.find(a => a.id === id);
-    if (selected && !canJoinAutoSwitch(selected)) {
-      addToast(
-        selected.status === 'BANNED'
-          ? '账号已封号，无法加入自动切号'
-          : selected.tokenAccessAvailable === false
-            ? '该账号没有可用登录令牌，无法加入自动切号'
-            : '该账号需要重新授权后才能加入自动切号',
-        'info',
-        'codex',
-      );
-      return;
-    }
-    if (desktopBridgeAvailable) {
-      if (autoSwitchConfigRef.current.account_scope_mode !== 'selected') {
-        addToast('当前是全部账号。要缩小范围，请先切到「指定账号」。', 'info');
-        return;
-      }
-      const currentSelected = selectedAccountIdsRef.current;
-      const nextSelected = currentSelected.includes(id)
-        ? currentSelected.filter(item => item !== id)
-        : pruneAutoSwitchAccountIds([...currentSelected, id], codexAccountsRef.current);
-      const nextConfig: DesktopAutoSwitchConfig = {
-        ...autoSwitchConfigRef.current,
-        account_scope_mode: 'selected',
-        selected_account_ids: nextSelected,
-      };
-      selectedAccountIdsRef.current = nextSelected;
-      setSelectedAccountIds(nextSelected);
-      void saveAutoSwitchConfig(nextConfig)
-        .then((saved) => {
-          if (saved) {
-            addLogEntry(`${selected?.email || id} 已${nextSelected.includes(id) ? '加入' : '移出'}自动切号范围。`, 'info');
-          }
-        });
-      return;
-    }
-    setSelectedAccountIds(prev => {
-      const isSelected = prev.includes(id);
-      if (isSelected) {
-        addLogEntry(`已将 ${selected?.email || selected?.name} 移出自动切号轮换范围。`, 'warning');
-        return prev.filter(item => item !== id);
-      } else {
-        addLogEntry(`已将 ${selected?.email || selected?.name} 加入自动切号轮换范围。`, 'info');
-        return [...prev, id];
-      }
-    });
-  };
-
-  const saveAutoSwitchConfig = async (nextConfig: DesktopAutoSwitchConfig) => {
-    const revision = ++configSaveRevision.current;
-    const prunedConfig: DesktopAutoSwitchConfig = {
-      ...nextConfig,
-      selected_account_ids: pruneAutoSwitchAccountIds(nextConfig.selected_account_ids || [], codexAccountsRef.current),
-    };
-    autoSwitchConfigRef.current = prunedConfig;
-    setAutoSwitchConfig(prunedConfig);
-    setSettings((prev) => settingsFromDesktopState(
-      prunedConfig,
-      appInfo,
-      codexStatus,
-      updateStatus || null,
-      cursorStatus || {
-        installed: prev.cursorDetected,
-        vscdbPresent: prev.cursorHasLocalLogin,
-      },
-      antigravityStatus || {
-        installed: prev.antigravityDetected,
-        vscdbPresent: prev.antigravityHasLocalLogin,
-      },
-    ));
-    const saveOperation = configSaveQueue.current
-      .catch(() => {})
-      .then(() => desktopApi.saveAutoSwitchConfig(prunedConfig));
-    configSaveQueue.current = saveOperation.catch(() => {});
-    configSavesPending.current += 1;
-    try {
-      await saveOperation;
-      configSavesPending.current -= 1;
-      if (revision === configSaveRevision.current) {
-        await loadDashboardState(false);
-      }
-      return true;
-    } catch (error) {
-      configSavesPending.current -= 1;
-      const message = toUserMessage(error instanceof Error ? error.message : String(error));
+  const saveDaemonConfig = async (nextConfig: DesktopDaemonConfig) => {
+    daemonConfigRef.current = nextConfig;
+    setDaemonConfig(nextConfig);
+    const result = await configSaves.current.enqueue(() => desktopApi.saveDaemonConfig(nextConfig));
+    if (!result.ok) {
+      const message = toUserMessage(result.error);
       addToast(message, 'error', 'codex');
       addLogEntry(message, 'error', 'codex');
-      if (revision === configSaveRevision.current) {
-        await loadDashboardState(false);
-      }
-      return false;
     }
-  };
-
-  const handleToggleGlobalSwitch = async () => {
-    if (!desktopBridgeAvailable) {
-      setSettings(prev => {
-        const updated = !prev.globalSwitch;
-        addToast(`全局切号已${updated ? '启用' : '禁用'}`, updated ? 'success' : 'warning', 'codex');
-        addLogEntry(`全局自动切号已${updated ? '启用' : '禁用'}。`, 'info', 'codex');
-        return { ...prev, globalSwitch: updated };
-      });
-      return;
+    // Only the newest save reloads; an older one finishing late must not put
+    // its config back over a later click.
+    if (result.latest) {
+      await loadDashboardState(false);
     }
-
-    const nextConfig = {
-      ...autoSwitchConfigRef.current,
-      enabled: !autoSwitchConfigRef.current.enabled,
-    };
-    const enabled = nextConfig.enabled;
-    const saved = await saveAutoSwitchConfig(nextConfig);
-    if (saved) {
-      addToast(`全局切号已${enabled ? '启用' : '禁用'}`, enabled ? 'success' : 'warning', 'codex');
-      addLogEntry(`全局自动切号已${enabled ? '启用' : '禁用'}。`, 'info', 'codex');
-    }
-  };
-
-  const handlePreviewThreshold = (type: '5h' | 'weekly', val: number) => {
-    setSettings(prev => ({
-      ...prev,
-      [type === '5h' ? 'fiveHourThreshold' : 'weeklyThreshold']: val,
-    }));
-  };
-
-  const handleUpdateThreshold = (type: '5h' | 'weekly', val: number) => {
-    handlePreviewThreshold(type, val);
-    if (!desktopBridgeAvailable) return;
-
-    const configKey = type === '5h' ? 'primary_threshold' : 'secondary_threshold';
-    if (Number(autoSwitchConfigRef.current[configKey]) === val) return;
-    const nextConfig = {
-      ...autoSwitchConfigRef.current,
-      [configKey]: val,
-    };
-    void saveAutoSwitchConfig(nextConfig);
+    return result.ok;
   };
 
   const handleBatchVerifyTokens = async () => {
@@ -1604,11 +1361,11 @@ function DashboardApp() {
     const [codex, cursor, antigravity] = await Promise.all([
       desktopApi.refreshAllTokens(false),
       desktopApi.refreshAllCursorTokens(false).catch((error) => {
-        cursorError = toCursorUserMessage(error instanceof Error ? error.message : String(error));
+        cursorError = toCursorUserMessage(error);
         return { results: [] };
       }),
       desktopApi.refreshAllAntigravityTokens(false).catch((error) => {
-        antigravityError = toAntigravityUserMessage(error instanceof Error ? error.message : String(error));
+        antigravityError = toAntigravityUserMessage(error);
         return { results: [] };
       }),
     ]);
@@ -1750,47 +1507,11 @@ function DashboardApp() {
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
-  const handleRunAutoSwitchTick = async () => {
-    if (!desktopBridgeAvailable) return;
-    const result = await desktopApi.runAutoSwitchTick();
-    if (result?.authState) applyAuthState(result.authState);
-    const snapshot = await loadDashboardState(false);
-    if (snapshot) queueQuotaAutoSync(snapshot.accounts);
-    if (result?.switched) {
-      setSessionSwitchCount(count => count + 1);
-      if (result.to?.id) applyCurrentAccountBadge('codex', result.to.id);
-      addToast(`已切换至 ${result.to?.email || '新账号'}`, 'success', 'codex');
-    } else if (result?.reason === 'disabled') {
-      addToast('额度已低于阈值，但全局开关已关闭，未切换账号。', 'warning', 'codex');
-    }
-    return result;
-  };
-
-  const handleScopeModeChange = async (mode: 'all' | 'selected') => {
-    if (!desktopBridgeAvailable) return;
-    const nextConfig: DesktopAutoSwitchConfig = {
-      ...autoSwitchConfigRef.current,
-      account_scope_mode: mode,
-    };
-    if (mode === 'selected') {
-      const existing = autoSwitchConfigRef.current.selected_account_ids || [];
-      const seeded = pruneAutoSwitchAccountIds(
-        existing.length > 0 ? existing : selectedAccountIdsRef.current.filter((id) => String(id || '').trim() !== ''),
-        codexAccountsRef.current,
-      );
-      nextConfig.selected_account_ids = seeded;
-      selectedAccountIdsRef.current = seeded;
-      setSelectedAccountIds(seeded);
-    }
-    await saveAutoSwitchConfig(nextConfig);
-  };
-
   const authBannerKey = `${authState.status}:${authState.currentAccountId || ''}:${authState.officialIdentity?.email || ''}`;
-  const showAuthBanner = desktopBridgeAvailable && productById(product).features.autoSwitch && authState.requiresResolution && authBannerDismissedKey !== authBannerKey;
+  const showAuthBanner = desktopBridgeAvailable && productById(product).features.officialAuthSync && authState.requiresResolution && authBannerDismissedKey !== authBannerKey;
 
   const handleProductChange = (next: ProductKind) => {
     persistProduct(next);
-    if (!productById(next).features.autoSwitch && activeTab === 'autoswitch') setActiveTab('accounts');
     setAccountsFilterTab('all');
     setSwitchTarget(null);
     setIsConfirmingSwitch(false);
@@ -1956,25 +1677,6 @@ function DashboardApp() {
                 />
               )}
 
-              {activeTab === 'autoswitch' && productById(product).features.autoSwitch && (
-                <AutoSwitchView 
-                  accounts={accounts}
-                  logs={logs}
-                  settings={settings}
-                  daemonState={daemonState}
-                  sessionSwitchCount={sessionSwitchCount}
-                  onToggleGlobalSwitch={handleToggleGlobalSwitch}
-                  onPreviewThreshold={handlePreviewThreshold}
-                  onUpdateThreshold={handleUpdateThreshold}
-                  onAddLog={addLogEntry}
-                  onToggleAccountSelection={handleToggleAccountSelection}
-                  selectedAccountIds={selectedAccountIds}
-                  scopeMode={autoSwitchConfig.account_scope_mode}
-                  onScopeModeChange={desktopBridgeAvailable ? handleScopeModeChange : undefined}
-                  onRunCheckNow={desktopBridgeAvailable ? handleRunAutoSwitchTick : undefined}
-                />
-              )}
-
               {activeTab === 'accounts' && (
                 <AccountsView
                   key={`accounts-${product}`}
@@ -1994,7 +1696,7 @@ function DashboardApp() {
                   oauthMode={desktopBridgeAvailable}
                   oauthStatus={product === 'antigravity' ? antigravityOAuthStatus : product === 'cursor' ? cursorOAuthStatus : oauthStatus}
                   actionsLocked={!!(product === 'antigravity' ? antigravityOAuthStatus?.pending : product === 'cursor' ? cursorOAuthStatus?.pending : oauthStatus?.pending)}
-                  authState={desktopBridgeAvailable && productById(product).features.autoSwitch ? authState : null}
+                  authState={desktopBridgeAvailable && productById(product).features.officialAuthSync ? authState : null}
                   onOpenModal={() => setShowNotifications(false)}
                 />
               )}
@@ -2002,7 +1704,7 @@ function DashboardApp() {
               {activeTab === 'settings' && (
                 <SettingsView 
                   product={product}
-                  settings={settings}
+                  settings={{ ...settings, formatDrift: formatDriftFrom({ codex: codexStatus, cursor: cursorStatus, antigravity: antigravityStatus }) }}
                   daemonState={daemonState}
                   onToggleDaemon={handleToggleDaemon}
                   onPreviewSyncInterval={handlePreviewSyncInterval}

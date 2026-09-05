@@ -382,7 +382,6 @@ async function doSwitch(account, options = {}) {
     startMs = Date.now() - startStarted;
     logInfo(`Codex switch timings kill=${killMs}ms start=${startMs}ms total=${Date.now() - started}ms`);
     logInfo("Codex account switch transaction completed");
-    try { require("./auto-switch").noteOfficialSwitch(); } catch {}
     return { already: false, account, authState: verified };
   } catch (error) {
     logError(`Codex account switch failed; restoring previous state: ${error.message}`);

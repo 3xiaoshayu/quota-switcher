@@ -5,7 +5,9 @@ export interface ProductDefinition {
   label: string;
   accountPrefix: string;
   features: {
-    autoSwitch: boolean;
+    // The background daemon refreshes this product's logins and the window
+    // shows official-login conflicts for it. Only Codex today.
+    officialAuthSync: boolean;
     floatLens: boolean;
     tokenBatch: boolean;
     oauthPasteCallback: boolean;
@@ -22,7 +24,7 @@ export const PRODUCTS: ProductDefinition[] = [
     label: 'Codex',
     accountPrefix: 'codex_',
     features: {
-      autoSwitch: true,
+      officialAuthSync: true,
       floatLens: true,
       tokenBatch: true,
       oauthPasteCallback: true,
@@ -34,7 +36,7 @@ export const PRODUCTS: ProductDefinition[] = [
     label: 'Cursor',
     accountPrefix: 'cursor_',
     features: {
-      autoSwitch: false,
+      officialAuthSync: false,
       floatLens: true,
       tokenBatch: true,
       oauthPasteCallback: false,
@@ -46,7 +48,7 @@ export const PRODUCTS: ProductDefinition[] = [
     label: 'Antigravity',
     accountPrefix: 'antigravity_',
     features: {
-      autoSwitch: false,
+      officialAuthSync: false,
       floatLens: true,
       tokenBatch: true,
       oauthPasteCallback: false,

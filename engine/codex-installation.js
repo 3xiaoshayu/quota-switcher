@@ -6,8 +6,8 @@ let cachedStatus = null;
 let cachedAt = 0;
 const CACHE_MS = 60 * 1000;
 // A PowerShell hiccup (slow start, AV scan) is not "Codex is not installed".
-// Keep that answer only briefly so the next switch or auto-switch tick
-// re-checks instead of failing for a whole minute.
+// Keep that answer only briefly so the next switch re-checks instead of
+// failing for a whole minute.
 const FAILURE_CACHE_MS = 5 * 1000;
 
 function emptyStatus(extra) {

@@ -11,7 +11,7 @@ import type {
   DesktopAntigravityStatus,
   DesktopAppInfo,
   DesktopAuthState,
-  DesktopAutoSwitchConfig,
+  DesktopDaemonConfig,
   DesktopCodexStatus,
   DesktopCursorStatus,
   DesktopOAuthStatus,
@@ -21,12 +21,8 @@ import type {
 
 const desktopBridgeAvailable = hasDesktopBridge();
 
-export const DEFAULT_AUTO_SWITCH_CONFIG: DesktopAutoSwitchConfig = {
+export const DEFAULT_DAEMON_CONFIG: DesktopDaemonConfig = {
   enabled: false,
-  primary_threshold: 20,
-  secondary_threshold: 30,
-  account_scope_mode: 'all',
-  selected_account_ids: [],
   sync_interval_minutes: 1,
 };
 
@@ -44,7 +40,7 @@ export type DesktopStoreState = {
   cursorAccounts: AccountQuota[];
   antigravityAccounts: AccountQuota[];
   daemonState: DaemonState;
-  autoSwitchConfig: DesktopAutoSwitchConfig;
+  daemonConfig: DesktopDaemonConfig;
   appInfo: DesktopAppInfo | null;
   codexStatus: DesktopCodexStatus | null;
   cursorStatus: DesktopCursorStatus | null;
@@ -54,7 +50,6 @@ export type DesktopStoreState = {
   oauthStatus: DesktopOAuthStatus | null;
   cursorOAuthStatus: DesktopOAuthStatus | null;
   antigravityOAuthStatus: DesktopOAuthStatus | null;
-  selectedAccountIds: string[];
 };
 
 function createInitialState(): DesktopStoreState {
@@ -65,7 +60,7 @@ function createInitialState(): DesktopStoreState {
     daemonState: desktopBridgeAvailable
       ? { status: 'Stopped', syncInterval: 1, lastChecked: '' }
       : INITIAL_DAEMON_STATE,
-    autoSwitchConfig: DEFAULT_AUTO_SWITCH_CONFIG,
+    daemonConfig: DEFAULT_DAEMON_CONFIG,
     appInfo: null,
     codexStatus: null,
     cursorStatus: null,
@@ -75,7 +70,6 @@ function createInitialState(): DesktopStoreState {
     oauthStatus: null,
     cursorOAuthStatus: null,
     antigravityOAuthStatus: null,
-    selectedAccountIds: desktopBridgeAvailable ? [] : ['5', '6', '8'],
   };
 }
 
@@ -116,7 +110,7 @@ export const setCodexAccounts = (value: SetStateAction<AccountQuota[]>) => setSt
 export const setCursorAccounts = (value: SetStateAction<AccountQuota[]>) => setStoreField('cursorAccounts', value);
 export const setAntigravityAccounts = (value: SetStateAction<AccountQuota[]>) => setStoreField('antigravityAccounts', value);
 export const setDaemonState = (value: SetStateAction<DaemonState>) => setStoreField('daemonState', value);
-export const setAutoSwitchConfig = (value: SetStateAction<DesktopAutoSwitchConfig>) => setStoreField('autoSwitchConfig', value);
+export const setDaemonConfig = (value: SetStateAction<DesktopDaemonConfig>) => setStoreField('daemonConfig', value);
 export const setAppInfo = (value: SetStateAction<DesktopAppInfo | null>) => setStoreField('appInfo', value);
 export const setCodexStatus = (value: SetStateAction<DesktopCodexStatus | null>) => setStoreField('codexStatus', value);
 export const setCursorStatus = (value: SetStateAction<DesktopCursorStatus | null>) => setStoreField('cursorStatus', value);
@@ -126,7 +120,6 @@ export const setAuthState = (value: SetStateAction<DesktopAuthState>) => setStor
 export const setOAuthStatus = (value: SetStateAction<DesktopOAuthStatus | null>) => setStoreField('oauthStatus', value);
 export const setCursorOAuthStatus = (value: SetStateAction<DesktopOAuthStatus | null>) => setStoreField('cursorOAuthStatus', value);
 export const setAntigravityOAuthStatus = (value: SetStateAction<DesktopOAuthStatus | null>) => setStoreField('antigravityOAuthStatus', value);
-export const setSelectedAccountIds = (value: SetStateAction<string[]>) => setStoreField('selectedAccountIds', value);
 
 export function useDesktopStore() {
   return useSyncExternalStore(subscribeDesktopStore, getDesktopStoreSnapshot, getDesktopStoreSnapshot);

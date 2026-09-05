@@ -12,7 +12,7 @@ backend, telemetry pipeline, advertising service, or cross-device account sync.
 | `%USERPROFILE%\.codex-switch\accounts.json` | Codex account index and current account ID |
 | `%USERPROFILE%\.codex-switch\cursor-accounts.json` | Cursor account index and current account ID |
 | `%USERPROFILE%\.codex-switch\antigravity-accounts.json` | Antigravity account index and current account ID |
-| `%USERPROFILE%\.codex-switch\auto-switch.json` | Thresholds, scope, and daemon settings |
+| `%USERPROFILE%\.codex-switch\auto-switch.json` | Background worker on/off and interval (historical file name) |
 | `%USERPROFILE%\.codex-switch\accounts\*.json` | Codex account metadata and DPAPI-encrypted OAuth tokens |
 | `%USERPROFILE%\.codex-switch\cursor-accounts\*.json` | Cursor account metadata and DPAPI-encrypted OAuth tokens |
 | `%USERPROFILE%\.codex-switch\antigravity-accounts\*.json` | Antigravity account metadata and DPAPI-encrypted OAuth tokens |
@@ -84,13 +84,11 @@ in logs.
 
 ## Background behavior
 
-The app can refresh stale quota data, refresh expiring tokens, and evaluate
-automatic-switching thresholds while it is running. These requests use the
-saved account's local OAuth credentials.
+The app can refresh stale quota data and refresh expiring Codex tokens while
+it is running. These requests use the saved account's local OAuth credentials.
 
-Automatic switching is Codex-only and disabled unless enabled by the user. It
-does not create additional quota and cannot bypass upstream limits. Cursor
-and Antigravity accounts are not candidates for automatic switching.
+It never switches an account on its own; every switch is a user action. It
+does not create additional quota and cannot bypass upstream limits.
 
 ## Process and file changes
 
@@ -123,9 +121,9 @@ Switching an Antigravity account:
 Phase 1 does not manage the legacy `Antigravity.exe` runtime and does not
 open multiple instances.
 
-If official Codex authentication changes outside the manager, authentication
-writes and automatic switching pause until the user chooses **采用官方账号**
-or **写回管理账号**.
+If official Codex authentication changes outside the manager, background
+authentication writes pause until the user chooses **采用官方账号** or
+**写回管理账号**.
 
 Finish active work before switching. Switching Cursor or Antigravity closes
 the official window, including unsaved editor work.

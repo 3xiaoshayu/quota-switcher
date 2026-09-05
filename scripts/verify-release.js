@@ -8,7 +8,6 @@ const windowShots = [
   "docs/images/account-dashboard.png",
   "docs/images/antigravity-quota.png",
   "docs/images/quota-overview.png",
-  "docs/images/auto-switch.png",
   "docs/images/settings.png",
 ];
 const lensShots = [
@@ -71,10 +70,11 @@ if (process.env.GITHUB_REF_TYPE === "tag") {
   }
 }
 
-const bannedShot = path.join(root, "docs/images/tray-menu.png");
-if (fs.existsSync(bannedShot)) {
-  console.error("docs/images/tray-menu.png must not be published");
-  process.exit(1);
+for (const banned of ["docs/images/tray-menu.png", "docs/images/auto-switch.png"]) {
+  if (fs.existsSync(path.join(root, banned))) {
+    console.error(`${banned} must not be published`);
+    process.exit(1);
+  }
 }
 
 for (const file of windowShots) {
@@ -103,7 +103,6 @@ const galleryNames = [
   "account-dashboard.png",
   "quota-overview.png",
   "antigravity-quota.png",
-  "auto-switch.png",
   "settings.png",
   "float-lens.png",
   "float-lens-cursor-reauth.png",

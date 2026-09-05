@@ -11,7 +11,7 @@
 | `%USERPROFILE%\.codex-switch\accounts.json` | Codex 账号列表和当前号 |
 | `%USERPROFILE%\.codex-switch\cursor-accounts.json` | Cursor 账号列表和当前号 |
 | `%USERPROFILE%\.codex-switch\antigravity-accounts.json` | Antigravity 账号列表和当前号 |
-| `%USERPROFILE%\.codex-switch\auto-switch.json` | 自动切号的线和范围 |
+| `%USERPROFILE%\.codex-switch\auto-switch.json` | 后台同步的开关和间隔（文件名沿用旧版） |
 | `%USERPROFILE%\.codex-switch\accounts\*.json` | Codex 账号资料，登录凭证用 Windows 加密 |
 | `%USERPROFILE%\.codex-switch\cursor-accounts\*.json` | Cursor 账号资料，登录凭证用 Windows 加密 |
 | `%USERPROFILE%\.codex-switch\antigravity-accounts\*.json` | Antigravity 账号资料，登录凭证用 Windows 加密 |
@@ -66,9 +66,9 @@ Google 第三方登录存在风控讨论。第一期只把本机已登录的官�
 
 ## 后台会做什么
 
-开着的时候，它可能刷新过期额度、续一下快到期的登录，并按你设的线判断要不要换 Codex。用的都是存在本机的登录。
+开着的时候，它可能刷新过期额度、续一下快到期的 Codex 登录。用的都是存在本机的登录。
 
-自动切号默认关着，而且只换 Codex。它不会给你加额度，也绕不过上游限制。
+它不会替你换号：切号都要你自己点。它也不会给你加额度，绕不过上游限制。
 
 ## 切号会动哪些文件
 
@@ -95,7 +95,7 @@ Google 第三方登录存在风控讨论。第一期只把本机已登录的官�
 - 再打开官方 Antigravity IDE
 - 第一期不管旧版 `Antigravity.exe`，也不多开实例
 
-官方 Codex 在管理器外面换了号，写入和自动切号会停，等你选「采用官方账号」或「写回管理账号」。
+官方 Codex 在管理器外面换了号，后台写入会停，等你选「采用官方账号」或「写回管理账号」。
 
 切号前把手头的活做完。切 Cursor 或 Antigravity 会关掉对应的官方窗口，没保存的编辑可能丢。
 

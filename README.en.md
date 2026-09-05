@@ -16,7 +16,7 @@ current Windows user.
 [Privacy](docs/privacy.en.md) ·
 [简体中文](README.md)
 
-The current complete release is **2.0.7**.
+The current complete release is **2.0.8**.
 
 </div>
 
@@ -27,22 +27,22 @@ The current complete release is **2.0.7**.
 > publisher. Download only from this repository's
 > [Releases](https://github.com/3xiaoshayu/quota-switcher/releases)
 > page and check the SHA-256 in `SHA256SUMS.txt` on the same release.
-> 2.0.7 is still unsigned.
+> 2.0.8 is still unsigned.
 
 ## What this is
 
 Quota Switcher is a Windows-local vault, quota view, and switch tool for
-Codex, Cursor, and Antigravity IDE. 2.0.7 is the current complete product.
+Codex, Cursor, and Antigravity IDE. 2.0.8 is the current complete product.
 
 It writes the official login on this PC. It cannot raise anyone's official
 limits or bypass upstream restrictions.
 
 ## Interface
 
-The hero image is Cursor account management. The next eight shots are the
-same windows (captured on 2.0.6; the 2.0.7 interface is unchanged): two quota
-overviews, auto-switch, settings, and four desktop quota lenses. The close
-button hides the window to the tray; it does not quit.
+The hero image is Cursor account management. The next seven shots are the
+same windows (captured on 2.0.6; later interfaces are unchanged): two quota
+overviews, settings, and four desktop quota lenses. The close button hides the
+window to the tray; it does not quit.
 
 <table>
   <tr>
@@ -54,26 +54,23 @@ button hides the window to the tray; it does not quit.
     <td><img src="docs/images/antigravity-quota.png" alt="Antigravity quota overview" /></td>
   </tr>
   <tr>
-    <td align="center"><sub><b>Codex auto-switch</b></sub></td>
-    <td align="center"><sub><b>Settings</b></sub></td>
+    <td align="center" colspan="2"><sub><b>Settings</b></sub></td>
   </tr>
   <tr>
-    <td><img src="docs/images/auto-switch.png" alt="Codex automatic switching" /></td>
-    <td><img src="docs/images/settings.png" alt="Settings, version 2.0.6" /></td>
+    <td colspan="2"><img src="docs/images/settings.png" alt="Settings, version 2.0.6" /></td>
   </tr>
+</table>
+
+<table>
   <tr>
     <td align="center"><sub><b>Cursor quota lens</b></sub></td>
     <td align="center"><sub><b>Cursor lens (needs auth)</b></sub></td>
-  </tr>
-  <tr>
-    <td><img src="docs/images/float-lens.png" alt="Cursor quota lens, in use" /></td>
-    <td><img src="docs/images/float-lens-cursor-reauth.png" alt="Cursor quota lens, needs re-authorization" /></td>
-  </tr>
-  <tr>
     <td align="center"><sub><b>Codex quota lens</b></sub></td>
     <td align="center"><sub><b>Antigravity quota lens</b></sub></td>
   </tr>
   <tr>
+    <td><img src="docs/images/float-lens.png" alt="Cursor quota lens, in use" /></td>
+    <td><img src="docs/images/float-lens-cursor-reauth.png" alt="Cursor quota lens, needs re-authorization" /></td>
     <td><img src="docs/images/float-lens-codex.png" alt="Codex quota lens" /></td>
     <td><img src="docs/images/float-lens-antigravity.png" alt="Antigravity quota lens" /></td>
   </tr>
@@ -84,10 +81,11 @@ button hides the window to the tray; it does not quit.
 - **Three products, one window.** The sidebar switches between Codex, Cursor,
   and Antigravity. Each account is a card with remaining quota and plan status.
 - **Writes the official client.** A switch updates the local official login.
-  It does not create a separate cloud session.
-- **Codex-only background auto-switch.** When usage falls below the threshold
-  you set, a worker switches accounts. Closing the window does not stop it.
-  Cursor and Antigravity support viewing and manual switching only.
+  It does not create a separate cloud session. A switch happens only when you
+  click it; there is no background account switching.
+- **Background work is login renewal and quota sync only.** After the window
+  closes, the worker keeps renewing Codex logins and refreshing quotas, and
+  stops to ask you when the official login was changed from outside.
 - **Local vault.** The account store is encrypted with current-user Windows
   DPAPI. There is no telemetry and no project-operated cloud.
 - **Tray and desktop quota lens.** Close to the tray, keep a desktop quota
@@ -114,7 +112,7 @@ products. Neither is “strictly better” at everything.
 | Credentials | Current-user DPAPI; list calls keep `secrets: false`; tokens never enter the renderer | Per-client files and permissions |
 | Codex switch | Snapshot, commit as one transaction, roll back on failure; conflicts need 采用 / 写回 | One-click switch and multi-instance |
 | Cursor / Antigravity | In-place `state.vscdb` (WAL + `BEGIN IMMEDIATE`); Cursor clears leftover team cache | Also offers multi-instance and wake-up |
-| Quota jitter | Timeout / proxy 5xx / empty token / 429 show “额度暂时没刷到，登录还在”; leftover quota stays on the card; 429 is not treated as used-up and does not auto-leave Codex | Each client’s own refresh and display |
+| Quota jitter | Timeout / proxy 5xx / empty token / 429 show “额度暂时没刷到，登录还在”; leftover quota stays on the card; 429 is not treated as used-up | Each client’s own refresh and display |
 | Not included | Multi-instance, wake-up, Copilot / Windsurf / Trae, and others | This three-product Windows transaction path |
 | Signing | Open-source builds may be unsigned; install only from this repo’s Releases + SHA-256 | Open-source builds may also be unsigned |
 
@@ -131,7 +129,7 @@ only lists the capabilities you can match to the product.
 | Cursor / Antigravity writes | In-place SQLite, not a whole-database copy |
 | Quota HTTP | Node, not the window Chromium session; keep-alive agents keyed by proxy signature; a failed proxy is skipped for 60 seconds; GET can fail over to direct; a timed-out token POST is not replayed |
 | Backoff | `quota_next_retry_at` / `token_next_retry_at`; Retry-After is honored |
-| Background | Codex can still auto-switch after the window closes; if the worker is down, GET can fall back in-process; non-idempotent POST is not replayed |
+| Background | The worker keeps renewing logins and syncing quotas after the window closes; if the worker is down, GET can fall back in-process; non-idempotent POST is not replayed |
 
 ## Install
 
@@ -177,8 +175,8 @@ OpenAI, Anysphere / Cursor, or Google. OpenAI, Codex, ChatGPT, Cursor, and
 Antigravity are trademarks of their respective owners.
 
 Only manage accounts you own or are clearly allowed to use. Windows x64 only.
-Auto-switch is Codex-only. Antigravity is official IDE only. The installer is
-not code-signed.
+Every switch is manual; there is no automatic account switching. Antigravity is
+official IDE only. The installer is not code-signed.
 
 The code is [MIT](LICENSE). Icon and installer art are covered by
 [ASSET_LICENSE.md](ASSET_LICENSE.md).

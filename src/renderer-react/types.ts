@@ -96,11 +96,18 @@ export interface StorageDiagnostic {
   timestamp: number;
 }
 
+// Result of the main process comparing an official client's on-disk login
+// format with what this manager knows how to read and write.
+export interface DesktopOfficialFormat {
+  status: 'ok' | 'signed_out' | 'unsupported' | 'drift' | 'unknown';
+  detail?: string | null;
+  sample?: string[];
+}
+
 export interface SystemSettings {
-  globalSwitch: boolean;
-  fiveHourThreshold: number;
-  weeklyThreshold: number;
   clientDetected: boolean;
+  // Products whose official login format no longer matches; value is the reason.
+  formatDrift?: Partial<Record<ProductKind, string>>;
   cursorDetected?: boolean;
   cursorHasLocalLogin?: boolean;
   antigravityDetected?: boolean;
@@ -117,22 +124,9 @@ export interface LogEntry {
   type: 'success' | 'warning' | 'error' | 'info';
 }
 
-export interface DesktopAutoSwitchConfig {
+export interface DesktopDaemonConfig {
   enabled: boolean;
-  primary_threshold: number;
-  secondary_threshold: number;
-  account_scope_mode: 'all' | 'selected';
-  selected_account_ids: string[];
   sync_interval_minutes?: number;
-}
-
-export interface AutoSwitchRunResult {
-  switched?: boolean;
-  reason?: string;
-  error?: string | null;
-  from?: { id?: string; email?: string | null } | null;
-  to?: { id?: string; email?: string | null } | null;
-  authState?: DesktopAuthState | null;
 }
 
 export interface DesktopAppInfo {
@@ -148,6 +142,7 @@ export interface DesktopCodexStatus {
   appId?: string;
   source?: string;
   message?: string;
+  officialFormat?: DesktopOfficialFormat;
 }
 
 export interface DesktopCursorStatus {
@@ -157,6 +152,7 @@ export interface DesktopCursorStatus {
   vscdbPresent?: boolean;
   source?: string;
   message?: string;
+  officialFormat?: DesktopOfficialFormat;
 }
 
 export interface DesktopAntigravityStatus {
@@ -166,6 +162,7 @@ export interface DesktopAntigravityStatus {
   vscdbPresent?: boolean;
   source?: string;
   message?: string;
+  officialFormat?: DesktopOfficialFormat;
 }
 
 export interface DesktopUpdateStatus {

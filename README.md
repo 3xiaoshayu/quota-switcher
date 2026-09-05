@@ -15,7 +15,7 @@
 [隐私说明](docs/privacy.md) ·
 [English](README.en.md)
 
-当前完整版是 **2.0.7**。
+当前完整版是 **2.0.8**。
 
 </div>
 
@@ -23,17 +23,17 @@
 
 > [!IMPORTANT]
 > 安装包尚未代码签名，Windows 可能提示“未知发布者”。请只从本仓库
-> [Releases](https://github.com/3xiaoshayu/quota-switcher/releases) 下载，并用同一条 Release 中的 `SHA256SUMS.txt` 核对 SHA-256。2.0.7 仍未签名。
+> [Releases](https://github.com/3xiaoshayu/quota-switcher/releases) 下载，并用同一条 Release 中的 `SHA256SUMS.txt` 核对 SHA-256。2.0.8 仍未签名。
 
 ## 这是什么
 
-Quota Switcher 是 Windows 上 Codex、Cursor、反重力（Antigravity IDE）的本机账号库、额度查看和切号工具。2.0.7 是当前定稿。
+Quota Switcher 是 Windows 上 Codex、Cursor、反重力（Antigravity IDE）的本机账号库、额度查看和切号工具。2.0.8 是当前定稿。
 
 它写入本机官方登录，不能提高任何官方额度，也不能绕过上游限制。
 
 ## 界面
 
-顶图是 Cursor 账号管理。下面 8 张是同一套窗口（2.0.6 实拍，2.0.7 界面未变）：两张配额总览、自动切号、系统设置，以及四张桌面额度镜。关闭按钮将窗口收到托盘，不会退出。
+顶图是 Cursor 账号管理。下面 7 张是同一套窗口（2.0.6 实拍，之后的界面未变）：两张配额总览、系统设置，以及四张桌面额度镜。关闭按钮将窗口收到托盘，不会退出。
 
 <table>
   <tr>
@@ -45,26 +45,23 @@ Quota Switcher 是 Windows 上 Codex、Cursor、反重力（Antigravity IDE）�
     <td><img src="docs/images/antigravity-quota.png" alt="反重力配额总览" /></td>
   </tr>
   <tr>
-    <td align="center"><sub><b>Codex 自动切号</b></sub></td>
-    <td align="center"><sub><b>系统设置</b></sub></td>
+    <td align="center" colspan="2"><sub><b>系统设置</b></sub></td>
   </tr>
   <tr>
-    <td><img src="docs/images/auto-switch.png" alt="Codex 自动切号" /></td>
-    <td><img src="docs/images/settings.png" alt="系统设置，版本 2.0.6" /></td>
+    <td colspan="2"><img src="docs/images/settings.png" alt="系统设置，版本 2.0.6" /></td>
   </tr>
+</table>
+
+<table>
   <tr>
     <td align="center"><sub><b>Cursor 额度镜</b></sub></td>
     <td align="center"><sub><b>Cursor 额度镜（需授权）</b></sub></td>
-  </tr>
-  <tr>
-    <td><img src="docs/images/float-lens.png" alt="Cursor 额度镜，当前在用" /></td>
-    <td><img src="docs/images/float-lens-cursor-reauth.png" alt="Cursor 额度镜，需重新授权" /></td>
-  </tr>
-  <tr>
     <td align="center"><sub><b>Codex 额度镜</b></sub></td>
     <td align="center"><sub><b>反重力额度镜</b></sub></td>
   </tr>
   <tr>
+    <td><img src="docs/images/float-lens.png" alt="Cursor 额度镜，当前在用" /></td>
+    <td><img src="docs/images/float-lens-cursor-reauth.png" alt="Cursor 额度镜，需重新授权" /></td>
     <td><img src="docs/images/float-lens-codex.png" alt="Codex 额度镜" /></td>
     <td><img src="docs/images/float-lens-antigravity.png" alt="反重力额度镜" /></td>
   </tr>
@@ -73,8 +70,8 @@ Quota Switcher 是 Windows 上 Codex、Cursor、反重力（Antigravity IDE）�
 ## 功能
 
 - **三个产品，一个窗口。** 侧栏在 Codex、Cursor、Antigravity 之间切换。每个账号一张卡片，剩余额度与套餐状态可直接阅读。
-- **写入官方客户端。** 切换时更新本机官方登录，而不是另开一套云端会话。
-- **仅 Codex 可在后台自动切换。** 额度低于你设定的阈值时按规则换号；关闭窗口后仍继续运行。Cursor 与 Antigravity 支持查看和手动切换，不提供自动切换。
+- **写入官方客户端。** 切换时更新本机官方登录，而不是另开一套云端会话。切号只在你点下去时发生，没有后台自动换号。
+- **后台只做续登录和额度同步。** 关闭窗口后守护进程继续给 Codex 续登录、刷新额度；官方登录被外部改动时停下来等你选。
 - **本机保险柜。** 账号库使用当前 Windows 用户的 DPAPI 加密。没有遥测，也没有项目方云服务。
 - **托盘与桌面额度镜。** 关闭到托盘，桌面上放置额度浮窗，并可检查登录有效期。
 
@@ -92,7 +89,7 @@ Antigravity 目前对接官方 **Antigravity IDE**（导入本机登录、Google
 | 凭证 | 当前用户 DPAPI；列表不解密；token 不出渲染进程 | 按各客户端文件和权限处理 |
 | Codex 切号 | 快照后整段提交，失败回滚；冲突要人点「采用 / 写回」 | 侧重一键切和多开 |
 | Cursor / 反重力 | 原地写 `state.vscdb`（WAL + `BEGIN IMMEDIATE`）；Cursor 清上一号团队缓存 | 另有多开、唤醒 |
-| 额度抖动 | 超时 / 代理 5xx / 空令牌 / 429 显示「额度暂时没刷到，登录还在」；卡片留 leftover；不把 429 当用尽，也不因此自动离开 Codex | 各客户端自己的刷新与展示 |
+| 额度抖动 | 超时 / 代理 5xx / 空令牌 / 429 显示「额度暂时没刷到，登录还在」；卡片留 leftover；不把 429 当用尽 | 各客户端自己的刷新与展示 |
 | 没有的 | 多开、唤醒、Copilot / Windsurf / Trae 等 | 不是这三家的本机事务切号 |
 | 签名 | 开源包可能未签；只从本仓库 Releases + SHA-256 安装 | 开源包同样可能未签 |
 
@@ -108,7 +105,7 @@ Antigravity 目前对接官方 **Antigravity IDE**（导入本机登录、Google
 | Cursor / 反重力写入 | 原地 SQLite，不是整库拷贝 |
 | 额度 HTTP | Node 直连，不走窗口 Chromium；代理签名 keep-alive；失败代理 60 秒跳过；GET 可换直连，令牌 POST 超时不重放 |
 | 退避 | `quota_next_retry_at` / `token_next_retry_at`；尊重 Retry-After |
-| 后台 | 关窗后 Codex 仍可自动切；worker 挂了 GET 可回主进程，非幂等 POST 不重放 |
+| 后台 | 关窗后守护进程继续续登录、同步额度；worker 挂了 GET 可回主进程，非幂等 POST 不重放 |
 
 ## 安装
 
@@ -144,7 +141,7 @@ Get-FileHash ".\Quota-Switcher-Setup-<版本>-x64.exe" -Algorithm SHA256
 
 这是独立的社区项目，与 OpenAI、Anysphere / Cursor、Google 没有隶属或背书关系。OpenAI、Codex、ChatGPT、Cursor、Antigravity 是各自权利人的商标。
 
-请只管理你拥有或已被明确授权使用的账号。当前仅支持 Windows x64。自动切号仅适用于 Codex。Antigravity 仅对接官方 IDE。安装包尚未代码签名。
+请只管理你拥有或已被明确授权使用的账号。当前仅支持 Windows x64。切号都由你手动触发，没有自动换号。Antigravity 仅对接官方 IDE。安装包尚未代码签名。
 
 代码采用 [MIT License](LICENSE)。图标与安装向导图见 [ASSET_LICENSE.md](ASSET_LICENSE.md)。
 

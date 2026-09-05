@@ -133,14 +133,6 @@ async function captureAppPages(browser) {
   await page.waitForTimeout(250);
   await saveFramed(browser, page, "codex-accounts.png");
 
-  await page.click("#sidebar-nav-autoswitch");
-  await page.waitForTimeout(250);
-  await page.evaluate(() => {
-    const banner = document.querySelector("#autoswitch-log-banner");
-    if (banner) banner.style.display = "none";
-  });
-  await saveFramed(browser, page, "auto-switch.png");
-
   await page.click("#sidebar-nav-settings");
   await page.waitForTimeout(250);
   await saveFramed(browser, page, "settings.png");

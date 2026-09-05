@@ -1,6 +1,5 @@
 import {
   AccountQuota,
-  DesktopAutoSwitchConfig,
   DesktopOAuthStatus,
   ProductKind,
 } from '../types';
@@ -98,11 +97,10 @@ export function mapProductAccount(
   product: ProductKind,
   account: Parameters<typeof mapAccountForUi>[0],
   currentAccount: Parameters<typeof mapAccountForUi>[1],
-  config: DesktopAutoSwitchConfig,
 ): AccountQuota {
   if (product === 'antigravity') return mapAntigravityAccountForUi(account, currentAccount);
   if (product === 'cursor') return mapCursorAccountForUi(account, currentAccount);
-  return mapAccountForUi(account, currentAccount, config);
+  return mapAccountForUi(account, currentAccount);
 }
 
 export function accountsFromSnapshot(

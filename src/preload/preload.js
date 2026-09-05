@@ -75,12 +75,9 @@ const api = {
   refreshAllTokens: (force) => ipcRenderer.invoke('token:refreshAll', force),
   getTokenStatus: (id) => ipcRenderer.invoke('token:status', id),
 
-  // 自动切号
-  getAutoSwitchConfig: () => ipcRenderer.invoke('autoswitch:config:get'),
-  saveAutoSwitchConfig: (cfg) => ipcRenderer.invoke('autoswitch:config:save', cfg),
-  runAutoSwitchTick: () => ipcRenderer.invoke('autoswitch:tick'),
-
   // 守护进程
+  getDaemonConfig: () => ipcRenderer.invoke('daemon:config:get'),
+  saveDaemonConfig: (cfg) => ipcRenderer.invoke('daemon:config:save', cfg),
   startDaemon: () => ipcRenderer.invoke('daemon:start'),
   stopDaemon: () => ipcRenderer.invoke('daemon:stop'),
   getDaemonStatus: () => ipcRenderer.invoke('daemon:status'),
@@ -95,11 +92,6 @@ const api = {
     const handler = (e, d) => cb(d);
     ipcRenderer.on('daemon:error', handler);
     return () => ipcRenderer.removeListener('daemon:error', handler);
-  },
-  onAutoSwitch: (cb) => {
-    const handler = (e, d) => cb(d);
-    ipcRenderer.on('autoswitch:executed', handler);
-    return () => ipcRenderer.removeListener('autoswitch:executed', handler);
   },
   onUpdateStatus: (cb) => {
     const handler = (e, d) => cb(d);

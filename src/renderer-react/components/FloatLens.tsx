@@ -360,7 +360,6 @@ export default function FloatLens() {
     }).catch(() => {});
     return desktopApi.subscribe({
       onDaemonTick: () => { void loadAccounts(); },
-      onAutoSwitch: () => { void loadAccounts(); },
       onAccountUpdated: (payload) => {
         if (payload?.product !== productRef.current) return;
         if (payload?.current && payload.account?.id) {

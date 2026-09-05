@@ -19,30 +19,30 @@ function copyForStatus(authState: DesktopAuthState, needsReauthCount: number): {
   if (authState.status === 'unknown') {
     return {
       title: '无法确认官方登录状态',
-      body: '自动切号已暂停。可重新加载后再试。',
+      body: '后台同步已暂停。可重新加载后再试。',
     }
   }
   if (authState.status === 'missing_official_auth') {
     return {
       title: '官方 Codex 已退出',
-      body: `额度刷新仍会继续，自动切号已暂停。${reauthHint ? ` ${reauthHint}` : ''}`,
+      body: `额度刷新仍会继续，官方登录同步已暂停。${reauthHint ? ` ${reauthHint}` : ''}`,
     }
   }
   if (authState.status === 'unsupported_official_auth') {
     return {
       title: '官方登录无法由本管理器接管',
-      body: `额度刷新仍会继续，自动切号已暂停。${reauthHint ? ` ${reauthHint}` : ''}`,
+      body: `额度刷新仍会继续，官方登录同步已暂停。${reauthHint ? ` ${reauthHint}` : ''}`,
     }
   }
   if (authState.status === 'unmanaged_official_auth') {
     return {
       title: '官方 Codex 已登录，尚未纳入管理',
-      body: `自动切号已暂停。可采用官方账号，或稍后处理。${reauthHint ? ` ${reauthHint}` : ''}`,
+      body: `官方登录同步已暂停。可采用官方账号，或稍后处理。${reauthHint ? ` ${reauthHint}` : ''}`,
     }
   }
   return {
     title: '官方 Codex 登录了另一个账号',
-    body: `自动切号已暂停。可采用官方账号，或保持管理器当前账号。${reauthHint ? ` ${reauthHint}` : ''}`,
+    body: `后台同步已暂停。可采用官方账号，或保持管理器当前账号。${reauthHint ? ` ${reauthHint}` : ''}`,
   }
 }
 
