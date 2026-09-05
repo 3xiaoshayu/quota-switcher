@@ -3,17 +3,19 @@ import react from '@vitejs/plugin-react';
 import path from 'node:path';
 import { defineConfig } from 'vite';
 
+const here = import.meta.dirname;
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  root: path.resolve(__dirname, 'src/renderer-react'),
+  root: path.resolve(here, 'src/renderer-react'),
   base: './',
   build: {
-    outDir: path.resolve(__dirname, 'src/renderer-dist'),
+    outDir: path.resolve(here, 'src/renderer-dist'),
     emptyOutDir: true,
   },
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, 'src/renderer-react'),
+      '@': path.resolve(here, 'src/renderer-react'),
     },
   },
 });

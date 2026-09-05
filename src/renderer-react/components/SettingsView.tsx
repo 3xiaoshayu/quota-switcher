@@ -11,7 +11,7 @@ import {
   AlertCircle,
   RotateCw, 
   ShieldCheck, 
-  Github, 
+  ExternalLink, 
   Activity,
   Zap,
   FolderOpen,
@@ -545,7 +545,7 @@ export default function SettingsView({
             className="px-5 py-3 rounded-xl bg-fill hover:bg-fill-2 text-label-2 hover:text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-all border border-sep"
             id="btn-github"
           >
-            <Github className="w-3.5 h-3.5" />
+            <ExternalLink className="w-3.5 h-3.5" />
             GitHub
           </motion.a>
         </div>

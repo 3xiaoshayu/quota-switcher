@@ -25,6 +25,11 @@ release is published.
 - Runtime: `proxy-agent` 6 → 8 and `proxy-from-env` 1 → 2 (both now ESM,
   loaded through Node 24's `require(esm)`; verified in the packaged asar build,
   which the smoke test can now drive via `E2E_APP_BINARY`).
+- UI libraries: `lucide-react` 1.x (brand marks are gone from Lucide, so the
+  GitHub button in Settings uses the external-link icon), `motion` 13,
+  `@types/node` 26. The Vite config is now `vite.renderer.config.mts` so the
+  upcoming native config loader reads it as ESM. Dependabot groups only minor
+  and patch updates; majors come one per PR.
 
 ## [2.0.10] - 2026-09-05
 

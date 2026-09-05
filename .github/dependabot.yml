@@ -5,9 +5,16 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # Minor and patch updates are safe to review as one batch. Major updates
+    # stay ungrouped so each one arrives as its own PR and a single breaking
+    # release cannot fail the whole batch.
     groups:
-      npm-development:
+      npm-development-minor:
         dependency-type: development
+        update-types: ["minor", "patch"]
+      npm-production-minor:
+        dependency-type: production
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: github-actions
     directory: /

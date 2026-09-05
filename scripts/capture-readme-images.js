@@ -1,5 +1,5 @@
 // Capture README screenshots from the Vite renderer preview.
-// Start `npx vite --config vite.renderer.config.ts --host 127.0.0.1 --port 5173`
+// Start `npx vite --config vite.renderer.config.mts --host 127.0.0.1 --port 5173`
 // first, with playwright-core available to Node (`npm install --no-save playwright-core`).
 
 const fs = require("node:fs");
