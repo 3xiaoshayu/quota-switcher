@@ -15,7 +15,7 @@
 [隐私说明](docs/privacy.md) ·
 [English](README.en.md)
 
-当前完整版是 **2.0.10**。
+当前完整版是 **2.0.11**。
 
 </div>
 
@@ -23,11 +23,11 @@
 
 > [!IMPORTANT]
 > 安装包尚未代码签名，Windows 可能提示“未知发布者”。请只从本仓库
-> [Releases](https://github.com/3xiaoshayu/quota-switcher/releases) 下载，并用同一条 Release 中的 `SHA256SUMS.txt` 核对 SHA-256。2.0.10 仍未签名。
+> [Releases](https://github.com/3xiaoshayu/quota-switcher/releases) 下载，并用同一条 Release 中的 `SHA256SUMS.txt` 核对 SHA-256。2.0.11 仍未签名。
 
 ## 这是什么
 
-Quota Switcher 是 Windows 上 Codex、Cursor、反重力（Antigravity IDE）的本机账号库、额度查看和切号工具。2.0.10 是当前定稿。
+Quota Switcher 是 Windows 上 Codex、Cursor、反重力（Antigravity IDE）的本机账号库、额度查看和切号工具。2.0.11 是当前定稿。
 
 它写入本机官方登录，不能提高任何官方额度，也不能绕过上游限制。
 
