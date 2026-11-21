@@ -74,8 +74,8 @@
     "vite": "^8.2.2"
   },
   "dependencies": {
-    "electron-updater": "^6.6.2",
-    "proxy-agent": "^8.0.2",
+    "electron-updater": "^6.8.11",
+    "proxy-agent": "^8.0.3",
     "proxy-from-env": "^2.1.0"
   },
   "overrides": {
